@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<title>CyberCareer — Datenschutz / GDPR</title>
+<style>
+/* ── GDPR Banner ── paste this CSS into your main index.html <style> block */
+:root {
+  --gdpr-bg:      #0f1525;
+  --gdpr-border:  rgba(99,179,237,0.2);
+  --gdpr-accent:  #63b3ed;
+  --gdpr-text:    #e2e8f0;
+  --gdpr-dim:     #94a3b8;
+  --gdpr-btn-bg:  #63b3ed;
+  --gdpr-btn-fg:  #0a0e1a;
+  --gdpr-radius:  10px;
+}
+
+/* ── Cookie Banner ── */
+#gdpr-banner {
+  position: fixed;
+  bottom: 20px; left: 20px; right: 20px;
+  max-width: 680px;
+  margin: 0 auto;
+  background: var(--gdpr-bg);
+  border: 1px solid var(--gdpr-border);
+  border-radius: var(--gdpr-radius);
+  padding: 20px 22px;
+  z-index: 9999;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+  display: flex; flex-direction: column; gap: 14px;
+  font-family: 'DM Sans', sans-serif;
+}
+#gdpr-banner.hidden { display: none !important; }
+
+.gdpr-title {
+  font-size: 14px; font-weight: 600;
+  color: var(--gdpr-text);
+  display: flex; align-items: center; gap: 8px;
+}
+.gdpr-title::before { content: '🍪'; }
+
+.gdpr-body {
+  font-size: 13px; color: var(--gdpr-dim); line-height: 1.6;
+}
+.gdpr-body a {
+  color: var(--gdpr-accent); text-decoration: underline; cursor: pointer;
+}
+
+.gdpr-actions {
+  display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+}
+
+.gdpr-btn {
+  padding: 9px 18px; border-radius: 8px;
+  font-size: 13px; font-weight: 500; cursor: pointer;
+  border: none; font-family: inherit; transition: all 0.15s;
+}
+.gdpr-btn-accept {
+  background: var(--gdpr-btn-bg); color: var(--gdpr-btn-fg);
+}
+.gdpr-btn-accept:hover { background: #90cdf4; }
+.gdpr-btn-reject {
+  background: transparent; color: var(--gdpr-dim);
+  border: 1px solid rgba(99,179,237,0.2);
+}
+.gdpr-btn-reject:hover { color: var(--gdpr-text); border-color: var(--gdpr-border); }
+.gdpr-link {
+  font-size: 12px; color: var(--gdpr-dim); text-decoration: underline;
+  background: none; border: none; cursor: pointer; font-family: inherit;
+  margin-left: auto;
+}
+
+/* ── Privacy Modal ── */
+#privacy-modal {
+  position: fixed; inset: 0; z-index: 10000;
+  background: rgba(0,0,0,0.6);
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+}
+#privacy-modal.hidden { display: none !important; }
+
+.privacy-inner {
+  background: #0f1525;
+  border: 1px solid rgba(99,179,237,0.2);
+  border-radius: 14px;
+  max-width: 620px; width: 100%;
+  max-height: 80vh; overflow-y: auto;
+  padding: 28px 30px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px; line-height: 1.8; color: #94a3b8;
+}
+.privacy-inner h2 {
+  font-size: 17px; font-weight: 600; color: #e2e8f0; margin-bottom: 16px;
+}
+.privacy-inner h3 {
+  font-size: 13px; font-weight: 600; color: #63b3ed;
+  margin: 18px 0 6px; text-transform: uppercase; letter-spacing: 0.5px;
+}
+.privacy-inner p  { margin-bottom: 10px; }
+.privacy-inner ul { padding-left: 18px; margin-bottom: 10px; }
+.privacy-inner li { margin-bottom: 4px; }
+.privacy-close {
+  margin-top: 20px; padding: 9px 18px;
+  background: #63b3ed; color: #0a0e1a;
+  border: none; border-radius: 8px;
+  font-size: 13px; font-weight: 500;
+  cursor: pointer; font-family: inherit;
+}
+</style>
+</head>
+<body>
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     PASTE THESE TWO BLOCKS into your index.html, just before </body>
+     ════════════════════════════════════════════════════════════════════════ -->
+
+<!-- ── 1. GDPR Cookie Banner ── -->
+<div id="gdpr-banner">
+  <div class="gdpr-title">Datenschutz & Cookies</div>
+  <div class="gdpr-body">
+    Diese Anwendung läuft vollständig auf Ihrem Gerät (<strong>localhost</strong>).
+    Wir speichern nur technisch notwendige Daten: Ihr Login-Token und Ihr Bewerbungs-Tracking —
+    ausschließlich lokal auf Ihrem Rechner. Es werden keine Daten an Dritte weitergegeben.
+    <br><br>
+    <a onclick="showPrivacyModal()">Datenschutzerklärung lesen →</a>
+  </div>
+  <div class="gdpr-actions">
+    <button class="gdpr-btn gdpr-btn-accept" onclick="gdprAccept()">Verstanden & Zustimmen</button>
+    <button class="gdpr-btn gdpr-btn-reject" onclick="gdprReject()">Nur Notwendiges</button>
+    <button class="gdpr-link" onclick="showPrivacyModal()">Datenschutz</button>
+  </div>
+</div>
+
+<!-- ── 2. Privacy Policy Modal ── -->
+<div id="privacy-modal" class="hidden">
+  <div class="privacy-inner">
+    <h2>🔒 Datenschutzerklärung — CyberCareer</h2>
+
+    <h3>1. Verantwortlicher</h3>
+    <p>Diese Anwendung wird ausschließlich lokal auf Ihrem eigenen Gerät betrieben (localhost).
+    Es gibt keinen externen Server oder Cloud-Dienst.</p>
+
+    <h3>2. Welche Daten werden gespeichert?</h3>
+    <ul>
+      <li><strong>Login-Token</strong> (im Browser-LocalStorage) — technisch notwendig für die Session</li>
+      <li><strong>Benutzername & gehashtes Passwort</strong> (in <code>storage.json</code> auf Ihrem PC)</li>
+      <li><strong>Bewerbungen</strong> (Titel, Unternehmen, Status) — nur lokal</li>
+      <li><strong>CV-Text</strong> — wird nur während der Session im Arbeitsspeicher gehalten, nicht dauerhaft gespeichert</li>
+    </ul>
+
+    <h3>3. Keine Tracking-Cookies</h3>
+    <p>Es werden keine Marketing-, Analyse- oder Tracking-Cookies verwendet.
+    Google Analytics, Facebook Pixel oder ähnliche Dienste sind nicht eingebunden.</p>
+
+    <h3>4. Externe API-Aufrufe</h3>
+    <p>Die Anwendung ruft folgende externe APIs auf, wenn Sie nach Jobs suchen:</p>
+    <ul>
+      <li><strong>Bundesagentur für Arbeit</strong> (rest.arbeitsagentur.de) — öffentliche Stellenangebote</li>
+      <li><strong>Arbeitnow</strong> (arbeitnow.com) — öffentliche API, keine Registrierung</li>
+      <li><strong>Remotive</strong> (remotive.com) — Remote-Jobs, öffentliche API</li>
+    </ul>
+    <p>Bei diesen Aufrufen wird Ihre IP-Adresse an die jeweiligen Server übermittelt (technisch unvermeidlich).
+    Die Datenschutzerklärungen der jeweiligen Anbieter gelten entsprechend.</p>
+
+    <h3>5. Passwort-Sicherheit</h3>
+    <p>Passwörter werden mit <strong>scrypt</strong> (Node.js built-in) gehasht und gesaltet gespeichert.
+    Das Klartextpasswort wird zu keinem Zeitpunkt gespeichert.</p>
+
+    <h3>6. Ihre Rechte (DSGVO / GDPR Art. 15–22)</h3>
+    <ul>
+      <li>Recht auf Auskunft — alle Daten liegen transparent in <code>storage.json</code></li>
+      <li>Recht auf Löschung — löschen Sie einfach <code>storage.json</code></li>
+      <li>Recht auf Datenübertragbarkeit — <code>storage.json</code> ist lesbares JSON</li>
+      <li>Recht auf Berichtigung — Passwort jederzeit änderbar</li>
+    </ul>
+
+    <h3>7. Datenlöschung</h3>
+    <p>Um alle Ihre Daten vollständig zu löschen:</p>
+    <ul>
+      <li>Löschen Sie <code>storage.json</code> im Projektordner</li>
+      <li>Leeren Sie den LocalStorage im Browser (F12 → Application → LocalStorage)</li>
+    </ul>
+
+    <h3>8. Rechtsgrundlage</h3>
+    <p>Die Datenverarbeitung erfolgt auf Grundlage von Art. 6 Abs. 1 lit. b DSGVO
+    (Vertragserfüllung / berechtigtes Interesse) sowie Ihrer Einwilligung (Art. 6 Abs. 1 lit. a DSGVO).</p>
+
+    <p style="color:#64748b;font-size:12px;margin-top:16px;">
+      Stand: Mai 2025 — Diese Erklärung gilt für die lokale Entwicklungsversion (Sprint 1).
+    </p>
+
+    <button class="privacy-close" onclick="closePrivacyModal()">Schließen</button>
+  </div>
+</div>
+
+<!-- ── GDPR Script — paste into your app.js or index.html <script> block ── -->
+<script>
+const GDPR_KEY = 'careerai-gdpr-consent';
+
+function gdprInit() {
+  const consent = localStorage.getItem(GDPR_KEY);
+  if (!consent) {
+    document.getElementById('gdpr-banner').classList.remove('hidden');
+  }
+}
+
+function gdprAccept() {
+  localStorage.setItem(GDPR_KEY, JSON.stringify({
+    accepted: true,
+    date: new Date().toISOString(),
+    version: '1.0'
+  }));
+  document.getElementById('gdpr-banner').classList.add('hidden');
+  console.info('[GDPR] Consent accepted');
+}
+
+function gdprReject() {
+  localStorage.setItem(GDPR_KEY, JSON.stringify({
+    accepted: false,
+    necessary_only: true,
+    date: new Date().toISOString(),
+    version: '1.0'
+  }));
+  document.getElementById('gdpr-banner').classList.add('hidden');
+  console.info('[GDPR] Only necessary cookies — no tracking');
+}
+
+function showPrivacyModal() {
+  document.getElementById('privacy-modal').classList.remove('hidden');
+}
+
+function closePrivacyModal() {
+  document.getElementById('privacy-modal').classList.add('hidden');
+}
+
+// Close modal on backdrop click
+document.getElementById('privacy-modal')?.addEventListener('click', e => {
+  if (e.target === document.getElementById('privacy-modal')) closePrivacyModal();
+});
+
+// Run on page load
+document.addEventListener('DOMContentLoaded', gdprInit);
+</script>
+
+</body>
+</html>

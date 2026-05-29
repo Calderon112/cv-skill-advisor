@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CareerAI — Job Application Agent</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+
+
+
+<body>
+
+  <!-- Auth Modal -->
+  <div id="auth-modal" class="modal-overlay" role="dialog" aria-modal="true">
+    <div class="modal-box">
+      <div class="modal-logo">
+        <div class="brand-mark">CA</div>
+        <div>
+          <div class="brand-name">CareerAI</div>
+          <div class="brand-tagline">Job Application Agent</div>
+        </div>
+      </div>
+      <div class="modal-tabs">
+        <button class="modal-tab active" data-modal-tab="login">Sign In</button>
+        <button class="modal-tab" data-modal-tab="register">Register</button>
+      </div>
+      <div id="modal-login" class="modal-panel active">
+        <input id="login-username" type="text" class="field" placeholder="Username" autocomplete="username" />
+        <input id="login-password" type="password" class="field" placeholder="Password" autocomplete="current-password" />
+        <button id="login-btn" class="btn btn-primary btn-full">Sign In</button>
+        <p id="login-msg" class="form-msg"></p>
+      </div>
+      <div id="modal-register" class="modal-panel">
+        <input id="reg-name" type="text" class="field" placeholder="Full name" autocomplete="name" />
+        <input id="reg-username" type="text" class="field" placeholder="Username" autocomplete="username" />
+        <input id="reg-password" type="password" class="field" placeholder="Password" autocomplete="new-password" />
+        <button id="register-btn" class="btn btn-primary btn-full">Create Account</button>
+        <p id="register-msg" class="form-msg"></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- App Shell -->
+  <div class="app" id="app">
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <div class="brand-mark">CA</div>
+        <div class="brand-text">
+          <div class="brand-name">CareerAI</div>
+          <div class="brand-tagline">Multi-Agent System</div>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <button class="nav-btn active" data-page="dashboard">
+          <span class="nav-icon">⊞</span>
+          <span class="nav-label">Dashboard</span>
+        </button>
+
+        <div class="nav-section">Agents</div>
+
+        <button class="nav-btn" data-page="scout">
+          <span class="nav-badge">01</span>
+          <span class="nav-label">Scout Agent</span>
+          <span class="status-dot" id="nav-dot-scout"></span>
+        </button>
+        <button class="nav-btn" data-page="matcher">
+          <span class="nav-badge">02</span>
+          <span class="nav-label">Matcher Agent</span>
+          <span class="status-dot" id="nav-dot-matcher"></span>
+        </button>
+        <button class="nav-btn" data-page="writer">
+          <span class="nav-badge orange">03</span>
+          <span class="nav-label">Writer Agent</span>
+          <span class="status-dot" id="nav-dot-writer"></span>
+        </button>
+        <button class="nav-btn" data-page="tracker">
+          <span class="nav-badge">04</span>
+          <span class="nav-label">Tracker Agent</span>
+          <span class="status-dot" id="nav-dot-tracker"></span>
+        </button>
+      </nav>
+
+      <div class="sidebar-user">
+        <div class="user-avatar-sm" id="user-avatar">?</div>
+        <div class="user-info-sm">
+          <div class="user-name-sm" id="sidebar-username">Not signed in</div>
+          <button id="sidebar-auth-btn" class="link-btn">Sign in</button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+
+      <!-- Topbar -->
+      <div class="topbar">
+        <div class="topbar-pipeline">
+          <span class="pipe-step" id="pipe-01">01 Scout</span>
+          <span class="pipe-arrow">→</span>
+          <span class="pipe-step" id="pipe-02">02 Matcher</span>
+          <span class="pipe-arrow">→</span>
+          <span class="pipe-step orange" id="pipe-03">03 Writer</span>
+          <span class="pipe-arrow">→</span>
+          <span class="pipe-step" id="pipe-04">04 Tracker</span>
+        </div>
+        <div class="topbar-right">
+          <span class="api-indicator" id="api-indicator">● Offline</span>
+        </div>
+      </div>
+
+      <!-- ═══ Dashboard ═══ -->
+      <section class="page active" id="page-dashboard">
+        <div class="page-intro">
+          <h1>Multi-Agent Pipeline</h1>
+          <p>Four specialized agents working together to automate your cybersecurity job search.</p>
+        </div>
+
+        <div class="pipeline-grid">
+          <div class="agent-card" id="dash-scout">
+            <div class="agent-num">01</div>
+            <div class="agent-icon-lg">🔍</div>
+            <div class="agent-body">
+              <div class="agent-title">Scout Agent</div>
+              <div class="agent-subtitle">Job Discovery</div>
+              <ul class="agent-features">
+                <li>CV parsing &amp; skill detection</li>
+                <li>Multi-portal job search</li>
+                <li>LinkedIn · Indeed · Bundesagentur</li>
+              </ul>
+            </div>
+            <div class="agent-footer">
+              <span class="status-pill idle" id="dash-status-scout">Idle</span>
+              <button class="btn btn-ghost btn-xs" data-page="scout">Launch →</button>
+            </div>
+          </div>
+
+          <div class="flow-arrow">→</div>
+
+          <div class="agent-card" id="dash-matcher">
+            <div class="agent-num">02</div>
+            <div class="agent-icon-lg">🎯</div>
+            <div class="agent-body">
+              <div class="agent-title">Matcher Agent</div>
+              <div class="agent-subtitle">Profile Matching</div>
+              <ul class="agent-features">
+                <li>NLP skill analysis</li>
+                <li>Match scoring 0–100%</li>
+                <li>Skill gap detection</li>
+              </ul>
+            </div>
+            <div class="agent-footer">
+              <span class="status-pill idle" id="dash-status-matcher">Idle</span>
+              <button class="btn btn-ghost btn-xs" data-page="matcher">Launch →</button>
+            </div>
+          </div>
+
+          <div class="flow-arrow">→</div>
+
+          <div class="agent-card highlight-orange" id="dash-writer">
+            <div class="agent-num orange">03</div>
+            <div class="agent-icon-lg">📄</div>
+            <div class="agent-body">
+              <div class="agent-title">Writer Agent</div>
+              <div class="agent-subtitle writer-sub">Document Generation</div>
+              <ul class="agent-features">
+                <li>Dynamic CV generation</li>
+                <li>Cover letter crafting</li>
+                <li>Personalization engine</li>
+              </ul>
+            </div>
+            <div class="agent-footer">
+              <span class="status-pill idle" id="dash-status-writer">Idle</span>
+              <button class="btn btn-ghost btn-xs" data-page="writer">Launch →</button>
+            </div>
+          </div>
+
+          <div class="flow-arrow">→</div>
+
+          <div class="agent-card" id="dash-tracker">
+            <div class="agent-num">04</div>
+            <div class="agent-icon-lg">📊</div>
+            <div class="agent-body">
+              <div class="agent-title">Tracker Agent</div>
+              <div class="agent-subtitle">Application Tracking</div>
+              <ul class="agent-features">
+                <li>Kanban application board</li>
+                <li>Deadline management</li>
+                <li>Status monitoring</li>
+              </ul>
+            </div>
+            <div class="agent-footer">
+              <span class="status-pill idle" id="dash-status-tracker">Idle</span>
+              <button class="btn btn-ghost btn-xs" data-page="tracker">Launch →</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="stats-row">
+          <div class="stat-box">
+            <div class="stat-val" id="stat-jobs">0</div>
+            <div class="stat-lbl">Jobs Found</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-val cyan" id="stat-matches">0</div>
+            <div class="stat-lbl">High Matches</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-val orange" id="stat-docs">0</div>
+            <div class="stat-lbl">Docs Generated</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-val" id="stat-apps">0</div>
+            <div class="stat-lbl">Applications</div>
+          </div>
+        </div>
+
+        <div class="tech-row">
+          <span class="tech-chip">Node.js</span>
+          <span class="tech-chip">Bundesagentur API</span>
+          <span class="tech-chip">Apify</span>
+          <span class="tech-chip">NLP Matching</span>
+          <span class="tech-chip">pdf.js</span>
+          <span class="tech-chip">Kanban Tracker</span>
+        </div>
+      </section>
+
+      <!-- ═══ Scout Agent ═══ -->
+      <section class="page" id="page-scout">
+        <div class="page-intro">
+          <div class="page-badge">01</div>
+          <div>
+            <h1>Scout Agent <span class="role-tag">Job Discovery</span></h1>
+            <p>Upload your CV for skill detection, then search jobs across multiple portals.</p>
+          </div>
+        </div>
+
+        <div class="two-col">
+          <div class="card">
+            <div class="card-header">
+              <h2>CV Analysis</h2>
+              <span class="pill" id="cv-status-pill">Ready</span>
+            </div>
+            <div id="cv-drop-zone" class="drop-zone">
+              <div class="drop-icon">📄</div>
+              <p>Drop CV file here or click to browse</p>
+              <span class="drop-hint">.txt and searchable .pdf supported</span>
+            </div>
+            <input id="cv-file-input" type="file" accept=".txt,.pdf" hidden />
+            <textarea id="cv-input" class="field cv-textarea" placeholder="…or paste CV text directly here"></textarea>
+            <button id="analyze-btn" class="btn btn-primary">
+              <span>🔍</span> Analyze CV
+            </button>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h2>Job Search</h2>
+              <span class="pill" id="search-status-pill">Ready</span>
+            </div>
+            <div class="form-group">
+              <label>Region</label>
+              <select id="region-select" class="field">
+                <option value="germany">Germany</option>
+                <option value="switzerland">Switzerland</option>
+                <option value="usa">United States</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Location</label>
+              <div class="input-with-btn">
+                <input id="search-location-input" type="text" class="field" placeholder="City or postcode" />
+                <button id="current-location-button" type="button" class="btn btn-ghost btn-sm">📍</button>
+              </div>
+              <p id="location-status" class="hint"></p>
+            </div>
+            <div class="form-group">
+              <label>Platform</label>
+              <select id="platform-select" class="field">
+                <option value="all">⚡ All platforms simultaneously</option>
+                <optgroup label="✅ Free — Works now">
+                  <option value="bundesagentur">Bundesagentur (DE official API)</option>
+                  <option value="arbeitnow">Arbeitnow (DE tech jobs)</option>
+                  <option value="linkedin">LinkedIn (public listings)</option>
+                  <option value="remotive">Remotive (remote worldwide)</option>
+                </optgroup>
+                <optgroup label="⚠️ Bot-protected — limited results">
+                  <option value="indeed">Indeed</option>
+                  <option value="stepstone">StepStone</option>
+                </optgroup>
+                <optgroup label="🔑 Requires Apify credits">
+                  <option value="apify-indeed">Indeed via Apify (paid)</option>
+                </optgroup>
+              </select>
+              <p id="platform-suggestion" class="hint">All platforms: runs all 4 free sources in parallel</p>
+            </div>
+            <div class="form-group">
+              <label>Job Title / Keywords</label>
+              <input id="job-keyword-input" type="text" class="field" placeholder="e.g. Data Analyst, DevOps Engineer, Marketing Manager…" />
+            </div>
+            <div class="form-group">
+              <label>Domain</label>
+              <select id="sector-select" class="field">
+                <option value="all">All domains</option>
+                <optgroup label="Technology">
+                  <option value="cybersecurity">Cybersecurity</option>
+                  <option value="software">Software Development</option>
+                  <option value="data">Data &amp; Analytics</option>
+                  <option value="devops">DevOps &amp; Cloud</option>
+                  <option value="ai">AI &amp; Machine Learning</option>
+                  <option value="network">Networking &amp; Infrastructure</option>
+                  <option value="it-support">IT Support &amp; Systems</option>
+                </optgroup>
+                <optgroup label="Business">
+                  <option value="finance">Finance &amp; Accounting</option>
+                  <option value="marketing">Marketing &amp; Communication</option>
+                  <option value="sales">Sales &amp; Business Dev</option>
+                  <option value="hr">HR &amp; Recruiting</option>
+                  <option value="project">Project Management</option>
+                  <option value="consulting">Consulting &amp; Strategy</option>
+                </optgroup>
+                <optgroup label="Other Fields">
+                  <option value="healthcare">Healthcare &amp; Medicine</option>
+                  <option value="law">Law &amp; Compliance</option>
+                  <option value="engineering">Engineering</option>
+                  <option value="design">Design &amp; UX</option>
+                  <option value="education">Education &amp; Research</option>
+                </optgroup>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Distance</label>
+              <select id="distance-select" class="field">
+                <option value="all">Any distance</option>
+                <option value="20">Within 20 km</option>
+                <option value="50">Within 50 km</option>
+                <option value="100">Within 100 km</option>
+              </select>
+            </div>
+            <button id="search-jobs-btn" class="btn btn-primary">
+              <span>🔍</span> Search Jobs
+            </button>
+            <button id="scrape-all-btn" class="btn btn-scrape-all">
+              <span>⚡</span> Scrape All Platforms
+            </button>
+          </div>
+        </div>
+
+        <!-- Scrape-All progress banner -->
+        <div id="scrape-all-progress" class="scrape-progress hidden">
+          <div class="scrape-progress-title">⚡ Scraping all platforms simultaneously…</div>
+          <div class="scrape-platforms-row">
+            <div class="scrape-platform" id="sp-bundesagentur"><span class="sp-dot spinning"></span> Bundesagentur</div>
+            <div class="scrape-platform" id="sp-arbeitnow"><span class="sp-dot spinning"></span> Arbeitnow</div>
+            <div class="scrape-platform" id="sp-linkedin"><span class="sp-dot spinning"></span> LinkedIn</div>
+            <div class="scrape-platform" id="sp-remotive"><span class="sp-dot spinning"></span> Remotive</div>
+          </div>
+          <div class="scrape-hint">Querying 4 sources in parallel — results in ~5s</div>
+        </div>
+
+        <!-- Platform breakdown after scrape-all -->
+        <div id="platform-breakdown" class="platform-breakdown hidden"></div>
+
+        <div id="analysis-results-panel" class="card hidden">
+          <div class="card-header">
+            <h2>Analysis Results</h2>
+            <button class="btn btn-ghost btn-sm" id="go-match-btn">Run Matcher →</button>
+          </div>
+          <div id="analysis-summary" class="analysis-banner"></div>
+          <div class="three-col">
+            <div>
+              <h3 class="col-label">Detected Skills</h3>
+              <ul id="found-skills" class="tag-list cyan"></ul>
+            </div>
+            <div>
+              <h3 class="col-label">Missing Skills</h3>
+              <ul id="missing-skills" class="tag-list orange"></ul>
+            </div>
+            <div>
+              <h3 class="col-label">Recommended Roles</h3>
+              <ul id="recommended-roles" class="role-list"></ul>
+            </div>
+          </div>
+        </div>
+
+        <div id="jobs-results-panel" class="card hidden">
+          <div class="card-header">
+            <h2>Jobs Found <span class="count-badge" id="job-count-badge">0</span></h2>
+            <button class="btn btn-ghost btn-sm" id="go-match-from-jobs-btn">Match Against CV →</button>
+          </div>
+          <div id="job-results" class="jobs-grid"></div>
+        </div>
+      </section>
+
+      <!-- ═══ Matcher Agent ═══ -->
+      <section class="page" id="page-matcher">
+        <div class="page-intro">
+          <div class="page-badge">02</div>
+          <div>
+            <h1>Matcher Agent <span class="role-tag">Profile Matching</span></h1>
+            <p>NLP skill matching between your CV and discovered jobs, scored 0–100%.</p>
+          </div>
+        </div>
+
+        <div id="matcher-empty" class="empty-state">
+          <div class="empty-icon">🎯</div>
+          <h3>No data to match yet</h3>
+          <p>Go to Scout Agent first — upload a CV and search for jobs.</p>
+          <button class="btn btn-primary" data-page="scout">Go to Scout Agent →</button>
+        </div>
+
+        <div id="matcher-content" class="hidden">
+          <div class="card">
+            <div class="card-header">
+              <h2>Match Results</h2>
+              <div class="legend-row">
+                <span class="legend high">≥70% High</span>
+                <span class="legend mid">≥40% Mid</span>
+                <span class="legend low">&lt;40% Low</span>
+              </div>
+            </div>
+            <div id="match-results" class="match-grid"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══ Writer Agent ═══ -->
+      <section class="page" id="page-writer">
+        <div class="page-intro">
+          <div class="page-badge orange">03</div>
+          <div>
+            <h1>Writer Agent <span class="role-tag orange">Document Generation</span></h1>
+            <p>Generate tailored CVs and cover letters for specific job applications.</p>
+          </div>
+        </div>
+
+        <div class="two-col">
+          <div class="card">
+            <div class="card-header">
+              <h2>CV Generator</h2>
+            </div>
+            <div class="form-group">
+              <label>Target Job (optional)</label>
+              <input id="target-job-input" type="text" class="field" placeholder="e.g. SOC Analyst at CyberCorp" />
+            </div>
+            <div class="form-group">
+              <label>CV Text</label>
+              <textarea id="cv-for-writer" class="field" rows="5" placeholder="Paste CV content, or auto-fills from Scout Agent…"></textarea>
+            </div>
+            <button id="generate-cv-btn" class="btn btn-primary">
+              <span>✨</span> Generate Improved CV
+            </button>
+            <div id="cv-output-block" class="output-block hidden">
+              <div class="output-header">
+                <span>Generated CV</span>
+                <div>
+                  <button id="copy-cv-btn" class="btn btn-ghost btn-xs">Copy</button>
+                  <button id="download-cv-btn" class="btn btn-ghost btn-xs">Download</button>
+                </div>
+              </div>
+              <textarea id="generated-cv-output" class="field output-area" readonly></textarea>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h2>Cover Letter Generator</h2>
+            </div>
+            <div class="form-group">
+              <label>Job Title</label>
+              <input id="cover-job-title" type="text" class="field" placeholder="e.g. Cloud Security Engineer" />
+            </div>
+            <div class="form-group">
+              <label>Company</label>
+              <input id="cover-company" type="text" class="field" placeholder="e.g. CyberGuard AG" />
+            </div>
+            <div class="form-group">
+              <label>Your Name</label>
+              <input id="cover-name" type="text" class="field" placeholder="Full name" />
+            </div>
+            <div class="form-group">
+              <label>Skills to Highlight</label>
+              <input id="cover-skills" type="text" class="field" placeholder="e.g. SIEM, Python, incident response" />
+            </div>
+            <button id="generate-cover-btn" class="btn btn-primary">
+              <span>✍️</span> Generate Cover Letter
+            </button>
+            <div id="cover-output-block" class="output-block hidden">
+              <div class="output-header">
+                <span>Generated Cover Letter</span>
+                <div>
+                  <button id="copy-cover-btn" class="btn btn-ghost btn-xs">Copy</button>
+                  <button id="download-cover-btn" class="btn btn-ghost btn-xs">Download</button>
+                </div>
+              </div>
+              <textarea id="generated-cover-output" class="field output-area" readonly></textarea>
+            </div>
+          </div>
+        </div>
+
+        <div id="learning-panel" class="card hidden">
+          <h2>Learning Suggestions</h2>
+          <div id="suggestions-grid" class="suggestions-grid"></div>
+        </div>
+      </section>
+
+      <!-- ═══ Tracker Agent ═══ -->
+      <section class="page" id="page-tracker">
+        <div class="page-intro tracker-intro">
+          <div class="page-badge">04</div>
+          <div>
+            <h1>Tracker Agent <span class="role-tag">Application Tracking</span></h1>
+            <p>Monitor all your job applications in one Kanban board.</p>
+          </div>
+          <button id="add-app-btn" class="btn btn-primary">+ Add Application</button>
+        </div>
+
+        <div id="add-app-form" class="card hidden">
+          <h2>New Application</h2>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Job Title</label>
+              <input id="app-title" type="text" class="field" placeholder="SOC Analyst" />
+            </div>
+            <div class="form-group">
+              <label>Company</label>
+              <input id="app-company" type="text" class="field" placeholder="SecureOps GmbH" />
+            </div>
+            <div class="form-group">
+              <label>Location</label>
+              <input id="app-location" type="text" class="field" placeholder="Berlin, Germany" />
+            </div>
+            <div class="form-group">
+              <label>Deadline</label>
+              <input id="app-deadline" type="date" class="field" />
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Job URL</label>
+            <input id="app-url" type="text" class="field" placeholder="https://…" />
+          </div>
+          <div class="form-group">
+            <label>Notes</label>
+            <textarea id="app-notes" class="field" rows="2" placeholder="Any notes…"></textarea>
+          </div>
+          <div class="form-actions">
+            <button id="save-app-btn" class="btn btn-primary">Save</button>
+            <button id="cancel-app-btn" class="btn btn-ghost">Cancel</button>
+          </div>
+        </div>
+
+        <div class="kanban">
+          <div class="kanban-col">
+            <div class="kanban-col-header">
+              <span class="col-dot applied"></span>
+              <span>Applied</span>
+              <span class="col-count" id="cnt-applied">0</span>
+            </div>
+            <div class="kanban-cards" id="col-applied" data-status="applied"></div>
+          </div>
+          <div class="kanban-col">
+            <div class="kanban-col-header">
+              <span class="col-dot review"></span>
+              <span>In Review</span>
+              <span class="col-count" id="cnt-review">0</span>
+            </div>
+            <div class="kanban-cards" id="col-review" data-status="review"></div>
+          </div>
+          <div class="kanban-col">
+            <div class="kanban-col-header">
+              <span class="col-dot interview"></span>
+              <span>Interview</span>
+              <span class="col-count" id="cnt-interview">0</span>
+            </div>
+            <div class="kanban-cards" id="col-interview" data-status="interview"></div>
+          </div>
+          <div class="kanban-col">
+            <div class="kanban-col-header">
+              <span class="col-dot offer"></span>
+              <span>Offer</span>
+              <span class="col-count" id="cnt-offer">0</span>
+            </div>
+            <div class="kanban-cards" id="col-offer" data-status="offer"></div>
+          </div>
+          <div class="kanban-col">
+            <div class="kanban-col-header">
+              <span class="col-dot rejected"></span>
+              <span>Rejected</span>
+              <span class="col-count" id="cnt-rejected">0</span>
+            </div>
+            <div class="kanban-cards" id="col-rejected" data-status="rejected"></div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+  <!-- ── GDPR Banner ── -->
+<div id="gdpr-banner" style="
+  position:fixed; bottom:20px; left:20px; right:20px; max-width:680px;
+  margin:0 auto; background:#fff; border:1px solid #e2e8f0;
+  border-radius:12px; padding:20px 22px; z-index:9999;
+  box-shadow:0 8px 32px rgba(0,0,0,0.12);
+  display:flex; flex-direction:column; gap:14px;
+  font-family:sans-serif;">
+  <div style="font-size:14px;font-weight:600;color:#1e293b;">🍪 Privacy & Cookies</div>
+  <div style="font-size:13px;color:#64748b;line-height:1.6;">
+    This app runs entirely on <strong>localhost</strong> — your data never leaves your machine.
+    We only store your login token and job applications locally.
+    <a href="#" onclick="showPrivacyModal();return false;" style="color:#2563eb;">Read privacy policy →</a>
+  </div>
+  <div style="display:flex;gap:10px;flex-wrap:wrap;">
+    <button onclick="gdprAccept()" style="
+      padding:9px 18px;border-radius:8px;border:none;
+      background:#2563eb;color:#fff;font-size:13px;
+      font-weight:500;cursor:pointer;">
+      ✓ Accept & Continue
+    </button>
+    <button onclick="gdprReject()" style="
+      padding:9px 18px;border-radius:8px;cursor:pointer;
+      background:#fff;color:#64748b;font-size:13px;
+      border:1px solid #e2e8f0;">
+      Necessary only
+    </button>
+  </div>
+</div>
+
+<!-- ── Privacy Modal ── -->
+<div id="privacy-modal" style="
+  display:none;position:fixed;inset:0;z-index:10000;
+  background:rgba(0,0,0,0.5);align-items:center;justify-content:center;padding:20px;">
+  <div style="background:#fff;border-radius:14px;max-width:580px;width:100%;
+    max-height:80vh;overflow-y:auto;padding:28px 30px;font-family:sans-serif;
+    font-size:13px;line-height:1.8;color:#64748b;">
+    <h2 style="font-size:17px;color:#1e293b;margin:0 0 16px;">🔒 Privacy Policy — CyberCareer</h2>
+    <h3 style="color:#2563eb;font-size:12px;text-transform:uppercase;margin:14px 0 6px;">What is stored</h3>
+    <ul>
+      <li><strong>Login token</strong> — in LocalStorage, expires after 24h</li>
+      <li><strong>Hashed password</strong> — in storage.json on your PC (scrypt)</li>
+      <li><strong>Applications</strong> — title, company, status — local only</li>
+      <li><strong>CV text</strong> — RAM only, never saved to disk</li>
+    </ul>
+    <h3 style="color:#2563eb;font-size:12px;text-transform:uppercase;margin:14px 0 6px;">External API calls</h3>
+    <p>When searching jobs, your IP is sent to: Bundesagentur für Arbeit, Arbeitnow, Remotive. No personal data is transmitted.</p>
+    <h3 style="color:#2563eb;font-size:12px;text-transform:uppercase;margin:14px 0 6px;">Delete your data</h3>
+    <p>Delete <code>storage.json</code> + clear LocalStorage (F12 → Application → LocalStorage).</p>
+    <p style="color:#94a3b8;font-size:11px;margin-top:16px;">GDPR Art. 6 — May 2025 · Sprint 1</p>
+    <button onclick="closePrivacyModal()" style="
+      margin-top:16px;padding:9px 18px;background:#2563eb;color:#fff;
+      border:none;border-radius:8px;font-size:13px;cursor:pointer;">
+      Close
+    </button>
+  </div>
+</div>
+
+<script>
+const GDPR_KEY = 'careerai-gdpr-consent';
+
+function gdprInit() {
+  if (!localStorage.getItem(GDPR_KEY)) {
+    document.getElementById('gdpr-banner').style.display = 'flex';
+  } else {
+    document.getElementById('gdpr-banner').style.display = 'none';
+  }
+}
+
+function gdprAccept() {
+  localStorage.setItem(GDPR_KEY, JSON.stringify({ accepted: true, date: new Date().toISOString() }));
+  document.getElementById('gdpr-banner').style.display = 'none';
+}
+
+function gdprReject() {
+  localStorage.setItem(GDPR_KEY, JSON.stringify({ accepted: false, date: new Date().toISOString() }));
+  document.getElementById('gdpr-banner').style.display = 'none';
+}
+
+function showPrivacyModal() {
+  document.getElementById('privacy-modal').style.display = 'flex';
+}
+
+function closePrivacyModal() {
+  document.getElementById('privacy-modal').style.display = 'none';
+}
+
+document.getElementById('privacy-modal').addEventListener('click', e => {
+  if (e.target === document.getElementById('privacy-modal')) closePrivacyModal();
+});
+
+// Lance au chargement
+gdprInit();
+</script>
+</body>
+</html>
