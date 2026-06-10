@@ -3,6 +3,6 @@
     "playwright": "^1.57.0"
   },
   "dependencies": {
-    "pdf-parse": "^2.4.5"
+    "pdf-parse": "^1.1.4"
   }
 }

@@ -11,32 +11,149 @@
 
 <body>
 
-  <!-- Auth Modal -->
-  <div id="auth-modal" class="modal-overlay" role="dialog" aria-modal="true">
-    <div class="modal-box">
-      <div class="modal-logo">
-        <div class="brand-mark">CA</div>
-        <div>
-          <div class="brand-name">CareerAI</div>
-          <div class="brand-tagline">Job Application Agent</div>
+  <!-- Auth Screen (split-screen) -->
+  <div id="auth-modal" class="auth-screen" role="dialog" aria-modal="true">
+
+    <!-- LEFT: Robot Animation Panel -->
+    <div class="auth-left">
+      <div class="auth-grid-bg"></div>
+      <div class="auth-glow ag-1"></div>
+      <div class="auth-glow ag-2"></div>
+
+      <!-- Robot Scene -->
+      <div class="robot-scene-wrap">
+        <div class="pulse-ring pring-1"></div>
+        <div class="pulse-ring pring-2"></div>
+        <div class="orbit-ring oring-cw"><div class="orbit-dot od-cyan"></div></div>
+        <div class="orbit-ring oring-ccw"><div class="orbit-dot od-orange"></div></div>
+        <div class="robot-floating">
+          <svg width="200" height="264" viewBox="0 0 200 264" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <!-- Antenna -->
+            <line x1="100" y1="22" x2="100" y2="46" stroke="#2a3a55" stroke-width="3" stroke-linecap="round"/>
+            <circle class="svg-antenna-glow" cx="100" cy="14" r="8" fill="rgba(0,210,255,0.25)"/>
+            <circle cx="100" cy="14" r="5" fill="#00d2ff"/>
+            <!-- Head -->
+            <rect x="58" y="46" width="84" height="66" rx="13" fill="#1C2430" stroke="#2a3a55" stroke-width="1.5"/>
+            <rect x="63" y="50" width="74" height="3" rx="1.5" fill="rgba(255,255,255,0.06)"/>
+            <!-- Eyes -->
+            <g class="svg-eye-left" style="transform-box:fill-box;transform-origin:center">
+              <rect x="70" y="62" width="22" height="16" rx="4" fill="#00d2ff" opacity="0.95"/>
+              <rect x="74" y="66" width="7" height="6" rx="1.5" fill="#0b1929" opacity="0.7"/>
+            </g>
+            <g class="svg-eye-right" style="transform-box:fill-box;transform-origin:center">
+              <rect x="108" y="62" width="22" height="16" rx="4" fill="#00d2ff" opacity="0.95"/>
+              <rect x="112" y="66" width="7" height="6" rx="1.5" fill="#0b1929" opacity="0.7"/>
+            </g>
+            <!-- EQ Mouth bars -->
+            <rect class="svg-eq-bar" x="77" y="89" width="7" height="12" rx="2" fill="#00d2ff" opacity="0.9" style="transform-box:fill-box;transform-origin:center bottom;animation-delay:0s"/>
+            <rect class="svg-eq-bar" x="87" y="85" width="7" height="16" rx="2" fill="#00d2ff" opacity="0.7" style="transform-box:fill-box;transform-origin:center bottom;animation-delay:0.15s"/>
+            <rect class="svg-eq-bar" x="97" y="88" width="7" height="13" rx="2" fill="#00d2ff" opacity="0.85" style="transform-box:fill-box;transform-origin:center bottom;animation-delay:0.3s"/>
+            <rect class="svg-eq-bar" x="107" y="86" width="7" height="15" rx="2" fill="#00d2ff" opacity="0.65" style="transform-box:fill-box;transform-origin:center bottom;animation-delay:0.45s"/>
+            <rect class="svg-eq-bar" x="117" y="90" width="7" height="11" rx="2" fill="#00d2ff" opacity="0.9" style="transform-box:fill-box;transform-origin:center bottom;animation-delay:0.1s"/>
+            <!-- Neck -->
+            <rect x="88" y="112" width="24" height="10" rx="5" fill="#2a3a55"/>
+            <!-- Body -->
+            <rect x="42" y="122" width="116" height="90" rx="15" fill="#1C2430" stroke="#2a3a55" stroke-width="1.5"/>
+            <rect x="48" y="126" width="104" height="3" rx="1.5" fill="rgba(255,255,255,0.05)"/>
+            <!-- Chest screen -->
+            <rect x="62" y="136" width="76" height="46" rx="9" fill="#0b1929" stroke="rgba(0,210,255,0.25)" stroke-width="1"/>
+            <!-- Scan line -->
+            <rect class="svg-scan-line" x="62" y="136" width="76" height="3" rx="1" fill="#00d2ff" opacity="0.6"/>
+            <!-- Progress bars -->
+            <rect x="68" y="145" width="32" height="3" rx="1.5" fill="rgba(0,210,255,0.2)"/>
+            <rect x="68" y="145" width="24" height="3" rx="1.5" fill="#00d2ff"/>
+            <rect x="68" y="152" width="32" height="3" rx="1.5" fill="rgba(0,210,255,0.2)"/>
+            <rect x="68" y="152" width="30" height="3" rx="1.5" fill="#00d2ff"/>
+            <rect x="68" y="159" width="32" height="3" rx="1.5" fill="rgba(0,210,255,0.2)"/>
+            <rect x="68" y="159" width="20" height="3" rx="1.5" fill="#ff6b35"/>
+            <rect x="68" y="166" width="32" height="3" rx="1.5" fill="rgba(0,210,255,0.2)"/>
+            <rect x="68" y="166" width="27" height="3" rx="1.5" fill="#00d2ff"/>
+            <!-- Status LEDs -->
+            <circle class="svg-led" cx="112" cy="149" r="4" fill="#00c896" style="animation-delay:0s"/>
+            <circle class="svg-led" cx="124" cy="149" r="4" fill="#00d2ff" style="animation-delay:0.7s"/>
+            <circle class="svg-led" cx="118" cy="160" r="4" fill="#ff6b35" style="animation-delay:1.3s"/>
+            <!-- Side panels -->
+            <circle cx="52" cy="146" r="3" fill="rgba(0,210,255,0.3)"/>
+            <circle class="svg-led" cx="52" cy="156" r="3" fill="#00d2ff" style="animation-delay:0.4s"/>
+            <circle cx="52" cy="166" r="3" fill="rgba(0,210,255,0.3)"/>
+            <circle cx="148" cy="146" r="3" fill="rgba(0,210,255,0.3)"/>
+            <circle class="svg-led" cx="148" cy="156" r="3" fill="#00d2ff" style="animation-delay:1s"/>
+            <circle cx="148" cy="166" r="3" fill="rgba(0,210,255,0.3)"/>
+            <!-- Left Arm -->
+            <rect x="16" y="128" width="26" height="60" rx="10" fill="#1C2430" stroke="#2a3a55" stroke-width="1.5"/>
+            <rect x="22" y="150" width="14" height="4" rx="2" fill="rgba(0,210,255,0.25)"/>
+            <rect x="22" y="157" width="14" height="4" rx="2" fill="rgba(0,210,255,0.15)"/>
+            <rect x="18" y="188" width="22" height="16" rx="7" fill="#2a3a55"/>
+            <!-- Right Arm -->
+            <rect x="158" y="128" width="26" height="60" rx="10" fill="#1C2430" stroke="#2a3a55" stroke-width="1.5"/>
+            <rect x="164" y="150" width="14" height="4" rx="2" fill="rgba(0,210,255,0.25)"/>
+            <rect x="164" y="157" width="14" height="4" rx="2" fill="rgba(0,210,255,0.15)"/>
+            <rect x="160" y="188" width="22" height="16" rx="7" fill="#2a3a55"/>
+            <!-- Legs -->
+            <rect x="66" y="212" width="28" height="36" rx="10" fill="#1C2430" stroke="#2a3a55" stroke-width="1.5"/>
+            <rect x="106" y="212" width="28" height="36" rx="10" fill="#1C2430" stroke="#2a3a55" stroke-width="1.5"/>
+            <!-- Feet -->
+            <rect x="60" y="244" width="34" height="14" rx="7" fill="#2a3a55"/>
+            <rect x="106" y="244" width="34" height="14" rx="7" fill="#2a3a55"/>
+          </svg>
         </div>
       </div>
-      <div class="modal-tabs">
-        <button class="modal-tab active" data-modal-tab="login">Sign In</button>
-        <button class="modal-tab" data-modal-tab="register">Register</button>
+
+      <!-- Floating stat cards -->
+      <div class="auth-stat-card asc-1">
+        <div class="asc-val">2.4k</div>
+        <div class="asc-lbl">Jobs Found</div>
       </div>
-      <div id="modal-login" class="modal-panel active">
-        <input id="login-username" type="text" class="field" placeholder="Username" autocomplete="username" />
-        <input id="login-password" type="password" class="field" placeholder="Password" autocomplete="current-password" />
-        <button id="login-btn" class="btn btn-primary btn-full">Sign In</button>
-        <p id="login-msg" class="form-msg"></p>
+      <div class="auth-stat-card asc-2">
+        <div class="asc-val" style="color:var(--cyan)">87%</div>
+        <div class="asc-lbl">Match Rate</div>
       </div>
-      <div id="modal-register" class="modal-panel">
-        <input id="reg-name" type="text" class="field" placeholder="Full name" autocomplete="name" />
-        <input id="reg-username" type="text" class="field" placeholder="Username" autocomplete="username" />
-        <input id="reg-password" type="password" class="field" placeholder="Password" autocomplete="new-password" />
-        <button id="register-btn" class="btn btn-primary btn-full">Create Account</button>
-        <p id="register-msg" class="form-msg"></p>
+      <div class="auth-stat-card asc-3">
+        <div class="asc-val">&lt;3s</div>
+        <div class="asc-lbl">Scan Time</div>
+      </div>
+      <div class="auth-stat-card asc-4">
+        <div class="asc-val" style="color:var(--orange)">AI</div>
+        <div class="asc-lbl">Powered</div>
+      </div>
+
+      <!-- Brand footer -->
+      <div class="auth-brand-footer">
+        <div class="brand-mark">CA</div>
+        <div>
+          <div class="auth-brand-name">CareerAI</div>
+          <div class="auth-brand-sub">Automated Job Intelligence</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: Form Card -->
+    <div class="auth-right">
+      <div class="auth-card">
+        <div class="modal-logo">
+          <div class="brand-mark">CA</div>
+          <div>
+            <div class="brand-name">CareerAI</div>
+            <div class="brand-tagline">Job Application Agent</div>
+          </div>
+        </div>
+        <div class="modal-tabs">
+          <button class="modal-tab active" data-modal-tab="login">Sign In</button>
+          <button class="modal-tab" data-modal-tab="register">Register</button>
+        </div>
+        <div id="modal-login" class="modal-panel active">
+          <input id="login-username" type="text" class="field" placeholder="Username" autocomplete="username" />
+          <input id="login-password" type="password" class="field" placeholder="Password" autocomplete="current-password" />
+          <button id="login-btn" class="btn btn-primary btn-full">Sign In</button>
+          <p id="login-msg" class="form-msg"></p>
+        </div>
+        <div id="modal-register" class="modal-panel">
+          <input id="reg-name" type="text" class="field" placeholder="Full name" autocomplete="name" />
+          <input id="reg-username" type="text" class="field" placeholder="Username" autocomplete="username" />
+          <input id="reg-password" type="password" class="field" placeholder="Password" autocomplete="new-password" />
+          <button id="register-btn" class="btn btn-primary btn-full">Create Account</button>
+          <p id="register-msg" class="form-msg"></p>
+        </div>
       </div>
     </div>
   </div>
@@ -50,45 +167,41 @@
         <div class="brand-mark">CA</div>
         <div class="brand-text">
           <div class="brand-name">CareerAI</div>
-          <div class="brand-tagline">Multi-Agent System</div>
+          <div class="brand-tagline">Job Application Assistant</div>
         </div>
       </div>
 
       <nav class="sidebar-nav">
-        <button class="nav-btn active" data-page="dashboard">
-          <span class="nav-icon">⊞</span>
-          <span class="nav-label">Dashboard</span>
+        <button class="nav-btn active" data-page="getting-started">
+          <span class="nav-label">Getting Started</span>
         </button>
-
-        <div class="nav-section">Agents</div>
-
-        <button class="nav-btn" data-page="scout">
-          <span class="nav-badge">01</span>
-          <span class="nav-label">Scout Agent</span>
-          <span class="status-dot" id="nav-dot-scout"></span>
+        <button class="nav-btn" data-page="jobs">
+          <span class="nav-label">Jobs</span>
         </button>
-        <button class="nav-btn" data-page="matcher">
-          <span class="nav-badge">02</span>
-          <span class="nav-label">Matcher Agent</span>
-          <span class="status-dot" id="nav-dot-matcher"></span>
+        <button class="nav-btn" data-page="search">
+          <span class="nav-label">Job Search</span>
         </button>
-        <button class="nav-btn" data-page="writer">
-          <span class="nav-badge orange">03</span>
-          <span class="nav-label">Writer Agent</span>
-          <span class="status-dot" id="nav-dot-writer"></span>
+        <button class="nav-btn" data-page="resumes">
+          <span class="nav-label">Resumes</span>
         </button>
-        <button class="nav-btn" data-page="tracker">
-          <span class="nav-badge">04</span>
-          <span class="nav-label">Tracker Agent</span>
-          <span class="status-dot" id="nav-dot-tracker"></span>
+        <button class="nav-btn" data-page="letters">
+          <span class="nav-label">Cover Letters</span>
+        </button>
+        <button class="nav-btn" data-page="interviews">
+          <span class="nav-label">Interviews</span>
+        </button>
+        <button class="nav-btn" data-page="profile">
+          <span class="nav-label">Professional Profile</span>
         </button>
       </nav>
 
-      <div class="sidebar-user">
-        <div class="user-avatar-sm" id="user-avatar">?</div>
-        <div class="user-info-sm">
-          <div class="user-name-sm" id="sidebar-username">Not signed in</div>
-          <button id="sidebar-auth-btn" class="link-btn">Sign in</button>
+      <div class="sidebar-foot">
+        <div class="sidebar-user">
+          <div class="user-avatar-sm" id="user-avatar">?</div>
+          <div class="user-info-sm">
+            <div class="user-name-sm" id="sidebar-username">Not signed in</div>
+            <button id="sidebar-auth-btn" class="link-btn">Sign in</button>
+          </div>
         </div>
       </div>
     </aside>
@@ -98,169 +211,89 @@
 
       <!-- Topbar -->
       <div class="topbar">
-        <div class="topbar-pipeline">
-          <span class="pipe-step" id="pipe-01">01 Scout</span>
-          <span class="pipe-arrow">→</span>
-          <span class="pipe-step" id="pipe-02">02 Matcher</span>
-          <span class="pipe-arrow">→</span>
-          <span class="pipe-step orange" id="pipe-03">03 Writer</span>
-          <span class="pipe-arrow">→</span>
-          <span class="pipe-step" id="pipe-04">04 Tracker</span>
-        </div>
+        <h2 class="topbar-title" id="topbar-title">Getting Started</h2>
         <div class="topbar-right">
           <span class="api-indicator" id="api-indicator">● Offline</span>
+          <div class="add-job-wrap">
+            <button class="btn btn-primary btn-sm" id="add-job-btn">+ Add New Job ▾</button>
+            <div class="add-job-menu hidden" id="add-job-menu">
+              <button data-add="manual">Add Manually</button>
+              <button data-add="ai">Search with AI</button>
+            </div>
+          </div>
+          <div class="topbar-avatar" id="topbar-avatar" title="Account">?</div>
         </div>
       </div>
 
-      <!-- ═══ Dashboard ═══ -->
-      <section class="page active" id="page-dashboard">
+      <!-- ═══ Getting Started ═══ -->
+      <section class="page active" id="page-getting-started">
         <div class="page-intro">
-          <h1>Multi-Agent Pipeline</h1>
-          <p>Four specialized agents working together to automate your cybersecurity job search.</p>
+          <div>
+            <h1>Getting Started</h1>
+            <p id="gs-progress-text">0 of 4 steps completed.</p>
+          </div>
         </div>
 
-        <div class="pipeline-grid">
-          <div class="agent-card" id="dash-scout">
-            <div class="agent-num">01</div>
-            <div class="agent-icon-lg">🔍</div>
-            <div class="agent-body">
-              <div class="agent-title">Scout Agent</div>
-              <div class="agent-subtitle">Job Discovery</div>
-              <ul class="agent-features">
-                <li>CV parsing &amp; skill detection</li>
-                <li>Multi-portal job search</li>
-                <li>LinkedIn · Indeed · Bundesagentur</li>
-              </ul>
-            </div>
-            <div class="agent-footer">
-              <span class="status-pill idle" id="dash-status-scout">Idle</span>
-              <button class="btn btn-ghost btn-xs" data-page="scout">Launch →</button>
+        <div class="gs-progress-track">
+          <div class="gs-progress-fill" id="gs-progress-bar" style="width:0%"></div>
+        </div>
+
+        <div class="gs-steps">
+          <div class="gs-step" id="gs-step-1">
+            <div class="gs-check">1</div>
+            <div class="gs-step-body">
+              <h3>Create your account</h3>
+              <p>Sign in to sync your profile, jobs and documents across devices.</p>
+              <button class="btn btn-ghost btn-sm" id="gs-btn-account">Sign in</button>
             </div>
           </div>
-
-          <div class="flow-arrow">→</div>
-
-          <div class="agent-card" id="dash-matcher">
-            <div class="agent-num">02</div>
-            <div class="agent-icon-lg">🎯</div>
-            <div class="agent-body">
-              <div class="agent-title">Matcher Agent</div>
-              <div class="agent-subtitle">Profile Matching</div>
-              <ul class="agent-features">
-                <li>NLP skill analysis</li>
-                <li>Match scoring 0–100%</li>
-                <li>Skill gap detection</li>
-              </ul>
-            </div>
-            <div class="agent-footer">
-              <span class="status-pill idle" id="dash-status-matcher">Idle</span>
-              <button class="btn btn-ghost btn-xs" data-page="matcher">Launch →</button>
+          <div class="gs-step" id="gs-step-2">
+            <div class="gs-check">2</div>
+            <div class="gs-step-body">
+              <h3>Complete your profile</h3>
+              <p>Add your details, skills, education and experience — by uploading your CV (auto-extract) or filling them in manually.</p>
+              <button class="btn btn-ghost btn-sm" data-page="profile">Manage Profile →</button>
             </div>
           </div>
-
-          <div class="flow-arrow">→</div>
-
-          <div class="agent-card highlight-orange" id="dash-writer">
-            <div class="agent-num orange">03</div>
-            <div class="agent-icon-lg">📄</div>
-            <div class="agent-body">
-              <div class="agent-title">Writer Agent</div>
-              <div class="agent-subtitle writer-sub">Document Generation</div>
-              <ul class="agent-features">
-                <li>Dynamic CV generation</li>
-                <li>Cover letter crafting</li>
-                <li>Personalization engine</li>
-              </ul>
-            </div>
-            <div class="agent-footer">
-              <span class="status-pill idle" id="dash-status-writer">Idle</span>
-              <button class="btn btn-ghost btn-xs" data-page="writer">Launch →</button>
+          <div class="gs-step" id="gs-step-3">
+            <div class="gs-check">3</div>
+            <div class="gs-step-body">
+              <h3>Find &amp; save your first job</h3>
+              <p>Search jobs across Bundesagentur, LinkedIn, Arbeitnow and Remotive — all at once.</p>
+              <button class="btn btn-ghost btn-sm" data-page="search">Search for Jobs →</button>
             </div>
           </div>
-
-          <div class="flow-arrow">→</div>
-
-          <div class="agent-card" id="dash-tracker">
-            <div class="agent-num">04</div>
-            <div class="agent-icon-lg">📊</div>
-            <div class="agent-body">
-              <div class="agent-title">Tracker Agent</div>
-              <div class="agent-subtitle">Application Tracking</div>
-              <ul class="agent-features">
-                <li>Kanban application board</li>
-                <li>Deadline management</li>
-                <li>Status monitoring</li>
-              </ul>
-            </div>
-            <div class="agent-footer">
-              <span class="status-pill idle" id="dash-status-tracker">Idle</span>
-              <button class="btn btn-ghost btn-xs" data-page="tracker">Launch →</button>
+          <div class="gs-step" id="gs-step-4">
+            <div class="gs-check">4</div>
+            <div class="gs-step-body">
+              <h3>Generate your resume &amp; cover letter</h3>
+              <p>Let the AI assistant tailor your CV and cover letter to each job, based on your profile.</p>
+              <button class="btn btn-ghost btn-sm" data-page="resumes">Manage Resumes →</button>
             </div>
           </div>
         </div>
 
-        <div class="stats-row">
-          <div class="stat-box">
-            <div class="stat-val" id="stat-jobs">0</div>
-            <div class="stat-lbl">Jobs Found</div>
-          </div>
-          <div class="stat-box">
-            <div class="stat-val cyan" id="stat-matches">0</div>
-            <div class="stat-lbl">High Matches</div>
-          </div>
-          <div class="stat-box">
-            <div class="stat-val orange" id="stat-docs">0</div>
-            <div class="stat-lbl">Docs Generated</div>
-          </div>
-          <div class="stat-box">
-            <div class="stat-val" id="stat-apps">0</div>
-            <div class="stat-lbl">Applications</div>
-          </div>
-        </div>
-
-        <div class="tech-row">
-          <span class="tech-chip">Node.js</span>
-          <span class="tech-chip">Bundesagentur API</span>
-          <span class="tech-chip">Apify</span>
-          <span class="tech-chip">NLP Matching</span>
-          <span class="tech-chip">pdf.js</span>
-          <span class="tech-chip">Kanban Tracker</span>
+        <div class="stats-row" style="margin-top:24px">
+          <div class="stat-box"><div class="stat-val" id="stat-jobs">0</div><div class="stat-lbl">Jobs Found</div></div>
+          <div class="stat-box"><div class="stat-val cyan" id="stat-matches">0</div><div class="stat-lbl">High Matches</div></div>
+          <div class="stat-box"><div class="stat-val orange" id="stat-docs">0</div><div class="stat-lbl">Docs Generated</div></div>
+          <div class="stat-box"><div class="stat-val" id="stat-apps">0</div><div class="stat-lbl">Saved Jobs</div></div>
         </div>
       </section>
 
-      <!-- ═══ Scout Agent ═══ -->
-      <section class="page" id="page-scout">
+      <!-- ═══ Job Search ═══ -->
+      <section class="page" id="page-search">
         <div class="page-intro">
-          <div class="page-badge">01</div>
           <div>
-            <h1>Scout Agent <span class="role-tag">Job Discovery</span></h1>
-            <p>Upload your CV for skill detection, then search jobs across multiple portals.</p>
+            <h1>Job Search</h1>
+            <p>Search across multiple portals at once. Results are scored against your profile.</p>
           </div>
+          <span class="pill" id="search-status-pill" style="margin-left:auto;align-self:center">Ready</span>
         </div>
 
-        <div class="two-col">
+        <div class="search-grid">
           <div class="card">
-            <div class="card-header">
-              <h2>CV Analysis</h2>
-              <span class="pill" id="cv-status-pill">Ready</span>
-            </div>
-            <div id="cv-drop-zone" class="drop-zone">
-              <div class="drop-icon">📄</div>
-              <p>Drop CV file here or click to browse</p>
-              <span class="drop-hint">.txt and searchable .pdf supported</span>
-            </div>
-            <input id="cv-file-input" type="file" accept=".txt,.pdf" hidden />
-            <textarea id="cv-input" class="field cv-textarea" placeholder="…or paste CV text directly here"></textarea>
-            <button id="analyze-btn" class="btn btn-primary">
-              <span>🔍</span> Analyze CV
-            </button>
-          </div>
-
-          <div class="card">
-            <div class="card-header">
-              <h2>Job Search</h2>
-              <span class="pill" id="search-status-pill">Ready</span>
-            </div>
+            <div class="card-header"><h2>Search filters</h2></div>
             <div class="form-group">
               <label>Region</label>
               <select id="region-select" class="field">
@@ -273,25 +306,25 @@
               <label>Location</label>
               <div class="input-with-btn">
                 <input id="search-location-input" type="text" class="field" placeholder="City or postcode" />
-                <button id="current-location-button" type="button" class="btn btn-ghost btn-sm">📍</button>
+                <button id="current-location-button" type="button" class="btn btn-ghost btn-sm">Use my location</button>
               </div>
               <p id="location-status" class="hint"></p>
             </div>
             <div class="form-group">
               <label>Platform</label>
               <select id="platform-select" class="field">
-                <option value="all">⚡ All platforms simultaneously</option>
-                <optgroup label="✅ Free — Works now">
+                <option value="all">All platforms simultaneously</option>
+                <optgroup label="Free — Works now">
                   <option value="bundesagentur">Bundesagentur (DE official API)</option>
                   <option value="arbeitnow">Arbeitnow (DE tech jobs)</option>
                   <option value="linkedin">LinkedIn (public listings)</option>
                   <option value="remotive">Remotive (remote worldwide)</option>
                 </optgroup>
-                <optgroup label="⚠️ Bot-protected — limited results">
+                <optgroup label="Bot-protected — limited results">
                   <option value="indeed">Indeed</option>
                   <option value="stepstone">StepStone</option>
                 </optgroup>
-                <optgroup label="🔑 Requires Apify credits">
+                <optgroup label="Requires Apify credits">
                   <option value="apify-indeed">Indeed via Apify (paid)</option>
                 </optgroup>
               </select>
@@ -299,7 +332,7 @@
             </div>
             <div class="form-group">
               <label>Job Title / Keywords</label>
-              <input id="job-keyword-input" type="text" class="field" placeholder="e.g. Data Analyst, DevOps Engineer, Marketing Manager…" />
+              <input id="job-keyword-input" type="text" class="field" placeholder="e.g. Data Analyst, Pflegefachkraft, Marketing Manager…" />
             </div>
             <div class="form-group">
               <label>Domain</label>
@@ -313,6 +346,9 @@
                   <option value="ai">AI &amp; Machine Learning</option>
                   <option value="network">Networking &amp; Infrastructure</option>
                   <option value="it-support">IT Support &amp; Systems</option>
+                </optgroup>
+                <optgroup label="Healthcare">
+                  <option value="healthcare">Healthcare &amp; Nursing</option>
                 </optgroup>
                 <optgroup label="Business">
                   <option value="finance">Finance &amp; Accounting</option>
@@ -340,18 +376,22 @@
                 <option value="100">Within 100 km</option>
               </select>
             </div>
+            <label class="notify-toggle" for="notify-jobs-toggle">
+              <input type="checkbox" id="notify-jobs-toggle" />
+              <span>Email me jobs with ≥70% match</span>
+            </label>
             <button id="search-jobs-btn" class="btn btn-primary">
-              <span>🔍</span> Search Jobs
+              Search Jobs
             </button>
             <button id="scrape-all-btn" class="btn btn-scrape-all">
-              <span>⚡</span> Scrape All Platforms
+              Scrape All Platforms
             </button>
           </div>
         </div>
 
         <!-- Scrape-All progress banner -->
         <div id="scrape-all-progress" class="scrape-progress hidden">
-          <div class="scrape-progress-title">⚡ Scraping all platforms simultaneously…</div>
+          <div class="scrape-progress-title">Scraping all platforms simultaneously…</div>
           <div class="scrape-platforms-row">
             <div class="scrape-platform" id="sp-bundesagentur"><span class="sp-dot spinning"></span> Bundesagentur</div>
             <div class="scrape-platform" id="sp-arbeitnow"><span class="sp-dot spinning"></span> Arbeitnow</div>
@@ -364,140 +404,48 @@
         <!-- Platform breakdown after scrape-all -->
         <div id="platform-breakdown" class="platform-breakdown hidden"></div>
 
-        <div id="analysis-results-panel" class="card hidden">
-          <div class="card-header">
-            <h2>Analysis Results</h2>
-            <button class="btn btn-ghost btn-sm" id="go-match-btn">Run Matcher →</button>
-          </div>
-          <div id="analysis-summary" class="analysis-banner"></div>
-          <div class="three-col">
-            <div>
-              <h3 class="col-label">Detected Skills</h3>
-              <ul id="found-skills" class="tag-list cyan"></ul>
-            </div>
-            <div>
-              <h3 class="col-label">Missing Skills</h3>
-              <ul id="missing-skills" class="tag-list orange"></ul>
-            </div>
-            <div>
-              <h3 class="col-label">Recommended Roles</h3>
-              <ul id="recommended-roles" class="role-list"></ul>
-            </div>
-          </div>
-        </div>
-
         <div id="jobs-results-panel" class="card hidden">
           <div class="card-header">
             <h2>Jobs Found <span class="count-badge" id="job-count-badge">0</span></h2>
-            <button class="btn btn-ghost btn-sm" id="go-match-from-jobs-btn">Match Against CV →</button>
+            <div class="legend-row">
+              <span class="legend high">≥70%</span>
+              <span class="legend mid">≥40%</span>
+              <span class="legend low">&lt;40%</span>
+            </div>
           </div>
           <div id="job-results" class="jobs-grid"></div>
         </div>
       </section>
 
-      <!-- ═══ Matcher Agent ═══ -->
-      <section class="page" id="page-matcher">
+      <!-- ═══ Resumes ═══ -->
+      <section class="page" id="page-resumes">
         <div class="page-intro">
-          <div class="page-badge">02</div>
           <div>
-            <h1>Matcher Agent <span class="role-tag">Profile Matching</span></h1>
-            <p>NLP skill matching between your CV and discovered jobs, scored 0–100%.</p>
+            <h1>Resumes</h1>
+            <p>Generate a tailored CV based on your profile and a target role.</p>
           </div>
         </div>
 
-        <div id="matcher-empty" class="empty-state">
-          <div class="empty-icon">🎯</div>
-          <h3>No data to match yet</h3>
-          <p>Go to Scout Agent first — upload a CV and search for jobs.</p>
-          <button class="btn btn-primary" data-page="scout">Go to Scout Agent →</button>
-        </div>
-
-        <div id="matcher-content" class="hidden">
-          <div class="card">
-            <div class="card-header">
-              <h2>Match Results</h2>
-              <div class="legend-row">
-                <span class="legend high">≥70% High</span>
-                <span class="legend mid">≥40% Mid</span>
-                <span class="legend low">&lt;40% Low</span>
+        <div class="card">
+          <div class="card-header"><h2>CV Generator</h2></div>
+          <div class="form-group">
+            <label>Target Job (optional)</label>
+            <input id="target-job-input" type="text" class="field" placeholder="e.g. Pflegefachkraft at Charité" />
+          </div>
+          <div class="form-group">
+            <label>CV Text <span class="hint" style="text-transform:none;font-weight:400">— auto-fills from your Profile</span></label>
+            <textarea id="cv-for-writer" class="field" rows="6" placeholder="Paste CV content, or complete your Professional Profile first…"></textarea>
+          </div>
+          <button id="generate-cv-btn" class="btn btn-primary">Generate Improved CV</button>
+          <div id="cv-output-block" class="output-block hidden">
+            <div class="output-header">
+              <span>Generated CV</span>
+              <div>
+                <button id="copy-cv-btn" class="btn btn-ghost btn-xs">Copy</button>
+                <button id="download-cv-btn" class="btn btn-ghost btn-xs">Download</button>
               </div>
             </div>
-            <div id="match-results" class="match-grid"></div>
-          </div>
-        </div>
-      </section>
-
-      <!-- ═══ Writer Agent ═══ -->
-      <section class="page" id="page-writer">
-        <div class="page-intro">
-          <div class="page-badge orange">03</div>
-          <div>
-            <h1>Writer Agent <span class="role-tag orange">Document Generation</span></h1>
-            <p>Generate tailored CVs and cover letters for specific job applications.</p>
-          </div>
-        </div>
-
-        <div class="two-col">
-          <div class="card">
-            <div class="card-header">
-              <h2>CV Generator</h2>
-            </div>
-            <div class="form-group">
-              <label>Target Job (optional)</label>
-              <input id="target-job-input" type="text" class="field" placeholder="e.g. SOC Analyst at CyberCorp" />
-            </div>
-            <div class="form-group">
-              <label>CV Text</label>
-              <textarea id="cv-for-writer" class="field" rows="5" placeholder="Paste CV content, or auto-fills from Scout Agent…"></textarea>
-            </div>
-            <button id="generate-cv-btn" class="btn btn-primary">
-              <span>✨</span> Generate Improved CV
-            </button>
-            <div id="cv-output-block" class="output-block hidden">
-              <div class="output-header">
-                <span>Generated CV</span>
-                <div>
-                  <button id="copy-cv-btn" class="btn btn-ghost btn-xs">Copy</button>
-                  <button id="download-cv-btn" class="btn btn-ghost btn-xs">Download</button>
-                </div>
-              </div>
-              <textarea id="generated-cv-output" class="field output-area" readonly></textarea>
-            </div>
-          </div>
-
-          <div class="card">
-            <div class="card-header">
-              <h2>Cover Letter Generator</h2>
-            </div>
-            <div class="form-group">
-              <label>Job Title</label>
-              <input id="cover-job-title" type="text" class="field" placeholder="e.g. Cloud Security Engineer" />
-            </div>
-            <div class="form-group">
-              <label>Company</label>
-              <input id="cover-company" type="text" class="field" placeholder="e.g. CyberGuard AG" />
-            </div>
-            <div class="form-group">
-              <label>Your Name</label>
-              <input id="cover-name" type="text" class="field" placeholder="Full name" />
-            </div>
-            <div class="form-group">
-              <label>Skills to Highlight</label>
-              <input id="cover-skills" type="text" class="field" placeholder="e.g. SIEM, Python, incident response" />
-            </div>
-            <button id="generate-cover-btn" class="btn btn-primary">
-              <span>✍️</span> Generate Cover Letter
-            </button>
-            <div id="cover-output-block" class="output-block hidden">
-              <div class="output-header">
-                <span>Generated Cover Letter</span>
-                <div>
-                  <button id="copy-cover-btn" class="btn btn-ghost btn-xs">Copy</button>
-                  <button id="download-cover-btn" class="btn btn-ghost btn-xs">Download</button>
-                </div>
-              </div>
-              <textarea id="generated-cover-output" class="field output-area" readonly></textarea>
-            </div>
+            <textarea id="generated-cv-output" class="field output-area" readonly></textarea>
           </div>
         </div>
 
@@ -507,27 +455,97 @@
         </div>
       </section>
 
-      <!-- ═══ Tracker Agent ═══ -->
-      <section class="page" id="page-tracker">
-        <div class="page-intro tracker-intro">
-          <div class="page-badge">04</div>
+      <!-- ═══ Cover Letters ═══ -->
+      <section class="page" id="page-letters">
+        <div class="page-intro">
           <div>
-            <h1>Tracker Agent <span class="role-tag">Application Tracking</span></h1>
-            <p>Monitor all your job applications in one Kanban board.</p>
+            <h1>Cover Letters</h1>
+            <p>Generate a personalised cover letter for a specific company and role.</p>
           </div>
-          <button id="add-app-btn" class="btn btn-primary">+ Add Application</button>
         </div>
 
-        <div id="add-app-form" class="card hidden">
-          <h2>New Application</h2>
+        <div class="card">
+          <div class="card-header"><h2>Cover Letter Generator</h2></div>
           <div class="form-row">
             <div class="form-group">
               <label>Job Title</label>
-              <input id="app-title" type="text" class="field" placeholder="SOC Analyst" />
+              <input id="cover-job-title" type="text" class="field" placeholder="e.g. Pflegefachkraft" />
             </div>
             <div class="form-group">
               <label>Company</label>
-              <input id="app-company" type="text" class="field" placeholder="SecureOps GmbH" />
+              <input id="cover-company" type="text" class="field" placeholder="e.g. Charité Berlin" />
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Your Name</label>
+            <input id="cover-name" type="text" class="field" placeholder="Full name (auto-fills from Profile)" />
+          </div>
+          <div class="form-group">
+            <label>Skills to Highlight</label>
+            <input id="cover-skills" type="text" class="field" placeholder="Comma-separated, or auto-fills from Profile" />
+          </div>
+          <button id="generate-cover-btn" class="btn btn-primary">Generate Cover Letter</button>
+          <div id="cover-output-block" class="output-block hidden">
+            <div class="output-header">
+              <span>Generated Cover Letter</span>
+              <div>
+                <button id="copy-cover-btn" class="btn btn-ghost btn-xs">Copy</button>
+                <button id="download-cover-btn" class="btn btn-ghost btn-xs">Download</button>
+                <button id="email-cover-btn" class="btn btn-ghost btn-xs">Send by email</button>
+              </div>
+            </div>
+            <textarea id="generated-cover-output" class="field output-area" readonly></textarea>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══ Interviews ═══ -->
+      <section class="page" id="page-interviews">
+        <div class="page-intro">
+          <div>
+            <h1>Interview Preparation</h1>
+            <p>Generate likely interview questions and tips tailored to your target role.</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><h2>Generate questions</h2></div>
+          <div class="form-group">
+            <label>Target Role</label>
+            <input id="interview-role" type="text" class="field" placeholder="e.g. Pflegefachkraft, Data Analyst…" />
+          </div>
+          <button id="generate-interview-btn" class="btn btn-primary">Generate Interview Prep</button>
+        </div>
+
+        <div id="interview-output" class="card hidden">
+          <div class="card-header">
+            <h2>Your interview prep</h2>
+            <button id="copy-interview-btn" class="btn btn-ghost btn-sm">Copy all</button>
+          </div>
+          <div id="interview-content"></div>
+        </div>
+      </section>
+
+      <!-- ═══ Jobs (tracker) ═══ -->
+      <section class="page" id="page-jobs">
+        <div class="page-intro tracker-intro">
+          <div>
+            <h1>Jobs</h1>
+            <p>Track every application across your pipeline.</p>
+          </div>
+          <button id="add-app-btn" class="btn btn-primary">+ Add Job</button>
+        </div>
+
+        <div id="add-app-form" class="card hidden">
+          <h2>New Job</h2>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Job Title</label>
+              <input id="app-title" type="text" class="field" placeholder="Pflegefachkraft" />
+            </div>
+            <div class="form-group">
+              <label>Company</label>
+              <input id="app-company" type="text" class="field" placeholder="Charité Berlin" />
             </div>
             <div class="form-group">
               <label>Location</label>
@@ -552,46 +570,161 @@
           </div>
         </div>
 
+        <div id="jobs-empty" class="empty-state hidden">
+          <div class="empty-icon"></div>
+          <h3>No jobs yet</h3>
+          <p>Add a job manually, or save one from Job Search.</p>
+          <button class="btn btn-primary" data-page="search">Search for Jobs →</button>
+        </div>
+
         <div class="kanban">
           <div class="kanban-col">
-            <div class="kanban-col-header">
-              <span class="col-dot applied"></span>
-              <span>Applied</span>
-              <span class="col-count" id="cnt-applied">0</span>
-            </div>
+            <div class="kanban-col-header"><span class="col-dot applied"></span><span>Saved</span><span class="col-count" id="cnt-applied">0</span></div>
             <div class="kanban-cards" id="col-applied" data-status="applied"></div>
           </div>
           <div class="kanban-col">
-            <div class="kanban-col-header">
-              <span class="col-dot review"></span>
-              <span>In Review</span>
-              <span class="col-count" id="cnt-review">0</span>
-            </div>
+            <div class="kanban-col-header"><span class="col-dot review"></span><span>Applied</span><span class="col-count" id="cnt-review">0</span></div>
             <div class="kanban-cards" id="col-review" data-status="review"></div>
           </div>
           <div class="kanban-col">
-            <div class="kanban-col-header">
-              <span class="col-dot interview"></span>
-              <span>Interview</span>
-              <span class="col-count" id="cnt-interview">0</span>
-            </div>
+            <div class="kanban-col-header"><span class="col-dot interview"></span><span>Interview</span><span class="col-count" id="cnt-interview">0</span></div>
             <div class="kanban-cards" id="col-interview" data-status="interview"></div>
           </div>
           <div class="kanban-col">
-            <div class="kanban-col-header">
-              <span class="col-dot offer"></span>
-              <span>Offer</span>
-              <span class="col-count" id="cnt-offer">0</span>
-            </div>
+            <div class="kanban-col-header"><span class="col-dot offer"></span><span>Offer</span><span class="col-count" id="cnt-offer">0</span></div>
             <div class="kanban-cards" id="col-offer" data-status="offer"></div>
           </div>
           <div class="kanban-col">
-            <div class="kanban-col-header">
-              <span class="col-dot rejected"></span>
-              <span>Rejected</span>
-              <span class="col-count" id="cnt-rejected">0</span>
-            </div>
+            <div class="kanban-col-header"><span class="col-dot rejected"></span><span>Rejected</span><span class="col-count" id="cnt-rejected">0</span></div>
             <div class="kanban-cards" id="col-rejected" data-status="rejected"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══ Professional Profile ═══ -->
+      <section class="page" id="page-profile">
+        <div class="page-intro">
+          <div>
+            <h1>Professional Profile</h1>
+            <p>Build your profile by uploading your CV (auto-extract) or filling it in manually.</p>
+          </div>
+        </div>
+
+        <!-- Mode toggle -->
+        <div class="profile-modes">
+          <button class="profile-mode-btn" data-mode="import">Import from CV</button>
+          <button class="profile-mode-btn active" data-mode="manual">Manual entry</button>
+        </div>
+
+        <!-- Import mode -->
+        <div id="profile-import" class="profile-mode-panel hidden">
+          <div class="card">
+            <div class="card-header">
+              <h2>Upload your CV</h2>
+              <span class="pill" id="cv-status-pill">Ready</span>
+            </div>
+            <div id="cv-drop-zone" class="drop-zone">
+              <div class="drop-icon"></div>
+              <p>Drop CV file here or click to browse</p>
+              <span class="drop-hint">.txt and searchable .pdf supported</span>
+            </div>
+            <input id="cv-file-input" type="file" accept=".txt,.pdf" hidden />
+            <textarea id="cv-input" class="field cv-textarea" placeholder="…or paste CV text directly here"></textarea>
+            <button id="analyze-btn" class="btn btn-primary">Extract &amp; Build Profile</button>
+          </div>
+
+          <div id="analysis-results-panel" class="card hidden">
+            <div class="card-header">
+              <h2>Extracted profile</h2>
+              <button class="btn btn-ghost btn-sm" data-page="search">Find matching jobs →</button>
+            </div>
+            <div id="analysis-summary" class="analysis-banner"></div>
+            <div class="three-col">
+              <div><h3 class="col-label">Detected Skills</h3><ul id="found-skills" class="tag-list cyan"></ul></div>
+              <div><h3 class="col-label">Missing / To develop</h3><ul id="missing-skills" class="tag-list orange"></ul></div>
+              <div><h3 class="col-label">Recommended Roles</h3><ul id="recommended-roles" class="role-list"></ul></div>
+            </div>
+            <div class="form-actions">
+              <button class="btn btn-ghost btn-sm" id="profile-edit-extracted">Edit details manually →</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Manual mode -->
+        <div id="profile-manual" class="profile-mode-panel">
+          <div class="card">
+            <div class="card-header"><h2>Personal information</h2></div>
+            <div id="pf-contact-warn" class="pf-warn"></div>
+            <div class="pf-photo-row">
+              <div class="pf-photo-preview" id="pf-photo-preview"><span>Photo</span></div>
+              <div class="pf-photo-actions">
+                <button id="pf-photo-btn" class="btn btn-ghost btn-sm">Upload photo</button>
+                <button id="pf-photo-remove" class="btn btn-ghost btn-sm hidden">Remove</button>
+                <input id="pf-photo-input" type="file" accept="image/*" hidden />
+                <p class="hint">JPG / PNG — appears on your CV PDF (optional).</p>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group"><label>First name</label><input id="pf-firstName" class="field" type="text" /></div>
+              <div class="form-group"><label>Last name</label><input id="pf-lastName" class="field" type="text" /></div>
+            </div>
+            <div class="form-row">
+              <div class="form-group"><label>Email</label><input id="pf-email" class="field" type="email" /></div>
+              <div class="form-group"><label>Phone</label><input id="pf-phone" class="field" type="text" /></div>
+            </div>
+            <div class="form-row">
+              <div class="form-group"><label>Location</label><input id="pf-location" class="field" type="text" placeholder="City, Country" /></div>
+              <div class="form-group"><label>Nationality</label><input id="pf-nationality" class="field" type="text" /></div>
+            </div>
+            <div class="form-group"><label>Languages</label><input id="pf-languages" class="field" type="text" placeholder="e.g. German (B2), English (fluent), French" /></div>
+          </div>
+
+          <div class="card">
+            <div class="card-header"><h2>Objective &amp; summary</h2></div>
+            <div class="form-group"><label>Target job title</label><input id="pf-title" class="field" type="text" placeholder="e.g. Pflegefachkraft" /></div>
+            <div class="form-group"><label>Professional summary</label><textarea id="pf-summary" class="field" rows="4" placeholder="A short paragraph about you, your goals and motivation…"></textarea></div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h2>Skills</h2>
+              <span class="hint" style="text-transform:none">Type a skill and press Enter</span>
+            </div>
+            <div class="skill-input-row">
+              <input id="pf-skill-input" class="field" type="text" placeholder="Add a skill…" />
+              <button id="pf-skill-add" class="btn btn-ghost btn-sm">Add</button>
+            </div>
+            <div id="pf-skill-tags" class="skill-tags"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h2>Experience</h2>
+              <button id="pf-add-exp" class="btn btn-ghost btn-sm">+ Add experience</button>
+            </div>
+            <div id="pf-exp-list" class="repeat-list"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h2>Education</h2>
+              <button id="pf-add-edu" class="btn btn-ghost btn-sm">+ Add education</button>
+            </div>
+            <div id="pf-edu-list" class="repeat-list"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h2>Certifications</h2>
+              <button id="pf-add-cert" class="btn btn-ghost btn-sm">+ Add certification</button>
+            </div>
+            <div id="pf-cert-list" class="repeat-list"></div>
+          </div>
+
+          <div class="form-actions" style="margin-bottom:24px">
+            <button id="pf-save" class="btn btn-primary">Save Profile</button>
+            <button id="pf-download-pdf" class="btn btn-ghost">Download as PDF</button>
+            <span id="pf-save-msg" class="form-msg" style="align-self:center"></span>
           </div>
         </div>
       </section>
@@ -599,6 +732,56 @@
     </main>
   </div>
 
+  <!-- ── AI Chat Widget ── -->
+  <div id="chat-widget">
+    <div id="chat-panel" class="chat-panel hidden">
+      <div class="chat-header">
+        <div class="chat-header-left">
+          <div class="chat-avatar">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="4" y="8" width="16" height="11" rx="3"/>
+              <path d="M12 5v3"/><circle cx="12" cy="4" r="1.4" fill="#fff" stroke="none"/>
+              <circle cx="9" cy="13" r="1.3" fill="#fff" stroke="none"/>
+              <circle cx="15" cy="13" r="1.3" fill="#fff" stroke="none"/>
+              <path d="M2 12v3"/><path d="M22 12v3"/>
+            </svg>
+          </div>
+          <div>
+            <div class="chat-name">CareerBot</div>
+            <div class="chat-status">Online — AI career assistant</div>
+          </div>
+        </div>
+        <button id="chat-close-btn" class="chat-close" title="Close">✕</button>
+      </div>
+      <div id="chat-messages" class="chat-messages">
+        <div class="chat-msg bot">
+          <div class="chat-bubble">Hi! I'm <strong>CareerBot</strong>. How can I help you today?</div>
+        </div>
+        <div class="chat-msg bot">
+          <div class="chat-bubble">I can help you improve your CV, prepare for an interview, or write a cover letter.</div>
+        </div>
+      </div>
+      <div class="chat-quick" id="chat-quick">
+        <button data-msg="Improve my CV">Improve my CV</button>
+        <button data-msg="Prepare my interview">Prepare my interview</button>
+        <button data-msg="Cover letter">Cover letter</button>
+        <button data-msg="Career guidance">Career guidance</button>
+      </div>
+      <div class="chat-input-row">
+        <input id="chat-input" type="text" class="chat-field" placeholder="Type your message…" autocomplete="off" />
+        <button id="chat-send-btn" class="chat-send-btn" title="Send">Send</button>
+      </div>
+    </div>
+    <button id="chat-toggle-btn" class="chat-toggle-btn" title="CareerBot assistant">
+      Chat
+      <div class="chat-badge"></div>
+    </button>
+  </div>
+
+  <script src="jspdf.umd.min.js"></script>
+  <script src="security-skills.js"></script>
+  <script src="scorer.js"></script>
+  <script src="security-learning.js"></script>
   <script src="app.js"></script>
   <!-- ── GDPR Banner ── -->
 <div id="gdpr-banner" style="
@@ -608,7 +791,7 @@
   box-shadow:0 8px 32px rgba(0,0,0,0.12);
   display:flex; flex-direction:column; gap:14px;
   font-family:sans-serif;">
-  <div style="font-size:14px;font-weight:600;color:#1e293b;">🍪 Privacy & Cookies</div>
+  <div style="font-size:14px;font-weight:600;color:#1e293b;">Privacy & Cookies</div>
   <div style="font-size:13px;color:#64748b;line-height:1.6;">
     This app runs entirely on <strong>localhost</strong> — your data never leaves your machine.
     We only store your login token and job applications locally.
@@ -619,7 +802,7 @@
       padding:9px 18px;border-radius:8px;border:none;
       background:#2563eb;color:#fff;font-size:13px;
       font-weight:500;cursor:pointer;">
-      ✓ Accept & Continue
+      Accept & Continue
     </button>
     <button onclick="gdprReject()" style="
       padding:9px 18px;border-radius:8px;cursor:pointer;
@@ -637,7 +820,7 @@
   <div style="background:#fff;border-radius:14px;max-width:580px;width:100%;
     max-height:80vh;overflow-y:auto;padding:28px 30px;font-family:sans-serif;
     font-size:13px;line-height:1.8;color:#64748b;">
-    <h2 style="font-size:17px;color:#1e293b;margin:0 0 16px;">🔒 Privacy Policy — CyberCareer</h2>
+    <h2 style="font-size:17px;color:#1e293b;margin:0 0 16px;">Privacy Policy — CyberCareer</h2>
     <h3 style="color:#2563eb;font-size:12px;text-transform:uppercase;margin:14px 0 6px;">What is stored</h3>
     <ul>
       <li><strong>Login token</strong> — in LocalStorage, expires after 24h</li>

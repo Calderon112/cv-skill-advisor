@@ -4,6 +4,19 @@ const fs     = require('fs');
 const path   = require('path');
 const crypto = require('crypto');
 const zlib   = require('zlib');
+let pdfParse;
+
+try { pdfParse = require('pdf-parse'); } catch(_) { pdfParse = null; }
+
+// Extended security taxonomy (200+ skills) + external LLM + email modules.
+const { SECURITY_GROUPS, SECURITY_ROLES } = require('./security-skills.js');
+const llm    = require('./server/llm.js');
+const email  = require('./server/email.js');
+const agents = require('./server/agents.js');
+const { dedupeJobs } = require('./server/dedup.js');
+const Scorer = require('./scorer.js');
+const SecurityLearning = require('./security-learning.js');
+
 
 // ── Password hashing (scrypt — Node.js built-in, no npm needed) ──────────
 function hashPassword(plaintext) {
@@ -1005,6 +1018,19 @@ const roles = [
   }
 ];
 
+// Merge the extended security taxonomy (200+ skills), de-duplicating by key so
+// the base Sprint-1 skills stay first and no skill is detected twice.
+(function mergeSecurityTaxonomy() {
+  const seen = new Set(skillGroups.flatMap(g => g.skills.map(s => s.key)));
+  SECURITY_GROUPS.forEach(group => {
+    const skills = group.skills.filter(s => !seen.has(s.key));
+    skills.forEach(s => seen.add(s.key));
+    if (skills.length) skillGroups.push({ category: group.category, skills });
+  });
+  const roleNames = new Set(roles.map(r => r.name));
+  SECURITY_ROLES.forEach(r => { if (!roleNames.has(r.name)) roles.push(r); });
+})();
+
 function normalize(text) {
   return text.toLowerCase().replace(/[.,;:()\-\/]/g, ' ');
 }
@@ -1056,14 +1082,22 @@ function pullTextFromStream(streamStr, out) {
   }
 }
 
-function extractPdfText(buffer) {
-  const chunks = [];
+async function extractPdfText(buffer) {
+  // Tentative 1 : pdf-parse (gère UTF-16, CMap, PDFs modernes)
+  if (pdfParse) {
+    try {
+      const data = await pdfParse(buffer);
+      if (data.text && data.text.trim().length > 20) {
+        return data.text.trim();
+      }
+    } catch (_) {}
+  }
 
-  // Pass 1: uncompressed streams
+  // Tentative 2 : extraction manuelle BT/ET (PDFs simples)
+  const chunks = [];
   const raw = buffer.toString('binary');
   pullTextFromStream(raw, chunks);
 
-  // Pass 2: decompress FlateDecode streams with zlib
   const streamRe = /(?:FlateDecode)[^\n]*\nstream\r?\n([\s\S]*?)endstream/g;
   let m;
   while ((m = streamRe.exec(raw)) !== null) {
@@ -1071,14 +1105,14 @@ function extractPdfText(buffer) {
       const compressed   = Buffer.from(m[1], 'binary');
       const decompressed = zlib.inflateSync(compressed).toString('latin1');
       pullTextFromStream(decompressed, chunks);
-    } catch (_) { /* stream may not be deflate-compressed */ }
+    } catch (_) {}
   }
 
   if (chunks.length > 0) {
     return chunks.join(' ').replace(/\s{2,}/g, ' ').trim();
   }
 
-  // Fallback: grab printable ASCII runs (works for many simple CVs)
+  // Fallback : ASCII brut
   return buffer.toString('latin1')
     .replace(/[^\x20-\x7E\n\r\t]/g, ' ')
     .split(/\n|\r/)
@@ -1118,6 +1152,38 @@ function jobMatchesProfile(job, profileText) {
   }
 
   return normalizedProfile.split(' ').some(token => token && combinedJobText.includes(token));
+}
+
+// Matcher scoring: weighted 6-criteria score (skills/role/location/remote/
+// seniority/salary) with a transparent breakdown — see scorer.js.
+function scoreJob(job, analysis) {
+  const profile = {
+    skills: (analysis.foundSkills || []).map(s => s.key),
+    targetRoles: (analysis.roles || []).slice(0, 1).map(r => r.name),
+  };
+  const jobText = normalize([job.title, job.description, job.sector, job.board, job.company].filter(Boolean).join(' '));
+  const jobSkillKeys = findSkills(jobText).map(s => s.key);
+  const r = Scorer.scoreJob(job, profile, jobSkillKeys);
+  return { score: r.score, breakdown: r.breakdown };
+}
+
+// Dependency bundle injected into the agent layer (server/agents.js).
+function buildAgentDeps() {
+  // Resolve a skill key → { key, label, category } over the full taxonomy so
+  // gap recommendations carry a human label and a category fallback resource.
+  const skillIndex = new Map();
+  skillGroups.forEach(g => g.skills.forEach(s => {
+    if (!skillIndex.has(s.key)) skillIndex.set(s.key, { key: s.key, label: s.label, category: g.category });
+  }));
+  const lookup = key => skillIndex.get(String(key).toLowerCase()) || { key, label: key, category: '' };
+
+  return {
+    findSkills,
+    analyzeRoles,
+    allSkills: () => skillGroups.flatMap(g => g.skills),
+    scoreJob,
+    recommend: roles => SecurityLearning.recommendGaps(roles, { lookup }),
+  };
 }
 
 function filterJobs(region, sector, profileText = '') {
@@ -1236,9 +1302,161 @@ const server = http.createServer(async (req, res) => {
         const allSkills = skillGroups.flatMap(group => group.skills);
         const missingSkills = allSkills.filter(skill => !foundKeys.includes(skill.key));
         const roles = analyzeRoles(foundKeys);
-        sendJson(res, 200, { foundSkills, missingSkills, roles });
+        const recommendations = buildAgentDeps().recommend(roles);
+        sendJson(res, 200, { foundSkills, missingSkills, roles, recommendations });
       } catch (error) {
         sendJson(res, 400, { error: 'Invalid request payload' });
+      }
+    });
+    return;
+  }
+
+  // ── AI capability status (so the UI shows/hides AI buttons) ──────────────
+  if (parsedUrl.pathname === '/api/ai-status' && req.method === 'GET') {
+    sendJson(res, 200, { llm: llm.isAvailable(), provider: llm.provider(), email: email.isAvailable() });
+    return;
+  }
+
+  // ── Multi-agent architecture: registry (transparency) ────────────────────
+  if (parsedUrl.pathname === '/api/agents' && req.method === 'GET') {
+    sendJson(res, 200, { agents: agents.AGENT_REGISTRY });
+    return;
+  }
+
+  // ── Multi-agent pipeline: Scout → Matcher with status log & error isolation
+  if (parsedUrl.pathname === '/api/pipeline' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const { cvText, jobs: jobList } = JSON.parse(body || '{}');
+        const result = await agents.runPipeline({ cvText: cvText || '', jobs: jobList || [] }, buildAgentDeps());
+        sendJson(res, 200, result);
+      } catch (error) {
+        sendJson(res, 400, { error: 'Invalid request payload' });
+      }
+    });
+    return;
+  }
+
+  // ── Writer Agent: AI cover letter (Claude) with template fallback ────────
+  if (parsedUrl.pathname === '/api/generate-cover' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const { jobTitle, company, name, skills, cvText } = JSON.parse(body || '{}');
+        if (!llm.isAvailable()) { sendJson(res, 200, { ok: false, source: 'template' }); return; }
+        const system = 'You are a professional career coach. Write a concise, compelling one-page cover letter. '
+          + 'Use ONLY information provided; do not invent facts, employers or qualifications. '
+          + 'Match the language of the CV/role (German or English).';
+        const user = `Write a cover letter for this application.\n\n`
+          + `Position: ${jobTitle || '[role]'}\nCompany: ${company || '[company]'}\n`
+          + `Candidate name: ${name || '[name]'}\nKey skills to highlight: ${skills || '(infer from CV)'}\n\n`
+          + `CV / background:\n${(cvText || '').slice(0, 6000) || '(none provided)'}\n\n`
+          + `Return only the letter text (subject line, greeting, 3-4 paragraphs, sign-off).`;
+        const text = await llm.chat({ system, user, maxTokens: 1400, temperature: 0.6 });
+        sendJson(res, 200, { ok: true, source: 'ai', provider: llm.provider(), text });
+      } catch (error) {
+        sendJson(res, 200, { ok: false, source: 'template', error: String(error.message || error) });
+      }
+    });
+    return;
+  }
+
+  // ── AI learning roadmap from skill gaps (Claude) ─────────────────────────
+  if (parsedUrl.pathname === '/api/generate-roadmap' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const { missingSkills, targetRole, foundSkills } = JSON.parse(body || '{}');
+        if (!llm.isAvailable()) { sendJson(res, 200, { ok: false, source: 'template' }); return; }
+        const miss = Array.isArray(missingSkills) ? missingSkills.join(', ') : (missingSkills || '');
+        const have = Array.isArray(foundSkills) ? foundSkills.join(', ') : (foundSkills || '');
+        const system = 'You are a senior IT-Security mentor. Produce a concrete, realistic learning roadmap '
+          + 'to close skill gaps for a target role. Be specific: order skills by priority, suggest free '
+          + 'resources (TryHackMe, HackTheBox, official docs), hands-on labs, and a rough time estimate per item. '
+          + 'Keep it actionable and under ~400 words.';
+        const user = `Target role: ${targetRole || 'IT Security professional'}\n`
+          + `Skills already present: ${have || '(none detected)'}\n`
+          + `Missing skills to acquire: ${miss || '(none)'}\n\n`
+          + `Return a prioritized roadmap as a numbered list, each item: skill — why it matters — how to learn it — est. time.`;
+        const text = await llm.chat({ system, user, maxTokens: 1200, temperature: 0.5 });
+        sendJson(res, 200, { ok: true, source: 'ai', provider: llm.provider(), text });
+      } catch (error) {
+        sendJson(res, 200, { ok: false, source: 'template', error: String(error.message || error) });
+      }
+    });
+    return;
+  }
+
+  // ── Writer Agent: AI CV tailoring (Claude) with template fallback ────────
+  if (parsedUrl.pathname === '/api/generate-cv' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const { cvText, targetRole, foundSkills } = JSON.parse(body || '{}');
+        if (!llm.isAvailable()) { sendJson(res, 200, { ok: false, source: 'template' }); return; }
+        if (!cvText || !cvText.trim()) { sendJson(res, 400, { error: 'CV text is required' }); return; }
+        const skills = Array.isArray(foundSkills) ? foundSkills.join(', ') : (foundSkills || '');
+        const system = 'You are a professional CV editor. Rewrite the candidate CV into a clean, well-structured, '
+          + 'ATS-friendly CV tailored to the target role. Use ONLY information present in the source CV — '
+          + 'never invent employers, dates, degrees or skills. Keep the candidate\'s language (German or English). '
+          + 'Output plain text with clear section headers (Profile, Skills, Experience, Education, Languages).';
+        const user = `Target role: ${targetRole || '(general)'}\n`
+          + `Detected skills to emphasise: ${skills || '(infer from CV)'}\n\n`
+          + `Source CV:\n${cvText.slice(0, 8000)}\n\n`
+          + `Return only the rewritten CV as plain text.`;
+        const text = await llm.chat({ system, user, maxTokens: 2000, temperature: 0.4 });
+        sendJson(res, 200, { ok: true, source: 'ai', provider: llm.provider(), text });
+      } catch (error) {
+        sendJson(res, 200, { ok: false, source: 'template', error: String(error.message || error) });
+      }
+    });
+    return;
+  }
+
+  // ── Auto email notification: high-match jobs (Resend) ────────────────────
+  if (parsedUrl.pathname === '/api/notify-jobs' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const { to, jobs } = JSON.parse(body || '{}');
+        if (!to) { sendJson(res, 400, { error: 'Recipient email is required' }); return; }
+        if (!Array.isArray(jobs) || jobs.length === 0) { sendJson(res, 200, { ok: false, reason: 'no-jobs' }); return; }
+        if (!email.isAvailable()) { sendJson(res, 200, { ok: false, fallback: 'mailto' }); return; }
+        const lines = jobs.slice(0, 15).map((j, i) =>
+          `${i + 1}. ${j.title || 'Job'} — ${j.company || ''} (${Math.round((j.score || 0) * 100)}% match)`
+          + (j.url ? `\n   ${j.url}` : '')
+        ).join('\n\n');
+        const subject = `CyberCareer: ${jobs.length} new high-match job${jobs.length > 1 ? 's' : ''} (>=70%)`;
+        const text = `Hi,\n\nCyberCareer found ${jobs.length} job(s) matching your profile at 70% or higher:\n\n`
+          + `${lines}\n\nOpen the app to generate a tailored CV and cover letter.\n\n— CyberCareer`;
+        await email.sendEmail({ to, subject, text });
+        sendJson(res, 200, { ok: true, sent: true, count: jobs.length });
+      } catch (error) {
+        sendJson(res, 200, { ok: false, fallback: 'mailto', error: String(error.message || error) });
+      }
+    });
+    return;
+  }
+
+  // ── Email notification / send application (Resend) with mailto fallback ──
+  if (parsedUrl.pathname === '/api/send-email' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const { to, subject, text } = JSON.parse(body || '{}');
+        if (!to || !subject) { sendJson(res, 400, { error: 'Recipient and subject are required' }); return; }
+        if (!email.isAvailable()) { sendJson(res, 200, { ok: false, fallback: 'mailto' }); return; }
+        const result = await email.sendEmail({ to, subject, text: text || '' });
+        sendJson(res, 200, { ok: true, sent: true, id: result && result.id });
+      } catch (error) {
+        sendJson(res, 200, { ok: false, fallback: 'mailto', error: String(error.message || error) });
       }
     });
     return;
@@ -1306,14 +1524,8 @@ const server = http.createServer(async (req, res) => {
         Remotive:      rJobs.length
       };
 
-      const seen = new Set();
-      const all  = [...bJobs, ...aJobs, ...lJobs, ...rJobs];
-      jobs = all.filter(job => {
-        const key = `${String(job.title || '').toLowerCase().trim()}|${String(job.company || '').toLowerCase().trim()}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
+      // Fuzzy cross-source dedup: merges near-duplicates and records `also_on`.
+      jobs = dedupeJobs([...bJobs, ...aJobs, ...lJobs, ...rJobs]);
 
       source = 'all-platforms';
 
@@ -1508,12 +1720,12 @@ const server = http.createServer(async (req, res) => {
   if (parsedUrl.pathname === '/api/parse-pdf' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
-    req.on('end', () => {
+    req.on('end', async () => {
       try {
         const { pdf } = JSON.parse(body || '{}');
         if (!pdf) { sendJson(res, 400, { error: 'pdf base64 string required' }); return; }
         const buffer = Buffer.from(pdf, 'base64');
-        const text   = extractPdfText(buffer);
+        const text = await extractPdfText(buffer);
         if (!text || text.length < 10) {
           sendJson(res, 422, { error: 'No readable text found in PDF. Please paste your CV manually.' });
           return;
@@ -1563,13 +1775,8 @@ const server = http.createServer(async (req, res) => {
           Remotive:      remotiveJobs.length
         };
 
-        const seen = new Set();
-        const jobs = [...bundesJobs, ...arbeitnowJobs, ...linkedinJobs, ...remotiveJobs].filter(job => {
-          const key = `${String(job.title || '').toLowerCase().trim()}|${String(job.company || '').toLowerCase().trim()}`;
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        });
+        // Fuzzy cross-source dedup: merges near-duplicates and records `also_on`.
+        const jobs = dedupeJobs([...bundesJobs, ...arbeitnowJobs, ...linkedinJobs, ...remotiveJobs]);
 
         sendJson(res, 200, { jobs, platformBreakdown, source: 'all-platforms', total: jobs.length });
       } catch (err) {

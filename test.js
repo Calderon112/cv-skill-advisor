@@ -6,6 +6,9 @@
 
 const zlib   = require('zlib');
 const crypto = require('crypto');
+const agents = require('./server/agents.js');
+const dedup  = require('./server/dedup.js');
+const SecurityLearning = require('./security-learning.js');
 
 // ── Colour helpers ────────────────────────────────────────────────────────
 const c = {
@@ -454,24 +457,252 @@ test('score is between 0 and 1 for all roles', () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────
-// SUMMARY
-// ─────────────────────────────────────────────────────────────────────────
-
-const total = passed + failed + skipped;
-const bar   = '─'.repeat(50);
-
-console.log('\n' + c.dim(bar));
-console.log(c.bold('  Test Results'));
-console.log(c.dim(bar));
-console.log(`  ${c.green('✓ Passed')}  ${String(passed).padStart(3)}/${total}`);
-if (failed  > 0) console.log(`  ${c.red('✗ Failed')}  ${String(failed).padStart(3)}/${total}`);
-if (skipped > 0) console.log(`  ${c.yellow('⊘ Skipped')} ${String(skipped).padStart(3)}/${total}`);
-console.log(c.dim(bar));
-
-if (failed === 0) {
-  console.log(c.green(c.bold('\n  All tests passed — Sprint 1 functions verified!\n')));
-} else {
-  console.log(c.red(c.bold(`\n  ❌ ${failed} test(s) failed — please review above.\n`)));
-  process.exit(1);
+// ── 11. Multi-Agent Architecture (server/agents.js) ──────────────────────
+// Async-aware test helper for the orchestration pipeline.
+async function atest(name, fn) {
+  try {
+    await fn();
+    passed++;
+    process.stdout.write(c.green('  ✓ ') + c.dim(name) + '\n');
+  } catch (err) {
+    failed++;
+    process.stdout.write(c.red('  ✗ ') + name + '\n' + c.red('    → ') + err.message + '\n');
+  }
 }
+
+// Dependency bundle injected into the agents (mirrors server.js buildAgentDeps).
+const agentDeps = {
+  findSkills,
+  analyzeRoles,
+  allSkills: () => skillGroups.flatMap(g => g.skills),
+  scoreJob: (job, analysis) => {
+    const fk = analysis.foundSkills.map(s => s.key);
+    const text = `${job.title || ''} ${job.description || ''}`.toLowerCase();
+    const matched = fk.filter(k => text.includes(k));
+    return { score: fk.length ? matched.length / fk.length : 0, breakdown: { matched } };
+  },
+};
+
+// ── 11. Fuzzy cross-source deduplication (server/dedup.js) ───────────────
+section('Fuzzy deduplication');
+
+test('similarity: identical strings = 1', () => {
+  assertEqual(dedup.similarity('python developer', 'python developer'), 1, 'identical');
+});
+
+test('similarity: unrelated strings are low', () => {
+  assert(dedup.similarity('python developer', 'marketing manager') < 0.4, 'low similarity');
+});
+
+test('isDuplicate: merges (m/w/d) and company-form variants', () => {
+  const a = { title: 'Python Developer (m/w/d)', company: 'Acme GmbH' };
+  const b = { title: 'Python Developer', company: 'Acme AG' };
+  assert(dedup.isDuplicate(a, b).dup, 'recognised as duplicate');
+});
+
+test('isDuplicate: keeps genuinely different jobs separate', () => {
+  const a = { title: 'Python Developer', company: 'Acme' };
+  const b = { title: 'Marketing Manager', company: 'Globex' };
+  assert(!dedup.isDuplicate(a, b).dup, 'not a duplicate');
+});
+
+test('dedupeJobs: merges cross-source duplicates and records also_on', () => {
+  const jobs = [
+    { title: 'SOC Analyst (m/w/d)', company: 'SecureOps GmbH', board: 'Bundesagentur' },
+    { title: 'SOC Analyst', company: 'SecureOps AG', board: 'LinkedIn' },
+    { title: 'Penetration Tester', company: 'RedTeam', board: 'Remotive' },
+  ];
+  const out = dedup.dedupeJobs(jobs);
+  assertEqual(out.length, 2, 'two unique jobs');
+  assertIncludes(out[0].also_on, 'LinkedIn', 'duplicate source recorded');
+});
+
+test('dedupeJobs: handles empty input', () => {
+  assertEqual(dedup.dedupeJobs([]).length, 0, 'empty');
+});
+
+(async function runAgentTests() {
+  section('Multi-Agent Architecture');
+
+  test('registry exposes exactly 4 separated agents', () => {
+    const names = agents.AGENT_REGISTRY.map(a => a.name);
+    assertEqual(agents.AGENT_REGISTRY.length, 4, '4 agents');
+    ['Scout', 'Matcher', 'Writer', 'Tracker'].forEach(n => assertIncludes(names, n, `${n} present`));
+  });
+
+  test('Scout agent: CV → skills, gaps and roles', () => {
+    const out = agents.ScoutAgent.run({ cvText: 'linux python network security communication' }, null, agentDeps);
+    assert(out.foundSkills.length >= 3, 'skills detected');
+    assert(Array.isArray(out.missingSkills), 'missing skills array');
+    assert(out.roles.some(r => r.name === 'SOC Analyst'), 'role-fit computed');
+  });
+
+  test('Scout agent: enforces input contract (throws on bad input)', () => {
+    let threw = false;
+    try { agents.ScoutAgent.run({ cvText: 42 }, null, agentDeps); } catch (_) { threw = true; }
+    assert(threw, 'rejects non-string cvText');
+  });
+
+  test('Matcher agent: ranks jobs by score descending', () => {
+    const analysis = agents.ScoutAgent.run({ cvText: 'python linux' }, null, agentDeps);
+    const jobs = [
+      { id: 'a', title: 'Receptionist', description: 'front desk' },
+      { id: 'b', title: 'Python Developer', description: 'python linux backend' },
+    ];
+    const out = agents.MatcherAgent.run({ analysis, jobs }, null, agentDeps);
+    assertEqual(out.matches[0].job.id, 'b', 'best match first');
+    for (let i = 1; i < out.matches.length; i++) {
+      assert(out.matches[i - 1].score >= out.matches[i].score, 'scores descending');
+    }
+  });
+
+  test('Matcher agent: enforces contract (throws without analysis)', () => {
+    let threw = false;
+    try { agents.MatcherAgent.run({ jobs: [] }, null, agentDeps); } catch (_) { threw = true; }
+    assert(threw, 'requires Scout analysis');
+  });
+
+  test('Writer agent: degrades gracefully when no writer configured', async () => {
+    const out = await agents.WriterAgent.run({ profile: { name: 'X' }, job: {} }, null, {});
+    assertEqual(out.generated, false, 'no document but no crash');
+  });
+
+  test('Tracker agent: CRUD via injected store', () => {
+    const db = [];
+    const store = {
+      list: () => db,
+      add: (a) => { const item = { id: '1', ...a }; db.push(item); return item; },
+      update: (id, u) => Object.assign(db.find(x => x.id === id), u),
+      remove: (id) => { const i = db.findIndex(x => x.id === id); if (i >= 0) db.splice(i, 1); },
+    };
+    agents.TrackerAgent.run({ action: 'add', payload: { title: 'SOC' } }, null, { store });
+    const listed = agents.TrackerAgent.run({ action: 'list' }, null, { store });
+    assertEqual(listed.applications.length, 1, 'application added & listed');
+  });
+
+  test('Tracker agent: rejects unknown action', () => {
+    let threw = false;
+    try { agents.TrackerAgent.run({ action: 'explode' }, null, { store: {} }); } catch (_) { threw = true; }
+    assert(threw, 'unknown action throws');
+  });
+
+  await atest('Pipeline: Scout → Matcher communicate via shared context', async () => {
+    const result = await agents.runPipeline(
+      { cvText: 'python linux network security', jobs: [{ id: 'j', title: 'Python Dev', description: 'python linux' }] },
+      agentDeps
+    );
+    assert(result.analysis && result.analysis.foundSkills.length > 0, 'Scout output present');
+    assert(result.matching && result.matching.matches.length === 1, 'Matcher received jobs');
+    assert(result.agentLog.some(l => l.agent === 'Scout' && l.status === 'done'), 'status log records Scout');
+    assertEqual(result.ok, true, 'pipeline ok');
+  });
+
+  await atest('Pipeline: isolates a failing agent (no crash, error logged)', async () => {
+    const brokenDeps = { ...agentDeps, findSkills: () => { throw new Error('boom'); } };
+    const result = await agents.runPipeline({ cvText: 'x', jobs: [] }, brokenDeps);
+    assertEqual(result.analysis, null, 'failed Scout returns null');
+    assertEqual(result.matching, null, 'downstream Matcher skipped');
+    assert(result.errors.length === 1, 'error captured');
+    assertEqual(result.ok, false, 'pipeline reports failure without throwing');
+  });
+
+  // ───────────────────────────────────────────────────────────────────────
+  // Skill-Gap Recommendations (Sprint-2 feature: concrete "learn Y" advice)
+  // ───────────────────────────────────────────────────────────────────────
+  section('Skill-Gap Recommendations');
+
+  test('learningFor: maps a security skill to concrete resource', () => {
+    const rec = SecurityLearning.learningFor({ key: 'siem', label: 'SIEM', category: 'Defensive Security / Blue Team / SOC' });
+    assert(rec.key === 'siem', 'key preserved');
+    assert(rec.label === 'SIEM', 'label preserved');
+    assert(rec.how && rec.how.length > 0, 'how is non-empty');
+    assert(rec.resource && rec.resource.length > 0, 'resource is non-empty');
+    assert(rec.resource.toLowerCase().includes('splunk'), 'SIEM resource mentions Splunk');
+  });
+
+  test('learningFor: falls back to category default for unknown skill', () => {
+    const rec = SecurityLearning.learningFor({ key: 'unknown-xyz', label: 'Unknown', category: 'Network Security' });
+    assert(rec.how && rec.how.length > 0, 'how is non-empty (from category fallback)');
+    assert(rec.resource && rec.resource.length > 0, 'resource is non-empty (from category fallback)');
+  });
+
+  test('learningFor: returns DEFAULT for unknown category', () => {
+    const rec = SecurityLearning.learningFor({ key: 'xyz', label: 'Unknown', category: 'Unknown Category' });
+    assert(rec.how === 'Build hands-on experience', 'DEFAULT how');
+    assert(rec.resource.includes('TryHackMe'), 'DEFAULT resource mentions TryHackMe');
+  });
+
+  test('recommendGaps: prioritises skills by how many target roles require them', () => {
+    const roles = [
+      { name: 'SOC Analyst', score: 0.8, missing: ['siem', 'log analysis', 'incident response'] },
+      { name: 'Pentester', score: 0.6, missing: ['siem', 'metasploit', 'nmap'] },
+    ];
+    const skillMeta = key => ({ key, label: key.toUpperCase(), category: '' });
+    const recs = SecurityLearning.recommendGaps(roles, { lookup: skillMeta, topRoles: 2, limit: 8 });
+
+    assert(recs.length > 0, 'returns recommendations');
+    assert(recs[0].key === 'siem', 'siem ranked first (needed by both roles)');
+    assert(recs[0].priority === 2, 'siem has priority=2 (two roles)');
+    assert(recs[0].forRoles.length === 2, 'siem.forRoles has both role names');
+  });
+
+  test('recommendGaps: respects topRoles limit', () => {
+    const roles = [
+      { name: 'Role1', missing: ['skill1'] },
+      { name: 'Role2', missing: ['skill2'] },
+      { name: 'Role3', missing: ['skill3'] },
+    ];
+    const skillMeta = key => ({ key, label: key });
+    const recs = SecurityLearning.recommendGaps(roles, { lookup: skillMeta, topRoles: 1, limit: 8 });
+
+    assert(recs.length === 1, 'only considers top 1 role → 1 rec');
+    assert(recs[0].key === 'skill1', 'recommendation is from Role1');
+  });
+
+  test('Scout agent output includes recommendations when deps.recommend injected', async () => {
+    const mockRecommend = () => [
+      { key: 'test', label: 'Test Skill', how: 'practice', resource: 'test platform' }
+    ];
+    const deps = {
+      findSkills: () => [{ key: 'python', label: 'Python' }],
+      analyzeRoles: () => [{ name: 'Test Role', missing: ['test'] }],
+      allSkills: () => [{ key: 'python', label: 'Python' }, { key: 'test', label: 'Test Skill' }],
+      recommend: mockRecommend,
+    };
+    const result = await agents.ScoutAgent.run({ cvText: 'python test' }, {}, deps);
+    assert(Array.isArray(result.recommendations), 'recommendations is an array');
+    assert(result.recommendations.length === 1, 'recommendation included');
+    assert(result.recommendations[0].key === 'test', 'recommendation has correct key');
+  });
+
+  test('Scout agent gracefully omits recommendations if no recommender injected', async () => {
+    const deps = {
+      findSkills: () => [{ key: 'python', label: 'Python' }],
+      analyzeRoles: () => [],
+      allSkills: () => [{ key: 'python', label: 'Python' }],
+      // no recommend dep
+    };
+    const result = await agents.ScoutAgent.run({ cvText: 'python' }, {}, deps);
+    assert(Array.isArray(result.recommendations), 'recommendations is still an array (empty)');
+    assert(result.recommendations.length === 0, 'no recommendations without injected recommender');
+  });
+
+
+  const total = passed + failed + skipped;
+  const bar   = '─'.repeat(50);
+
+  console.log('\n' + c.dim(bar));
+  console.log(c.bold('  Test Results'));
+  console.log(c.dim(bar));
+  console.log(`  ${c.green('✓ Passed')}  ${String(passed).padStart(3)}/${total}`);
+  if (failed  > 0) console.log(`  ${c.red('✗ Failed')}  ${String(failed).padStart(3)}/${total}`);
+  if (skipped > 0) console.log(`  ${c.yellow('⊘ Skipped')} ${String(skipped).padStart(3)}/${total}`);
+  console.log(c.dim(bar));
+
+  if (failed === 0) {
+    console.log(c.green(c.bold('\n  All tests passed — Sprint 1 + Multi-Agent architecture verified!\n')));
+  } else {
+    console.log(c.red(c.bold(`\n   ${failed} test(s) failed — please review above.\n`)));
+    process.exit(1);
+  }
+})();
