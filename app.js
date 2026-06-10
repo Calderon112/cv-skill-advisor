@@ -795,7 +795,8 @@ async function searchJobs() {
     bundesagentur: 'Bundesagentur', arbeitnow: 'Arbeitnow',
     linkedin: 'LinkedIn', remotive: 'Remotive',
     indeed: 'Indeed', stepstone: 'StepStone',
-    'apify-indeed': 'Indeed (Apify)'
+    'apify-indeed': 'Indeed (Apify)', 'apify-stepstone': 'StepStone (Apify)',
+    jooble: 'Jooble', adzuna: 'Adzuna'
   };
 
   renderJobResults(state.jobs, platformLabels[platform] || platform);

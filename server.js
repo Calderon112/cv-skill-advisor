@@ -111,6 +111,8 @@ const BUNDES_API_KEY       = process.env.BUNDES_API_KEY  || 'jobboerse-jobsuche'
 const NEWPLAN_API_KEY      = process.env.NEWPLAN_API_KEY || '7679c728-db18-43ce-beb8-52a9d571d419';
 const APIFY_TOKEN          = process.env.APIFY_TOKEN     || '';
 const JOOBLE_API_KEY       = process.env.JOOBLE_API_KEY  || '';
+const ADZUNA_APP_ID        = process.env.ADZUNA_APP_ID   || '';
+const ADZUNA_APP_KEY       = process.env.ADZUNA_APP_KEY  || '';
 const APIFY_RUN_URL        = 'https://api.apify.com/v2/acts/santamaria-automations~stepstone-de-scraper/runs?waitForFinish=120';
 const APIFY_INDEED_RUN_URL = 'https://api.apify.com/v2/acts/automation-lab~indeed-scraper/runs?waitForFinish=120';
 const JOBS_API_URL         = 'https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v6/jobs';
@@ -271,6 +273,58 @@ async function fetchJoobleJobs(keyword, location, radius) {
   } catch (error) {
     return null;
   }
+}
+
+// ── Adzuna — free aggregator API (de/ch/us). Surfaces StepStone/Indeed-listed
+// jobs legitimately, without scraping. Needs free ADZUNA_APP_ID + ADZUNA_APP_KEY.
+async function fetchAdzunaJobs(keyword, location, region) {
+  if (!ADZUNA_APP_ID || !ADZUNA_APP_KEY) {
+    return { run: { note: 'Adzuna credentials not configured.' }, items: [] };
+  }
+  const country = buildSearchCountry(region || 'germany'); // de / ch / us
+  const params = new URLSearchParams({
+    app_id: ADZUNA_APP_ID,
+    app_key: ADZUNA_APP_KEY,
+    results_per_page: '50',
+    'content-type': 'application/json'
+  });
+  if (keyword)  params.set('what', keyword);
+  if (location) params.set('where', location);
+
+  try {
+    const response = await fetch(`https://api.adzuna.com/v1/api/jobs/${country}/search/1?${params}`, {
+      signal: AbortSignal.timeout(15000)
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    const items = Array.isArray(data?.results) ? data.results.map(normalizeAdzunaJobFields) : [];
+    return { run: data, items };
+  } catch (_) {
+    return null;
+  }
+}
+
+function normalizeAdzunaJobFields(job) {
+  const salary = (job.salary_min || job.salary_max)
+    ? `${job.salary_min || ''}–${job.salary_max || ''}`.replace(/^–|–$/g, '')
+    : null;
+  return {
+    platform: 'Adzuna',
+    source: 'adzuna',
+    title: job.title || 'Job offer',
+    company: job.company?.display_name || 'Unknown employer',
+    location: job.location?.display_name
+      || (Array.isArray(job.location?.area) ? job.location.area.join(', ') : '')
+      || 'Unspecified',
+    sector: job.category?.label || 'security',
+    board: 'Adzuna',
+    description: stripHtml(job.description || '').slice(0, 400),
+    reference: job.id || null,
+    publishedDate: job.created ? String(job.created).slice(0, 10) : null,
+    jobUrl: job.redirect_url || null,
+    salary,
+    raw: job
+  };
 }
 
 function normalizeJobUrl(job) {
@@ -845,6 +899,29 @@ function buildSearchCountry(region) {
   if (region === 'switzerland') return 'ch';
   if (region === 'usa') return 'us';
   return 'de';
+}
+
+// Assemble the source list for an "all platforms" search. The 4 free sources
+// always run; Adzuna and the Apify scrapers (StepStone/Indeed) are added only
+// when their key/token is configured — so an unconfigured key never produces a
+// wasted request or a misleading empty entry in the breakdown.
+function buildAllPlatformSources({ searchParams, keyword, location, region, distance }) {
+  const loc = location
+    || (region === 'switzerland' ? 'Switzerland' : region === 'usa' ? 'United States' : 'Germany');
+  const sources = [
+    { key: 'Bundesagentur', run: () => fetchBundesJobs(searchParams),     pick: r => r?.jobs || [] },
+    { key: 'Arbeitnow',     run: () => fetchArbeitnowJobs(keyword),        pick: r => r || [] },
+    { key: 'LinkedIn',      run: () => fetchLinkedInJobs(keyword, loc),    pick: r => r || [] },
+    { key: 'Remotive',      run: () => fetchRemotiveJobs(keyword),         pick: r => r || [] },
+  ];
+  if (ADZUNA_APP_ID && ADZUNA_APP_KEY) {
+    sources.push({ key: 'Adzuna', run: () => fetchAdzunaJobs(keyword, loc, region), pick: r => r?.items || [] });
+  }
+  if (APIFY_TOKEN) {
+    sources.push({ key: 'StepStone', run: () => fetchApifyJobs(keyword, loc, distance),                              pick: r => r?.items || [] });
+    sources.push({ key: 'Indeed',    run: () => fetchIndeedJobs(keyword, loc, buildSearchCountry(region), distance), pick: r => r?.items || [] });
+  }
+  return sources;
 }
 
 async function fetchBundesJobs(searchParams) {
@@ -1504,29 +1581,24 @@ const server = http.createServer(async (req, res) => {
     let platformBreakdown = {};
 
     if (platform === 'all') {
-      // Run all platforms in parallel — aggregate and deduplicate
-      const [bundesRes2, arbRes, liRes, remRes] = await Promise.allSettled([
-        fetchBundesJobs(parsedUrl.searchParams),
-        fetchArbeitnowJobs(keyword),
-        fetchLinkedInJobs(keyword, location || 'Germany'),
-        fetchRemotiveJobs(keyword)
-      ]);
+      // Run every configured source in parallel, then cross-source dedup.
+      // Free sources always run; key/token-gated ones only when configured.
+      const sources = buildAllPlatformSources({
+        searchParams: parsedUrl.searchParams,
+        keyword, location, region, distance
+      });
+      const settled = await Promise.allSettled(sources.map(s => s.run()));
 
-      const bJobs = bundesRes2.status === 'fulfilled' ? (bundesRes2.value?.jobs || []) : [];
-      const aJobs = arbRes.status     === 'fulfilled' ? (arbRes.value           || []) : [];
-      const lJobs = liRes.status      === 'fulfilled' ? (liRes.value            || []) : [];
-      const rJobs = remRes.status     === 'fulfilled' ? (remRes.value           || []) : [];
-
-      platformBreakdown = {
-        Bundesagentur: bJobs.length,
-        Arbeitnow:     aJobs.length,
-        LinkedIn:      lJobs.length,
-        Remotive:      rJobs.length
-      };
+      platformBreakdown = {};
+      let merged = [];
+      settled.forEach((s, i) => {
+        const items = s.status === 'fulfilled' ? sources[i].pick(s.value) : [];
+        platformBreakdown[sources[i].key] = items.length;
+        merged = merged.concat(items);
+      });
 
       // Fuzzy cross-source dedup: merges near-duplicates and records `also_on`.
-      jobs = dedupeJobs([...bJobs, ...aJobs, ...lJobs, ...rJobs]);
-
+      jobs = dedupeJobs(merged);
       source = 'all-platforms';
 
     } else if (platform === 'bundesagentur') {
@@ -1561,10 +1633,22 @@ const server = http.createServer(async (req, res) => {
       }
       source = 'apify-indeed';
 
+    } else if (platform === 'apify-stepstone') {
+      if (APIFY_TOKEN) {
+        const result = await fetchApifyJobs(keyword, location || 'Deutschland', distance);
+        jobs   = result?.items || [];
+      }
+      source = 'apify-stepstone';
+
     } else if (platform === 'jooble') {
       const result = await fetchJoobleJobs(keyword, location || 'Germany', distance);
       jobs   = result?.items || [];
       source = 'jooble';
+
+    } else if (platform === 'adzuna') {
+      const result = await fetchAdzunaJobs(keyword, location || 'Germany', region);
+      jobs   = result?.items || [];
+      source = 'adzuna';
     }
 
     // Fallback to static data ONLY when no platform is specifically chosen
@@ -1748,35 +1832,33 @@ const server = http.createServer(async (req, res) => {
       try {
         const { keyword, location, region, sector, distance } = JSON.parse(body || '{}');
         const searchLocation = location || (region === 'germany' ? 'Germany' : region === 'switzerland' ? 'Switzerland' : 'United States');
-        const country        = buildSearchCountry(region || 'germany');
         const searchDist     = distance || 'all';
 
         // Build searchParams for Bundesagentur helper (includes keyword + location)
         const sp = new URLSearchParams({ region: region || 'germany', sector: sector || 'all', keyword: keyword || '', location: searchLocation });
         const searchKeyword  = buildSearchKeyword(sp);
 
-        // 4 working free sources (Indeed/StepStone block server-side requests)
-        const [bundesRes, arbeitnowRes, linkedinRes, remotiveRes] = await Promise.allSettled([
-          fetchBundesJobs(sp),
-          fetchArbeitnowJobs(searchKeyword),
-          fetchLinkedInJobs(searchKeyword, searchLocation),
-          fetchRemotiveJobs(searchKeyword)
-        ]);
+        // Free sources always run; Adzuna + Apify (StepStone/Indeed) are added
+        // only when their key/token is configured (see buildAllPlatformSources).
+        const sources = buildAllPlatformSources({
+          searchParams: sp,
+          keyword: searchKeyword,
+          location: searchLocation,
+          region: region || 'germany',
+          distance: searchDist
+        });
+        const settled = await Promise.allSettled(sources.map(s => s.run()));
 
-        const bundesJobs    = bundesRes.status    === 'fulfilled' ? (bundesRes.value?.jobs || []) : [];
-        const arbeitnowJobs = arbeitnowRes.status === 'fulfilled' ? (arbeitnowRes.value   || []) : [];
-        const linkedinJobs  = linkedinRes.status  === 'fulfilled' ? (linkedinRes.value    || []) : [];
-        const remotiveJobs  = remotiveRes.status  === 'fulfilled' ? (remotiveRes.value    || []) : [];
-
-        const platformBreakdown = {
-          Bundesagentur: bundesJobs.length,
-          Arbeitnow:     arbeitnowJobs.length,
-          LinkedIn:      linkedinJobs.length,
-          Remotive:      remotiveJobs.length
-        };
+        const platformBreakdown = {};
+        let merged = [];
+        settled.forEach((s, i) => {
+          const items = s.status === 'fulfilled' ? sources[i].pick(s.value) : [];
+          platformBreakdown[sources[i].key] = items.length;
+          merged = merged.concat(items);
+        });
 
         // Fuzzy cross-source dedup: merges near-duplicates and records `also_on`.
-        const jobs = dedupeJobs([...bundesJobs, ...arbeitnowJobs, ...linkedinJobs, ...remotiveJobs]);
+        const jobs = dedupeJobs(merged);
 
         sendJson(res, 200, { jobs, platformBreakdown, source: 'all-platforms', total: jobs.length });
       } catch (err) {

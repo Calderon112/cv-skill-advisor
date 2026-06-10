@@ -28,7 +28,7 @@ Implementation: [`server/agents.js`](server/agents.js). Orchestrated by the
 
 | # | Agent | Responsibility | Input contract | Output contract |
 |---|-------|----------------|----------------|-----------------|
-| 01 | **Scout** | CV → skills, gaps, role-fit | `{ cvText: string }` | `{ foundSkills, foundKeys, missingSkills, roles }` |
+| 01 | **Scout** | CV → skills, gaps, role-fit, learning recs | `{ cvText: string }` | `{ foundSkills, foundKeys, missingSkills, roles, recommendations }` |
 | 02 | **Matcher** | Rank jobs against the analysis | `{ analysis, jobs[] }` | `{ matches:[{job,score,breakdown}], highCount }` |
 | 03 | **Writer** | Tailored cover letter / CV | `{ profile, job, kind }` | `{ generated, kind, text }` |
 | 04 | **Tracker** | Application lifecycle | `{ action, payload }` | `{ applications }` / `{ application }` / `{ removed }` |
