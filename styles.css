@@ -1990,3 +1990,44 @@ ol.iv-list { list-style: decimal; }
 ul.iv-list { list-style: disc; }
 
 /* Form message OK state already defined; reuse */
+
+/* ── Kanban drag & drop ─────────────────────────────────────────────────── */
+.app-card { cursor: grab; }
+.app-card:active { cursor: grabbing; }
+.app-card.dragging { opacity: 0.45; }
+.kanban-cards.drag-over {
+  outline: 2px dashed var(--cyan);
+  outline-offset: -4px;
+  background: var(--cyan-dim);
+  border-radius: 8px;
+}
+.kanban-cards { min-height: 70px; }
+
+/* ── Job Workspace modal ─────────────────────────────────────────────────── */
+.jw-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.62); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 20px; }
+.jw-overlay.hidden { display: none; }
+.jw-modal { background: #17132b; border: 1px solid var(--border); border-radius: var(--radius); max-width: 660px; width: 100%; max-height: 88vh; overflow-y: auto; padding: 26px; position: relative; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+.jw-modal h2 { margin: 0 30px 2px 0; font-size: 19px; }
+.jw-close { position: absolute; top: 14px; right: 16px; background: none; border: none; color: var(--text-muted); font-size: 18px; cursor: pointer; }
+.jw-close:hover { color: var(--text); }
+.jw-company { color: var(--text-muted); margin-bottom: 18px; font-size: 13px; }
+.jw-match { margin-bottom: 18px; }
+.jw-match-score { font-size: 30px; font-weight: 700; }
+.jw-bar { height: 8px; border-radius: 5px; background: var(--bg-hover); overflow: hidden; margin: 8px 0; }
+.jw-bar > div { height: 100%; border-radius: 5px; }
+.jw-section { margin-bottom: 20px; }
+.jw-section h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); margin-bottom: 10px; }
+.jw-gap { display: inline-block; padding: 3px 9px; margin: 0 6px 6px 0; border: 1px solid var(--orange-dim); background: var(--orange-dim); color: var(--orange); border-radius: 20px; font-size: 12px; }
+.jw-oracle-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.jw-orb { font-size: 30px; filter: drop-shadow(0 0 8px rgba(168,85,247,.6)); }
+.jw-oracle-item { padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: 8px; font-size: 13px; line-height: 1.5; }
+.jw-oracle-item strong { color: var(--cyan); }
+.jw-oracle-item a { margin-right: 12px; }
+.jw-yt { color: #ff5d5d; }
+.jw-actions { display: flex; gap: 10px; margin: 18px 0 12px; flex-wrap: wrap; }
+
+/* ── Oracle "thinking" animation (during AI consultation) ─────────────────── */
+.jw-thinking { display:inline-flex; animation: jwPulse 1.15s ease-in-out infinite; }
+@keyframes jwPulse { 0%,100% { opacity:.5; transform:scale(.94); } 50% { opacity:1; transform:scale(1.06); } }
+.jw-dots::after { content:''; display:inline-block; width:1.2em; text-align:left; animation: jwDots 1.4s steps(1,end) infinite; }
+@keyframes jwDots { 0%{content:'';} 25%{content:'.';} 50%{content:'..';} 75%{content:'...';} }

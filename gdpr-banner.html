@@ -161,7 +161,23 @@
       <li><strong>Remotive</strong> (remotive.com) — Remote-Jobs, öffentliche API</li>
     </ul>
     <p>Bei diesen Aufrufen wird Ihre IP-Adresse an die jeweiligen Server übermittelt (technisch unvermeidlich).
-    Die Datenschutzerklärungen der jeweiligen Anbieter gelten entsprechend.</p>
+    Die Datenschutzerklärungen der jeweiligen Anbieter gelten entsprechend. Je nach Konfiguration können weitere
+    Job-Quellen abgefragt werden (Adzuna, Jooble, LinkedIn — jeweils mit den genannten Übermittlungen).</p>
+
+    <h3>4b. KI-Verarbeitung (Lebenslauf-Analyse, Anschreiben, Lernempfehlungen)</h3>
+    <p>Wenn ein KI-Schlüssel in <code>.env</code> hinterlegt ist, wird der <strong>Text Ihres Lebenslaufs</strong>
+    und ggf. die <strong>Stellenbeschreibung</strong> zur Verarbeitung an den ausgewählten KI-Anbieter übermittelt:</p>
+    <ul>
+      <li><strong>Google Gemini</strong> (generativelanguage.googleapis.com) — Standard in dieser Version</li>
+      <li><strong>OpenRouter</strong> (openrouter.ai) — automatischer Fallback</li>
+      <li><strong>Anthropic Claude</strong> / <strong>OpenAI</strong> — optional</li>
+    </ul>
+    <p><strong>Wichtig:</strong> Bei kostenlosen Tarifen (insbesondere dem Google-Gemini-Free-Tier) können die
+    übermittelten Inhalte vom Anbieter zur Verbesserung seiner Modelle verwendet werden. Übermitteln Sie daher
+    keine besonders sensiblen Daten. <strong>Ohne KI-Schlüssel arbeitet die App vollständig lokal</strong>
+    (Vorlagen + regelbasierte Analyse); es werden dann keine Lebenslaufdaten an Dritte gesendet.</p>
+    <p>Bei aktivierter E-Mail-Benachrichtigung (<code>RESEND_API_KEY</code>) werden Ihre Empfänger-Adresse und die
+    Job-Treffer zum Versand an <strong>Resend</strong> (resend.com) übermittelt.</p>
 
     <h3>5. Passwort-Sicherheit</h3>
     <p>Passwörter werden mit <strong>scrypt</strong> (Node.js built-in) gehasht und gesaltet gespeichert.
@@ -187,7 +203,7 @@
     (Vertragserfüllung / berechtigtes Interesse) sowie Ihrer Einwilligung (Art. 6 Abs. 1 lit. a DSGVO).</p>
 
     <p style="color:#64748b;font-size:12px;margin-top:16px;">
-      Stand: Mai 2025 — Diese Erklärung gilt für die lokale Entwicklungsversion (Sprint 1).
+      Stand: Juni 2026 — Diese Erklärung gilt für die lokale Entwicklungsversion (Sprint 2, inkl. KI-Verarbeitung).
     </p>
 
     <button class="privacy-close" onclick="closePrivacyModal()">Schließen</button>

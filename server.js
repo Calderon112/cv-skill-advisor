@@ -33,10 +33,6 @@ function verifyPassword(plaintext, stored) {
   return actual === expected;
 }
 
-// Dev-only: Windows blocks external HTTPS due to SSL revocation check.
-// This disables TLS cert verification globally for the Node.js process.
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-
 const envPath = path.join(__dirname, '.env');
 if (fs.existsSync(envPath)) {
   const envContent = fs.readFileSync(envPath, 'utf8');
@@ -50,6 +46,16 @@ if (fs.existsSync(envPath)) {
       }
     }
   });
+}
+
+// TLS certificate verification is ON by default (secure for production).
+// Some local Windows/dev setups behind a TLS-intercepting proxy or with strict
+// SSL revocation checks cannot validate external certs. ONLY in that case, set
+// ALLOW_INSECURE_TLS=1 in your .env to disable verification. Never do this in
+// production: it exposes outbound API calls (incl. your API keys) to MITM.
+if (process.env.ALLOW_INSECURE_TLS === '1') {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+  console.warn('⚠️  ALLOW_INSECURE_TLS=1 — TLS certificate verification is DISABLED. Local dev only, never production.');
 }
 
 const PORT = process.env.PORT || 3000;
@@ -242,35 +248,30 @@ async function fetchJoobleJobs(keyword, location, radius) {
     return { run: { note: 'Jooble API key not configured.' }, items: [] };
   }
 
-  const payload = {
-    keywords: keyword,
-    location,
-    radius: radius === 'all' ? undefined : radius,
-    page: 1
-  };
+  const headers = { 'Content-Type': 'application/json' };
+  const url = `https://jooble.org/api/${encodeURIComponent(JOOBLE_API_KEY)}`;
 
-  const headers = {
-    'Content-Type': 'application/json'
+  // Jooble returns ~20 jobs per page, so fetch the first 5 pages in parallel.
+  const fetchPage = async (page) => {
+    try {
+      const r = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ keywords: keyword, location, radius: radius === 'all' ? undefined : radius, page })
+      });
+      if (!r.ok) return [];
+      const data = await r.json();
+      return Array.isArray(data?.jobs || data?.results) ? (data.jobs || data.results) : [];
+    } catch (_) {
+      return [];
+    }
   };
 
   try {
-    const response = await fetch(`https://jooble.org/api/${encodeURIComponent(JOOBLE_API_KEY)}`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-      return null;
-    }
-
-    const data = await response.json();
-    const items = data?.jobs || data?.results || [];
-    return {
-      run: data,
-      items: Array.isArray(items) ? items.map(normalizeJoobleJobFields) : []
-    };
-  } catch (error) {
+    const pages = await Promise.all([1, 2, 3, 4, 5].map(fetchPage));
+    const items = pages.flat().map(normalizeJoobleJobFields);
+    return { run: { pages: pages.length }, items };
+  } catch (_) {
     return null;
   }
 }
@@ -292,13 +293,15 @@ async function fetchAdzunaJobs(keyword, location, region) {
   if (location) params.set('where', location);
 
   try {
-    const response = await fetch(`https://api.adzuna.com/v1/api/jobs/${country}/search/1?${params}`, {
-      signal: AbortSignal.timeout(15000)
-    });
-    if (!response.ok) return null;
-    const data = await response.json();
-    const items = Array.isArray(data?.results) ? data.results.map(normalizeAdzunaJobFields) : [];
-    return { run: data, items };
+    // Adzuna caps results_per_page at 50, so fetch the first 5 pages in
+    // parallel (up to 250 offers) instead of just page 1.
+    const pages = await Promise.all([1, 2, 3, 4, 5].map(p =>
+      fetch(`https://api.adzuna.com/v1/api/jobs/${country}/search/${p}?${params}`, { signal: AbortSignal.timeout(15000) })
+        .then(r => r.ok ? r.json() : { results: [] })
+        .catch(() => ({ results: [] }))
+    ));
+    const items = pages.flatMap(d => Array.isArray(d?.results) ? d.results.map(normalizeAdzunaJobFields) : []);
+    return { run: pages[0], items };
   } catch (_) {
     return null;
   }
@@ -349,8 +352,8 @@ function matchesKeyword(tokens, ...fields) {
 // ── Arbeitnow — free public API (no key, Germany-focused jobs) ───────────
 async function fetchArbeitnowJobs(keyword) {
   try {
-    // Fetch pages 1-3 to increase coverage (100 jobs per page)
-    const pages = await Promise.all([1, 2, 3].map(p =>
+    // Fetch pages 1-5 to increase coverage (100 jobs per page)
+    const pages = await Promise.all([1, 2, 3, 4, 5].map(p =>
       fetch(`${ARBEITNOW_URL}?page=${p}`, { headers: browserHeaders('https://www.arbeitnow.com', true) })
         .then(r => r.ok ? r.json() : { data: [] })
         .catch(() => ({ data: [] }))
@@ -385,7 +388,7 @@ async function fetchArbeitnowJobs(keyword) {
 // ── Remotive — free public API (remote jobs worldwide) ───────────────────
 async function fetchRemotiveJobs(keyword) {
   try {
-    const url = `${REMOTIVE_URL}?search=${encodeURIComponent(keyword || '')}&limit=30`;
+    const url = `${REMOTIVE_URL}?search=${encodeURIComponent(keyword || '')}&limit=200`;
     const r   = await fetch(url, { headers: browserHeaders('https://remotive.com', true) });
     if (!r.ok) return [];
     const data = await r.json();
@@ -671,6 +674,32 @@ async function geocodeLocation(location) {
   }
 }
 
+// Reverse geocoding (coordinates → city name) for the "Use my location" button,
+// so the search field gets a usable city instead of raw lat/lon.
+async function reverseGeocode(lat, lon) {
+  try {
+    const url = `https://nominatim.openstreetmap.org/reverse?format=json&zoom=10&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`;
+    const r = await fetch(url, { headers: { 'User-Agent': 'cv-skill-advisor-demo/1.0' } });
+    if (!r.ok) return null;
+    const data = await r.json();
+    const a = data.address || {};
+    return a.city || a.town || a.village || a.municipality || a.county || a.state || data.name || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Robustly pull the first JSON object out of an LLM reply (tolerates ```json
+// fences and surrounding prose).
+function parseJsonObject(raw) {
+  if (!raw) return null;
+  let s = String(raw).trim().replace(/^```(?:json)?/i, '').replace(/```\s*$/i, '').trim();
+  const start = s.indexOf('{');
+  const end = s.lastIndexOf('}');
+  if (start === -1 || end === -1 || end < start) return null;
+  try { return JSON.parse(s.slice(start, end + 1)); } catch (_) { return null; }
+}
+
 function haversineKm(a, b) {
   if (!a || !b) return null;
   const toRad = value => (value * Math.PI) / 180;
@@ -788,7 +817,10 @@ function extractBundesJobFields(job, searchParams) {
     description:   job.hauptberuf?.bezeichnungNeutral || job.beruf || job.alleBerufe?.[0]?.bezeichnungNeutral || 'Weitere Infos auf der Jobseite.',
     reference:     job.referenznummer || job.chiffrenummer || null,
     publishedDate: job.datumErsteVeroeffentlichung || job.aenderungsdatum || null,
-    jobUrl:        job.externeURL || job.externeUrl || null,
+    // Use the employer's external link if present, else build the public
+    // Bundesagentur detail page from the reference number so every job has a URL.
+    jobUrl:        job.externeURL || job.externeUrl ||
+                   (job.referenznummer ? `https://www.arbeitsagentur.de/jobsuche/jobdetail/${encodeURIComponent(job.referenznummer)}` : null),
     raw:           job
   };
 }
@@ -854,7 +886,7 @@ function buildBundesQueryParams(searchParams) {
 
   params.set('angebotsart',        '1');
   params.set('page',               '1');
-  params.set('size',               '25');
+  params.set('size',               '200');
   params.set('pav',                'false');
   params.set('veroeffentlichtseit','30');
 
@@ -895,6 +927,30 @@ function buildSearchKeyword(searchParams) {
   return DOMAIN_KEYWORDS[sector] || '';
 }
 
+// Relevance terms per domain — used to FILTER scraped results so a chosen
+// domain (e.g. Cybersecurity) only keeps on-topic jobs. Matched against the
+// job title + description (not just the title), which makes it far stricter
+// than the keyword-token pre-filter the scrapers apply.
+const DOMAIN_MATCH_TERMS = {
+  cybersecurity: ['security','cyber','soc ','siem','pentest','penetration','infosec','ciso','iso 27001','iso27001','threat','incident','vulnerab','firewall','malware','forensic','sicherheit','informationssicherheit','it-security','blue team','red team','grc','nist','mitre','ethical hack'],
+  software:      ['developer','software','programmer','engineer','backend','frontend','full stack','fullstack','entwickler','java','python','javascript','typescript','react','node','.net','golang'],
+  data:          ['data analyst','data scientist','data engineer','analytics','business intelligence','power bi','sql','machine learning','datenanalyst','data warehouse','etl'],
+  devops:        ['devops','sre','site reliability','kubernetes','docker','cloud engineer','aws','azure','terraform','ci/cd','platform engineer','gcp'],
+  ai:            ['machine learning','deep learning','ai engineer','ml engineer','data scientist','nlp','computer vision','künstliche intelligenz','llm','tensorflow','pytorch'],
+  network:       ['network','netzwerk','infrastructure','infrastruktur','cisco','administrator','systemadministrator','it administrator','lan','wan','routing'],
+  'it-support':  ['it support','helpdesk','help desk','service desk','system administrator','systemadministrator','1st level','2nd level','support technician','it-support','anwendersupport'],
+};
+
+// Keep a job only if it is on-topic for the selected domain. `all` keeps
+// everything; unknown sectors fall back to the domain search keywords.
+function jobMatchesSector(job, sector) {
+  if (!sector || sector === 'all') return true;
+  const terms = DOMAIN_MATCH_TERMS[sector] || kwTokens(DOMAIN_KEYWORDS[sector] || '');
+  if (!terms.length) return true;
+  const hay = `${job.title || ''} ${job.description || ''} ${job.sector || ''} ${job.board || ''}`.toLowerCase();
+  return terms.some(t => hay.includes(t));
+}
+
 function buildSearchCountry(region) {
   if (region === 'switzerland') return 'ch';
   if (region === 'usa') return 'us';
@@ -905,6 +961,26 @@ function buildSearchCountry(region) {
 // always run; Adzuna and the Apify scrapers (StepStone/Indeed) are added only
 // when their key/token is configured — so an unconfigured key never produces a
 // wasted request or a misleading empty entry in the breakdown.
+// Terminal logging for job searches — shows, in real time, which platforms are
+// queried, when a scrape is launched, and how many jobs each source returns.
+function logScrape(...args) {
+  const t = new Date().toTimeString().slice(0, 8);
+  console.log(`[scrape ${t}]`, ...args);
+}
+
+// Run sources in parallel, logging each one the moment it finishes (success or
+// failure), then return the settled results in the same order.
+function runSourcesWithLogging(sources) {
+  return Promise.allSettled(sources.map(s =>
+    Promise.resolve()
+      .then(() => s.run())
+      .then(
+        v => { logScrape(`   ✓ ${s.key}: ${s.pick(v).length} offers`); return v; },
+        e => { logScrape(`   ✗ ${s.key}: ${e && e.message ? e.message : e}`); throw e; }
+      )
+  ));
+}
+
 function buildAllPlatformSources({ searchParams, keyword, location, region, distance }) {
   const loc = location
     || (region === 'switzerland' ? 'Switzerland' : region === 'usa' ? 'United States' : 'Germany');
@@ -1305,7 +1381,12 @@ function serveStaticFile(req, res) {
       '.json': 'application/json'
     };
 
-    res.writeHead(200, { 'Content-Type': map[ext] || 'application/octet-stream' });
+    // No caching for the frontend so users always run the latest code (avoids
+    // "fixed but still broken" reports caused by a stale cached app.js).
+    res.writeHead(200, {
+      'Content-Type': map[ext] || 'application/octet-stream',
+      'Cache-Control': 'no-store, max-age=0'
+    });
     res.end(data);
   });
 }
@@ -1319,6 +1400,16 @@ const server = http.createServer(async (req, res) => {
 
   if (parsedUrl.pathname === '/api/status' && req.method === 'GET') {
     sendJson(res, 200, { status: 'ok', backend: 'local', auth: 'optional' });
+    return;
+  }
+
+  // Reverse geocode (lat/lon → city) for the "Use my location" button.
+  if (parsedUrl.pathname === '/api/reverse-geocode' && req.method === 'GET') {
+    const lat = parsedUrl.searchParams.get('lat');
+    const lon = parsedUrl.searchParams.get('lon');
+    if (!lat || !lon) { sendJson(res, 400, { error: 'lat and lon required' }); return; }
+    const city = await reverseGeocode(lat, lon);
+    sendJson(res, 200, { city: city || '' });
     return;
   }
 
@@ -1388,6 +1479,75 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ── AI CV extraction (Writer/Scout assist): CV text → structured profile ──
+  if (parsedUrl.pathname === '/api/extract-profile' && req.method === 'POST') {
+    if (!llm.isAvailable()) { sendJson(res, 200, { ok: false, reason: 'llm-not-configured' }); return; }
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const { text } = JSON.parse(body || '{}');
+        if (!text || text.trim().length < 20) { sendJson(res, 400, { ok: false, error: 'cv text required' }); return; }
+        const schema = '{\n'
+          + '  "firstName": "", "lastName": "", "email": "", "phone": "",\n'
+          + '  "location": "", "nationality": "", "languages": "",\n'
+          + '  "title": "", "summary": "",\n'
+          + '  "experience": [ { "role": "", "org": "", "location": "", "start": "", "end": "", "desc": "" } ],\n'
+          + '  "education": [ { "degree": "", "org": "", "location": "", "start": "", "end": "" } ],\n'
+          + '  "certifications": [ { "name": "", "year": "" } ]\n'
+          + '}';
+        const system = 'You are a precise CV parser. Extract the candidate\'s details into a single JSON object matching the given schema exactly. '
+          + 'Respond with ONLY the JSON object — no markdown fences, no commentary. Use "" for any missing string and [] for any missing list. '
+          + 'Keep dates exactly as written in the CV. Never invent information that is not present.';
+        const user = `Extract this CV into the exact JSON schema below.\n\nSchema:\n${schema}\n\nCV:\n"""\n${text.slice(0, 12000)}\n"""`;
+        const raw = await llm.chat({ system, user, maxTokens: 2000, temperature: 0 });
+        const profile = parseJsonObject(raw);
+        if (!profile) { sendJson(res, 200, { ok: false, reason: 'parse-failed' }); return; }
+        sendJson(res, 200, { ok: true, profile, provider: llm.provider() });
+      } catch (e) {
+        sendJson(res, 200, { ok: false, reason: 'error', detail: e.message });
+      }
+    });
+    return;
+  }
+
+  // ── AI job consultation (Oracle): read the posting, compare to the profile ──
+  if (parsedUrl.pathname === '/api/job-consult' && req.method === 'POST') {
+    if (!llm.isAvailable()) { sendJson(res, 200, { ok: false, reason: 'llm-not-configured' }); return; }
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const { jobTitle, company, jobDescription, profileText } = JSON.parse(body || '{}');
+        const schema = '{\n'
+          + '  "matchPercent": 0,            // realistic 0-100 fit of the candidate for THIS job\n'
+          + '  "matchSummary": "",           // 2-3 sentences: what the job needs vs what the candidate offers\n'
+          + '  "strengths": [],              // candidate strengths (from the profile) relevant to this job\n'
+          + '  "missing": [],                // concrete skills/requirements the candidate must acquire to reach 100%\n'
+          + '  "certifications": [],         // certifications worth pursuing for this job\n'
+          + '  "advice": ""                  // a short, actionable recommendation (2-3 sentences)\n'
+          + '}';
+        const system = 'You are a senior IT-Security career consultant. Compare a JOB POSTING against a CANDIDATE profile '
+          + 'and produce an honest, specific consultation. Infer the job\'s real requirements from its title AND description '
+          + '(even if the description is brief — use your knowledge of what such a role typically requires). '
+          + 'Respond with ONLY a JSON object matching the schema — no markdown fences, no commentary. '
+          + 'Be concrete (name actual skills, tools and certifications). ALWAYS write every field in ENGLISH, '
+          + 'even if the job posting is in German.';
+        const user = `Schema:\n${schema}\n\nJOB: ${jobTitle || '(unknown)'} — ${company || ''}\n\n`
+          + `JOB DESCRIPTION:\n${(jobDescription || '(brief — infer typical requirements from the title)').slice(0, 4000)}\n\n`
+          + `CANDIDATE PROFILE:\n${(profileText || '(no profile provided)').slice(0, 6000)}\n\n`
+          + `Return the JSON consultation.`;
+        const raw = await llm.chat({ system, user, maxTokens: 4000, temperature: 0.4 });
+        const consult = parseJsonObject(raw);
+        if (!consult) { sendJson(res, 200, { ok: false, reason: 'parse-failed' }); return; }
+        sendJson(res, 200, { ok: true, consult, provider: llm.provider() });
+      } catch (e) {
+        sendJson(res, 200, { ok: false, reason: 'error', detail: e.message });
+      }
+    });
+    return;
+  }
+
   // ── AI capability status (so the UI shows/hides AI buttons) ──────────────
   if (parsedUrl.pathname === '/api/ai-status' && req.method === 'GET') {
     sendJson(res, 200, { llm: llm.isAvailable(), provider: llm.provider(), email: email.isAvailable() });
@@ -1422,17 +1582,21 @@ const server = http.createServer(async (req, res) => {
     req.on('data', chunk => { body += chunk; });
     req.on('end', async () => {
       try {
-        const { jobTitle, company, name, skills, cvText } = JSON.parse(body || '{}');
+        const { jobTitle, company, name, skills, cvText, jobDescription } = JSON.parse(body || '{}');
         if (!llm.isAvailable()) { sendJson(res, 200, { ok: false, source: 'template' }); return; }
         const system = 'You are a professional career coach. Write a concise, compelling one-page cover letter. '
-          + 'Use ONLY information provided; do not invent facts, employers or qualifications. '
-          + 'Match the language of the CV/role (German or English).';
+          + 'Ground it in the candidate\'s real experience from the CV, and explicitly address how they meet the '
+          + 'specific requirements in the job posting. Use ONLY information provided; do not invent facts, '
+          + 'employers or qualifications. Match the language of the CV/role (German or English).';
         const user = `Write a cover letter for this application.\n\n`
           + `Position: ${jobTitle || '[role]'}\nCompany: ${company || '[company]'}\n`
           + `Candidate name: ${name || '[name]'}\nKey skills to highlight: ${skills || '(infer from CV)'}\n\n`
-          + `CV / background:\n${(cvText || '').slice(0, 6000) || '(none provided)'}\n\n`
+          + (jobDescription ? `Job posting (address its key requirements):\n${String(jobDescription).slice(0, 3000)}\n\n` : '')
+          + `Candidate CV / experience:\n${(cvText || '').slice(0, 6000) || '(none provided)'}\n\n`
           + `Return only the letter text (subject line, greeting, 3-4 paragraphs, sign-off).`;
-        const text = await llm.chat({ system, user, maxTokens: 1400, temperature: 0.6 });
+        // Generous budget: some models (e.g. gemini-2.5-flash) spend part of the
+        // token budget on internal reasoning, so a low cap truncates the letter.
+        const text = await llm.chat({ system, user, maxTokens: 4000, temperature: 0.6 });
         sendJson(res, 200, { ok: true, source: 'ai', provider: llm.provider(), text });
       } catch (error) {
         sendJson(res, 200, { ok: false, source: 'template', error: String(error.message || error) });
@@ -1459,7 +1623,8 @@ const server = http.createServer(async (req, res) => {
           + `Skills already present: ${have || '(none detected)'}\n`
           + `Missing skills to acquire: ${miss || '(none)'}\n\n`
           + `Return a prioritized roadmap as a numbered list, each item: skill — why it matters — how to learn it — est. time.`;
-        const text = await llm.chat({ system, user, maxTokens: 1200, temperature: 0.5 });
+        // Generous budget so reasoning-heavy models don't truncate the roadmap.
+        const text = await llm.chat({ system, user, maxTokens: 4000, temperature: 0.5 });
         sendJson(res, 200, { ok: true, source: 'ai', provider: llm.provider(), text });
       } catch (error) {
         sendJson(res, 200, { ok: false, source: 'template', error: String(error.message || error) });
@@ -1580,6 +1745,8 @@ const server = http.createServer(async (req, res) => {
     let source = 'fallback';
     let platformBreakdown = {};
 
+    if (platform !== 'all') logScrape(`▶ ${platform} | keyword="${keyword || ''}" location="${location || ''}"`);
+
     if (platform === 'all') {
       // Run every configured source in parallel, then cross-source dedup.
       // Free sources always run; key/token-gated ones only when configured.
@@ -1587,7 +1754,8 @@ const server = http.createServer(async (req, res) => {
         searchParams: parsedUrl.searchParams,
         keyword, location, region, distance
       });
-      const settled = await Promise.allSettled(sources.map(s => s.run()));
+      logScrape(`▶ ALL platforms | keyword="${keyword || ''}" location="${location || ''}" | launching: ${sources.map(s => s.key).join(', ')}`);
+      const settled = await runSourcesWithLogging(sources);
 
       platformBreakdown = {};
       let merged = [];
@@ -1600,6 +1768,7 @@ const server = http.createServer(async (req, res) => {
       // Fuzzy cross-source dedup: merges near-duplicates and records `also_on`.
       jobs = dedupeJobs(merged);
       source = 'all-platforms';
+      logScrape(`■ ALL done | ${merged.length} raw → ${jobs.length} after dedup`);
 
     } else if (platform === 'bundesagentur') {
       const result = await fetchBundesJobs(parsedUrl.searchParams);
@@ -1656,6 +1825,11 @@ const server = http.createServer(async (req, res) => {
       jobs = filterJobs(region, sector, profileText);
     }
 
+    // Keep only jobs that are on-topic for the chosen domain (e.g. Cybersecurity).
+    if (sector && sector !== 'all' && jobs.length > 0) {
+      jobs = jobs.filter(job => jobMatchesSector(job, sector));
+    }
+
     if (distance && distance !== 'all' && location) {
       jobs = await filterJobsByDistance(jobs, location, distance);
     }
@@ -1664,6 +1838,7 @@ const server = http.createServer(async (req, res) => {
       jobs = jobs.filter(job => jobMatchesProfile(job, profileText));
     }
 
+    if (platform !== 'all') logScrape(`■ ${platform}: ${jobs.length} offers returned`);
     sendJson(res, 200, { jobs, source, platformBreakdown, profileUsed: !!profileText, query: { region, sector, platform, distance, location } });
     return;
   }
@@ -1847,7 +2022,8 @@ const server = http.createServer(async (req, res) => {
           region: region || 'germany',
           distance: searchDist
         });
-        const settled = await Promise.allSettled(sources.map(s => s.run()));
+        logScrape(`▶ SCRAPE-ALL | keyword="${searchKeyword || ''}" location="${searchLocation}" | launching: ${sources.map(s => s.key).join(', ')}`);
+        const settled = await runSourcesWithLogging(sources);
 
         const platformBreakdown = {};
         let merged = [];
@@ -1858,8 +2034,13 @@ const server = http.createServer(async (req, res) => {
         });
 
         // Fuzzy cross-source dedup: merges near-duplicates and records `also_on`.
-        const jobs = dedupeJobs(merged);
+        let jobs = dedupeJobs(merged);
 
+        // Domain relevance filter — only keep on-topic jobs for the chosen sector.
+        const before = jobs.length;
+        if (sector && sector !== 'all') jobs = jobs.filter(j => jobMatchesSector(j, sector));
+
+        logScrape(`■ SCRAPE-ALL done | ${merged.length} raw → ${before} dedup → ${jobs.length} after "${sector || 'all'}" filter`);
         sendJson(res, 200, { jobs, platformBreakdown, source: 'all-platforms', total: jobs.length });
       } catch (err) {
         sendJson(res, 500, { error: 'Scrape-all failed', detail: err.message });

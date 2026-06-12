@@ -175,23 +175,17 @@
         <button class="nav-btn active" data-page="getting-started">
           <span class="nav-label">Getting Started</span>
         </button>
-        <button class="nav-btn" data-page="jobs">
-          <span class="nav-label">Jobs</span>
+        <button class="nav-btn" data-page="profile">
+          <span class="nav-label">Professional Profile</span>
         </button>
         <button class="nav-btn" data-page="search">
           <span class="nav-label">Job Search</span>
         </button>
-        <button class="nav-btn" data-page="resumes">
-          <span class="nav-label">Resumes</span>
-        </button>
-        <button class="nav-btn" data-page="letters">
-          <span class="nav-label">Cover Letters</span>
+        <button class="nav-btn" data-page="jobs">
+          <span class="nav-label">Jobs</span>
         </button>
         <button class="nav-btn" data-page="interviews">
           <span class="nav-label">Interviews</span>
-        </button>
-        <button class="nav-btn" data-page="profile">
-          <span class="nav-label">Professional Profile</span>
         </button>
       </nav>
 
@@ -311,31 +305,6 @@
               <p id="location-status" class="hint"></p>
             </div>
             <div class="form-group">
-              <label>Platform</label>
-              <select id="platform-select" class="field">
-                <option value="all">All platforms simultaneously</option>
-                <optgroup label="Free — Works now">
-                  <option value="bundesagentur">Bundesagentur (DE official API)</option>
-                  <option value="arbeitnow">Arbeitnow (DE tech jobs)</option>
-                  <option value="linkedin">LinkedIn (public listings)</option>
-                  <option value="remotive">Remotive (remote worldwide)</option>
-                </optgroup>
-                <optgroup label="Bot-protected — limited results">
-                  <option value="indeed">Indeed</option>
-                  <option value="stepstone">StepStone</option>
-                </optgroup>
-                <optgroup label="Requires free API key">
-                  <option value="jooble">Jooble (140k+ sources, free key)</option>
-                  <option value="adzuna">Adzuna (aggregates StepStone/Indeed, free key)</option>
-                </optgroup>
-                <optgroup label="Requires Apify credits">
-                  <option value="apify-indeed">Indeed via Apify (paid)</option>
-                  <option value="apify-stepstone">StepStone via Apify (paid)</option>
-                </optgroup>
-              </select>
-              <p id="platform-suggestion" class="hint">All platforms: runs all 4 free sources in parallel</p>
-            </div>
-            <div class="form-group">
               <label>Job Title / Keywords</label>
               <input id="job-keyword-input" type="text" class="field" placeholder="e.g. Data Analyst, Pflegefachkraft, Marketing Manager…" />
             </div>
@@ -385,9 +354,11 @@
               <input type="checkbox" id="notify-jobs-toggle" />
               <span>Email me jobs with ≥70% match</span>
             </label>
-            <button id="search-jobs-btn" class="btn btn-primary">
-              Search Jobs
-            </button>
+            <div id="notify-email-row" class="form-group hidden" style="margin-top:8px">
+              <label for="notify-email-input">Send notifications to</label>
+              <input id="notify-email-input" type="email" class="field" placeholder="you@example.com" />
+              <p class="hint" id="notify-email-hint">Free Resend tier: use the email you signed up to Resend with.</p>
+            </div>
             <button id="scrape-all-btn" class="btn btn-scrape-all">
               Scrape All Platforms
             </button>
@@ -413,6 +384,12 @@
           <div class="card-header">
             <h2>Jobs Found <span class="count-badge" id="job-count-badge">0</span></h2>
             <div class="legend-row">
+              <label for="workmode-filter" class="hint" style="margin-right:6px">Work mode</label>
+              <select id="workmode-filter" class="field" style="max-width:150px;display:inline-block">
+                <option value="all">All</option>
+                <option value="remote">Remote only</option>
+                <option value="onsite">On-site only</option>
+              </select>
               <span class="legend high">≥70%</span>
               <span class="legend mid">≥40%</span>
               <span class="legend low">&lt;40%</span>
@@ -728,7 +705,7 @@
 
           <div class="form-actions" style="margin-bottom:24px">
             <button id="pf-save" class="btn btn-primary">Save Profile</button>
-            <button id="pf-download-pdf" class="btn btn-ghost">Download as PDF</button>
+            <button id="pf-download-pdf" class="btn btn-ghost">Generate as PDF</button>
             <span id="pf-save-msg" class="form-msg" style="align-self:center"></span>
           </div>
         </div>
@@ -781,6 +758,24 @@
       Chat
       <div class="chat-badge"></div>
     </button>
+  </div>
+
+  <!-- ── Job Workspace (per saved job: match → gaps → oracle → cover letter) ── -->
+  <div id="job-workspace" class="jw-overlay hidden">
+    <div class="jw-modal">
+      <button id="jw-close" class="jw-close" title="Close">✕</button>
+      <h2 id="jw-title">Job</h2>
+      <div id="jw-company" class="jw-company"></div>
+      <div id="jw-match" class="jw-match"></div>
+      <div id="jw-gaps" class="jw-section"></div>
+      <div id="jw-oracle" class="jw-section"></div>
+      <div class="jw-actions">
+        <button id="jw-update-profile" class="btn btn-ghost btn-sm">✎ Update profile</button>
+        <button id="jw-recheck" class="btn btn-ghost btn-sm">↻ Re-check match</button>
+        <button id="jw-cover" class="btn btn-primary btn-sm">Generate cover letter</button>
+      </div>
+      <textarea id="jw-cover-output" class="field hidden" rows="12" readonly placeholder="Your cover letter will appear here…"></textarea>
+    </div>
   </div>
 
   <script src="jspdf.umd.min.js"></script>
