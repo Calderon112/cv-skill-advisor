@@ -6,13 +6,13 @@
  * Returns salary info where available.
  */
 
-const { browserHeaders, stripHtml } = require('./utils');
+const { browserHeaders, stripHtml, maxPerSource } = require('./utils');
 
 const API_URL = 'https://remotive.com/api/remote-jobs';
 
-async function fetch_({ keyword } = {}) {
+async function fetch_({ keyword, maxPerSource: mps } = {}) {
   try {
-    const params = new URLSearchParams({ limit: '25' });
+    const params = new URLSearchParams({ limit: String(maxPerSource({ maxPerSource: mps })) });
     if (keyword) params.set('search', keyword);
 
     const r = await fetch(`${API_URL}?${params}`, {

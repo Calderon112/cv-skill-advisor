@@ -176,10 +176,6 @@ taskkill /PID <PID_NUMBER> /F
 node server.js
 ```
 
-### Claude Code "1M context" error
-This is a known Anthropic bug (May 2025). Work directly in claude.ai chat or wait for a fix.
-Workaround: `claude --model claude-haiku-4-5-20251001`
-
 ---
 
 ## 📋 Sprint 1 Checklist
@@ -198,7 +194,7 @@ Workaround: `claude --model claude-haiku-4-5-20251001`
 - [x] README documentation
 
 ### Sprint 2 — Planned
-- [ ] Cover letter generation (Writer Agent with Claude API)
+- [ ] Cover letter generation (Writer Agent with LLM API)
 - [ ] Improved skill database (200+ skills)
 - [ ] Jooble & Apify integration with UI toggle
 - [ ] Email notifications for new matching jobs
@@ -213,7 +209,7 @@ Built as a personal learning project by an IT Security student (Gelsenkirchen, N
 The goal: help students and professionals in cybersecurity find relevant jobs in Germany,
 understand what skills they're missing, and get a concrete plan to acquire them.
 
-**Built with:** Claude AI (Anthropic) + agent-skills framework
+**Built with:** Node.js · vanilla JavaScript · zero-build frontend
 
 ---
 

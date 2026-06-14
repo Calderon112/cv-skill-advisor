@@ -24,6 +24,50 @@
   line-height: 1.5;
 }
 
+/* ── Light theme (toggle via data-theme="light" on <html>) ─────────────── */
+[data-theme="light"] {
+  --bg:          #F6F7FB;
+  --bg-card:     rgba(15, 23, 42, 0.04);
+  --bg-hover:    rgba(15, 23, 42, 0.07);
+  --sidebar-bg:  #FFFFFF;
+  --border:      rgba(15, 23, 42, 0.10);
+  --border-hi:   rgba(147, 51, 234, 0.5);
+  --cyan:        #9333EA;
+  --cyan-dim:    rgba(147, 51, 234, 0.10);
+  --orange:      #D97706;
+  --orange-dim:  rgba(217, 119, 6, 0.12);
+  --teal:        #059669;
+  --teal-dim:    rgba(5, 150, 129, 0.12);
+  --blue-neon:   #0891B2;
+  --text:        #1E293B;
+  --text-muted:  #64748B;
+  --text-dim:    #94A3B8;
+}
+[data-theme="light"] body {
+  background-image: radial-gradient(ellipse at 20% 0%, rgba(147,51,234,0.07) 0%, transparent 55%),
+                    radial-gradient(ellipse at 80% 100%, rgba(8,145,178,0.06) 0%, transparent 50%);
+}
+[data-theme="light"] .sidebar { box-shadow: 1px 0 0 var(--border); }
+[data-theme="light"] .auth-right { background: rgba(255, 255, 255, 0.72); }
+/* Inputs and dark hard-coded panels → light surfaces */
+[data-theme="light"] .field { background: #FFFFFF; }
+[data-theme="light"] .field:focus { background: #FFFFFF; }
+[data-theme="light"] .add-job-menu { background: #FFFFFF; }
+[data-theme="light"] .jw-modal { background: #FFFFFF; }
+
+/* Theme toggle button (topbar) */
+.theme-toggle {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  width: 34px; height: 34px;
+  font-size: 16px;
+  cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background 0.15s, border-color 0.15s;
+}
+.theme-toggle:hover { background: var(--bg-hover); border-color: var(--border-hi); }
+
 /* ── Reset ─────────────────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 body {
@@ -690,6 +734,33 @@ textarea.field  { resize: vertical; min-height: 80px; }
 
 .chip.platform { color: var(--cyan); border-color: rgba(0,210,255,0.2); }
 
+/* "What you're missing" — skill gaps for a job */
+.job-card-gaps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+.gap-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--orange);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.gap-chip {
+  background: rgba(255,107,53,0.08);
+  border: 1px solid rgba(255,107,53,0.3);
+  color: var(--orange);
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 10px;
+}
+.gap-more { font-size: 10px; color: var(--text-dim); }
+
 .job-card-link {
   font-size: 11px;
   color: var(--cyan);
@@ -1173,9 +1244,89 @@ textarea.field  { resize: vertical; min-height: 80px; }
 .svg-antenna-glow { animation: svgAntennaGlow 2s ease-in-out infinite; }
 .svg-eye-left,
 .svg-eye-right    { animation: svgEyeBlink 4s ease-in-out infinite; }
+.svg-pupil        { animation: svgPupilLook 5s ease-in-out infinite; }
 .svg-eq-bar       { animation: svgEqBar 0.6s ease-in-out infinite alternate; }
 .svg-scan-line    { animation: svgScanLine 2.5s linear infinite; }
 .svg-led          { animation: svgLedPulse 2s ease-in-out infinite; }
+.svg-arm-wave     { animation: svgArmWave 3.6s ease-in-out infinite; }
+.svg-signal       { animation: svgSignal 2.4s ease-out infinite; }
+.svg-signal.sig-2 { animation-delay: 1.2s; }
+
+/* Speech bubble — "Welcome", synced with the waving arm */
+.speech-anchor {
+  position: absolute;
+  top: -2%;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 4;
+  pointer-events: none;
+}
+.robot-speech {
+  position: relative;
+  background: var(--bg-card);
+  border: 1px solid var(--cyan);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+  padding: 8px 14px;
+  border-radius: 14px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35), 0 0 16px rgba(0,210,255,0.25);
+  backdrop-filter: blur(8px);
+  transform-origin: bottom center;
+  animation: speechPop 3.6s ease-in-out infinite;
+}
+.robot-speech::after {
+  content: "";
+  position: absolute;
+  bottom: -7px;
+  left: 50%;
+  margin-left: -6px;
+  width: 12px; height: 12px;
+  background: var(--bg-card);
+  border-right: 1px solid var(--cyan);
+  border-bottom: 1px solid var(--cyan);
+  transform: rotate(45deg);
+}
+.speech-wave {
+  display: inline-block;
+  animation: speechHand 3.6s ease-in-out infinite;
+}
+
+/* Breathing ground shadow (synced with robot float) */
+.robot-shadow {
+  position: absolute;
+  bottom: 30px;
+  left: 50%;
+  width: 130px;
+  height: 20px;
+  margin-left: -65px;
+  border-radius: 50%;
+  background: radial-gradient(ellipse at center, rgba(0,210,255,0.22), transparent 70%);
+  filter: blur(5px);
+  z-index: 1;
+  animation: robotShadow 6s ease-in-out infinite;
+}
+
+/* Rising data particles */
+.data-particles { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
+.particle {
+  position: absolute;
+  bottom: 18%;
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--cyan);
+  box-shadow: 0 0 6px var(--cyan);
+  opacity: 0;
+  animation: particleRise 6s linear infinite;
+}
+.particle.orange { background: var(--orange); box-shadow: 0 0 6px var(--orange); }
+.p1 { left: 22%; animation-delay: 0s;   }
+.p2 { left: 40%; animation-delay: 1.4s; }
+.p3 { left: 56%; animation-delay: 2.6s; }
+.p4 { left: 70%; animation-delay: 0.8s; }
+.p5 { left: 33%; animation-delay: 3.5s; }
+.p6 { left: 63%; animation-delay: 4.6s; }
 
 /* RIGHT PANEL */
 .auth-right {
@@ -1271,6 +1422,43 @@ textarea.field  { resize: vertical; min-height: 80px; }
 @keyframes svgLedPulse {
   0%, 100% { opacity: 1; }
   50%       { opacity: 0.15; }
+}
+@keyframes svgPupilLook {
+  0%, 18%   { transform: translateX(-2.5px); }
+  40%, 60%  { transform: translateX(2.5px); }
+  82%, 100% { transform: translateX(0); }
+}
+@keyframes svgArmWave {
+  0%, 55%, 100% { transform: rotate(0deg); }
+  63%           { transform: rotate(-30deg); }
+  71%           { transform: rotate(-16deg); }
+  79%           { transform: rotate(-30deg); }
+  87%           { transform: rotate(-16deg); }
+  95%           { transform: rotate(-6deg); }
+}
+@keyframes svgSignal {
+  0%   { transform: scale(0.4); opacity: 0.85; }
+  100% { transform: scale(3.2); opacity: 0; }
+}
+@keyframes speechPop {
+  0%, 38%   { opacity: 0; transform: translateY(8px) scale(0.8); }
+  48%, 86%  { opacity: 1; transform: translateY(0) scale(1); }
+  100%      { opacity: 0; transform: translateY(-4px) scale(0.9); }
+}
+@keyframes speechHand {
+  0%, 55%, 100% { transform: rotate(0deg); }
+  63%, 79%      { transform: rotate(18deg); }
+  71%, 87%      { transform: rotate(-12deg); }
+}
+@keyframes robotShadow {
+  0%, 100% { transform: scale(1);   opacity: 0.55; }
+  50%       { transform: scale(0.78); opacity: 0.3; }
+}
+@keyframes particleRise {
+  0%   { transform: translateY(0) scale(0.5);  opacity: 0; }
+  15%  { opacity: 0.8; }
+  85%  { opacity: 0.5; }
+  100% { transform: translateY(-190px) scale(1); opacity: 0; }
 }
 .form-msg.ok { color: var(--teal); }
 

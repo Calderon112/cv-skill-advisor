@@ -5,8 +5,11 @@
  * Response root key: "ergebnisliste" (array of job objects)
  */
 
+const { sleep, maxPerSource } = require('./utils');
+
 const API_URL = 'https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v6/jobs';
 const API_KEY = process.env.BUNDES_API_KEY || 'jobboerse-jobsuche';
+const PAGE_SIZE = 100; // max the API accepts per request
 
 // Domain → German search term when user hasn't typed a keyword
 const DOMAIN_KEYWORDS = {
@@ -31,11 +34,11 @@ const DOMAIN_KEYWORDS = {
   all:           ''
 };
 
-function buildParams(keyword, sector, location, region) {
+function buildParams(keyword, sector, location, region, page = 1) {
   const params = new URLSearchParams({
     angebotsart:        '1',
-    page:               '1',
-    size:               '25',
+    page:               String(page),
+    size:               String(PAGE_SIZE),
     pav:                'false',
     veroeffentlichtseit:'30'
   });
@@ -76,20 +79,30 @@ function normalizeJob(job, sector) {
   };
 }
 
-async function fetch_({ keyword, sector, location, region } = {}) {
+async function fetch_({ keyword, sector, location, region, maxPerSource: mps } = {}) {
+  const cap = maxPerSource({ maxPerSource: mps });
+  const out = [];
   try {
-    const params = buildParams(keyword, sector, location, region);
-    const r = await fetch(`${API_URL}?${params}`, {
-      headers: { 'X-API-Key': API_KEY, Accept: 'application/json' }
-    });
-    if (!r.ok) return [];
-    const data = await r.json();
-    const hits = data?.ergebnisliste || [];
-    return hits.map(j => normalizeJob(j, sector));
+    for (let page = 1; out.length < cap; page++) {
+      const params = buildParams(keyword, sector, location, region, page);
+      const r = await fetch(`${API_URL}?${params}`, {
+        headers: { 'X-API-Key': API_KEY, Accept: 'application/json' }
+      });
+      if (!r.ok) break;
+      const data = await r.json();
+      const hits = data?.ergebnisliste || [];
+      if (!hits.length) break;
+      out.push(...hits.map(j => normalizeJob(j, sector)));
+
+      const total = Number(data?.maxErgebnisse) || 0;
+      if (hits.length < PAGE_SIZE) break;          // reached the last page
+      if (total && out.length >= total) break;     // got everything available
+      await sleep(150 + Math.random() * 150);      // polite anti-quota delay
+    }
   } catch (err) {
     console.warn('[bundesagentur] fetch failed:', err.message);
-    return [];
   }
+  return out.slice(0, cap);
 }
 
 module.exports = { fetch: fetch_ };

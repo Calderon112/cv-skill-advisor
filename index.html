@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>CareerAI — Job Application Agent</title>
   <link rel="stylesheet" href="styles.css" />
+  <script>try{var t=localStorage.getItem('careerai-theme');if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>
 </head>
 
 
@@ -26,10 +27,22 @@
         <div class="pulse-ring pring-2"></div>
         <div class="orbit-ring oring-cw"><div class="orbit-dot od-cyan"></div></div>
         <div class="orbit-ring oring-ccw"><div class="orbit-dot od-orange"></div></div>
+        <div class="data-particles">
+          <span class="particle p1"></span>
+          <span class="particle p2 orange"></span>
+          <span class="particle p3"></span>
+          <span class="particle p4"></span>
+          <span class="particle p5 orange"></span>
+          <span class="particle p6"></span>
+        </div>
+        <div class="robot-shadow"></div>
+        <div class="speech-anchor"><div class="robot-speech">Welcome <span class="speech-wave">👋</span></div></div>
         <div class="robot-floating">
           <svg width="200" height="264" viewBox="0 0 200 264" fill="none" xmlns="http://www.w3.org/2000/svg">
             <!-- Antenna -->
             <line x1="100" y1="22" x2="100" y2="46" stroke="#2a3a55" stroke-width="3" stroke-linecap="round"/>
+            <circle class="svg-signal sig-1" cx="100" cy="14" r="6" fill="none" stroke="#00d2ff" stroke-width="2" style="transform-box:fill-box;transform-origin:center"/>
+            <circle class="svg-signal sig-2" cx="100" cy="14" r="6" fill="none" stroke="#00d2ff" stroke-width="2" style="transform-box:fill-box;transform-origin:center"/>
             <circle class="svg-antenna-glow" cx="100" cy="14" r="8" fill="rgba(0,210,255,0.25)"/>
             <circle cx="100" cy="14" r="5" fill="#00d2ff"/>
             <!-- Head -->
@@ -38,11 +51,11 @@
             <!-- Eyes -->
             <g class="svg-eye-left" style="transform-box:fill-box;transform-origin:center">
               <rect x="70" y="62" width="22" height="16" rx="4" fill="#00d2ff" opacity="0.95"/>
-              <rect x="74" y="66" width="7" height="6" rx="1.5" fill="#0b1929" opacity="0.7"/>
+              <rect class="svg-pupil" x="77" y="65" width="8" height="10" rx="2" fill="#0b1929" opacity="0.8" style="transform-box:fill-box;transform-origin:center"/>
             </g>
             <g class="svg-eye-right" style="transform-box:fill-box;transform-origin:center">
               <rect x="108" y="62" width="22" height="16" rx="4" fill="#00d2ff" opacity="0.95"/>
-              <rect x="112" y="66" width="7" height="6" rx="1.5" fill="#0b1929" opacity="0.7"/>
+              <rect class="svg-pupil" x="115" y="65" width="8" height="10" rx="2" fill="#0b1929" opacity="0.8" style="transform-box:fill-box;transform-origin:center"/>
             </g>
             <!-- EQ Mouth bars -->
             <rect class="svg-eq-bar" x="77" y="89" width="7" height="12" rx="2" fill="#00d2ff" opacity="0.9" style="transform-box:fill-box;transform-origin:center bottom;animation-delay:0s"/>
@@ -84,11 +97,13 @@
             <rect x="22" y="150" width="14" height="4" rx="2" fill="rgba(0,210,255,0.25)"/>
             <rect x="22" y="157" width="14" height="4" rx="2" fill="rgba(0,210,255,0.15)"/>
             <rect x="18" y="188" width="22" height="16" rx="7" fill="#2a3a55"/>
-            <!-- Right Arm -->
-            <rect x="158" y="128" width="26" height="60" rx="10" fill="#1C2430" stroke="#2a3a55" stroke-width="1.5"/>
-            <rect x="164" y="150" width="14" height="4" rx="2" fill="rgba(0,210,255,0.25)"/>
-            <rect x="164" y="157" width="14" height="4" rx="2" fill="rgba(0,210,255,0.15)"/>
-            <rect x="160" y="188" width="22" height="16" rx="7" fill="#2a3a55"/>
+            <!-- Right Arm (waving hello) -->
+            <g class="svg-arm-wave" style="transform-box:fill-box;transform-origin:center top">
+              <rect x="158" y="128" width="26" height="60" rx="10" fill="#1C2430" stroke="#2a3a55" stroke-width="1.5"/>
+              <rect x="164" y="150" width="14" height="4" rx="2" fill="rgba(0,210,255,0.25)"/>
+              <rect x="164" y="157" width="14" height="4" rx="2" fill="rgba(0,210,255,0.15)"/>
+              <rect x="160" y="188" width="22" height="16" rx="7" fill="#2a3a55"/>
+            </g>
             <!-- Legs -->
             <rect x="66" y="212" width="28" height="36" rx="10" fill="#1C2430" stroke="#2a3a55" stroke-width="1.5"/>
             <rect x="106" y="212" width="28" height="36" rx="10" fill="#1C2430" stroke="#2a3a55" stroke-width="1.5"/>
@@ -97,24 +112,6 @@
             <rect x="106" y="244" width="34" height="14" rx="7" fill="#2a3a55"/>
           </svg>
         </div>
-      </div>
-
-      <!-- Floating stat cards -->
-      <div class="auth-stat-card asc-1">
-        <div class="asc-val">2.4k</div>
-        <div class="asc-lbl">Jobs Found</div>
-      </div>
-      <div class="auth-stat-card asc-2">
-        <div class="asc-val" style="color:var(--cyan)">87%</div>
-        <div class="asc-lbl">Match Rate</div>
-      </div>
-      <div class="auth-stat-card asc-3">
-        <div class="asc-val">&lt;3s</div>
-        <div class="asc-lbl">Scan Time</div>
-      </div>
-      <div class="auth-stat-card asc-4">
-        <div class="asc-val" style="color:var(--orange)">AI</div>
-        <div class="asc-lbl">Powered</div>
       </div>
 
       <!-- Brand footer -->
@@ -207,6 +204,7 @@
       <div class="topbar">
         <h2 class="topbar-title" id="topbar-title">Getting Started</h2>
         <div class="topbar-right">
+          <button class="theme-toggle" id="theme-toggle" title="Switch light / dark" aria-label="Switch theme">🌙</button>
           <span class="api-indicator" id="api-indicator">● Offline</span>
           <div class="add-job-wrap">
             <button class="btn btn-primary btn-sm" id="add-job-btn">+ Add New Job ▾</button>
@@ -348,6 +346,15 @@
                 <option value="20">Within 20 km</option>
                 <option value="50">Within 50 km</option>
                 <option value="100">Within 100 km</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="depth-select">Search depth <span class="hint" style="font-weight:400">— more results, slower</span></label>
+              <select id="depth-select" class="field">
+                <option value="3">Fast (~fewer jobs)</option>
+                <option value="5" selected>Balanced</option>
+                <option value="10">Deep (more jobs)</option>
+                <option value="20">Maximum (slowest)</option>
               </select>
             </div>
             <label class="notify-toggle" for="notify-jobs-toggle">
@@ -876,6 +883,40 @@ document.getElementById('privacy-modal').addEventListener('click', e => {
 
 // Lance au chargement
 gdprInit();
+
+// Light / dark theme toggle (persisted in localStorage)
+(function themeToggle() {
+  const btn = document.getElementById('theme-toggle');
+  if (!btn) return;
+  const apply = (theme) => {
+    if (theme === 'light') document.documentElement.setAttribute('data-theme', 'light');
+    else document.documentElement.removeAttribute('data-theme');
+    btn.textContent = theme === 'light' ? '☀️' : '🌙';
+  };
+  apply(localStorage.getItem('careerai-theme') || 'dark');
+  btn.addEventListener('click', () => {
+    const next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+    try { localStorage.setItem('careerai-theme', next); } catch (e) {}
+    apply(next);
+  });
+})();
+
+// Robot speech bubble — alternating phrases, synced with the pop animation
+(function rotateSpeech() {
+  const bubble = document.querySelector('.robot-speech');
+  if (!bubble) return;
+  const phrases = [
+    'Welcome <span class="speech-wave">👋</span>',
+    'Let\'s find your job! <span class="speech-wave">🚀</span>',
+    'Ready to get hired? <span class="speech-wave">💼</span>',
+  ];
+  let i = 0;
+  // Swap text while the bubble is hidden (start of each animation cycle)
+  bubble.addEventListener('animationiteration', () => {
+    i = (i + 1) % phrases.length;
+    bubble.innerHTML = phrases[i];
+  });
+})();
 </script>
 </body>
 </html>

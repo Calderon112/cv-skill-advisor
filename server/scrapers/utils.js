@@ -38,4 +38,18 @@ function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
-module.exports = { browserHeaders, stripHtml, sleep };
+/**
+ * How many jobs each scraper should pull at most, per search.
+ * Configurable via env (SCRAPE_MAX_PER_SOURCE) or a per-request opts.maxPerSource,
+ * and hard-capped at 1000 to stay polite with the upstream free APIs.
+ */
+const DEFAULT_MAX_PER_SOURCE = Number(process.env.SCRAPE_MAX_PER_SOURCE) || 500;
+const HARD_CAP = 1000;
+
+function maxPerSource(opts = {}) {
+  const requested = Number(opts.maxPerSource);
+  const n = Number.isFinite(requested) && requested > 0 ? requested : DEFAULT_MAX_PER_SOURCE;
+  return Math.min(n, HARD_CAP);
+}
+
+module.exports = { browserHeaders, stripHtml, sleep, maxPerSource, DEFAULT_MAX_PER_SOURCE, HARD_CAP };

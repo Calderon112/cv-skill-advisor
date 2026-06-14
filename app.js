@@ -722,7 +722,7 @@ function renderLearningSuggestions(result) {
     `<div class="suggestion-card"><strong style="color:var(--cyan);font-size:11px;display:block;margin-bottom:5px">${esc(s.skill)}</strong>${esc(s.tip)}${s.meta ? `<span style="display:block;margin-top:6px;font-size:10px;opacity:.6">${esc(s.meta)}</span>` : ''}</div>`
   ).join('');
 
-  // AI roadmap button + output (uses Claude when a key is configured)
+  // AI roadmap button + output (uses an LLM when a key is configured)
   let aiWrap = $('roadmap-ai-wrap');
   if (!aiWrap) {
     aiWrap = document.createElement('div');
@@ -752,9 +752,9 @@ async function generateAIRoadmap() {
     if (r && r.ok && r.source === 'ai' && r.text) {
       out.textContent = r.text;
       out.classList.remove('hidden');
-      toast('AI roadmap generated (Claude)!', 'success');
+      toast('AI roadmap generated!', 'success');
     } else {
-      toast('AI not configured — add ANTHROPIC_API_KEY to enable. Showing skill tips instead.', 'info');
+      toast('AI not configured — add an LLM API key to enable. Showing skill tips instead.', 'info');
     }
   } catch (_) {
     toast('Could not reach AI. Showing skill tips instead.', 'error');
@@ -789,6 +789,8 @@ async function searchJobs() {
     url.searchParams.set('distance', distance);
     if (keyword)  url.searchParams.set('keyword',  keyword);
     if (location) url.searchParams.set('location', location);
+    const pages = Number($('depth-select')?.value) || 5;
+    url.searchParams.set('pages', String(pages));
 
     const r    = await fetch(url, { headers: authHeaders() });
     if (!r.ok) throw new Error(`Server error ${r.status}`);
@@ -849,25 +851,35 @@ function renderJobResults(jobs, sourceLabel) {
   const panel = $('jobs-results-panel');
   const grid  = $('job-results');
 
-  $('job-count-badge').textContent = jobs.length;
+  // Pre-compute the match score once per job, then rank surest → least sure so the
+  // strongest fits (your ≥70% jobs) always sit at the top of the list.
+  let ranked = jobs.map(job => ({
+    job,
+    detail: state.analysis ? scoreJobDetailed(job, state.analysis) : null,
+  }));
+  if (state.analysis) ranked.sort((a, b) => b.detail.score - a.detail.score);
+
+  $('job-count-badge').textContent = ranked.length;
   panel.classList.remove('hidden');
 
-  if (!jobs.length) {
+  if (!ranked.length) {
     grid.innerHTML = `<div class="job-card"><p class="job-card-meta">No jobs found. Try a different platform, sector, or keywords.</p></div>`;
     return;
   }
 
-  grid.innerHTML = jobs.map((job, i) => {
+  grid.innerHTML = ranked.map(({ job, detail }, i) => {
     const date    = job.publishedDate ? String(job.publishedDate).slice(0, 10) : null;
     const isNew   = date && (Date.now() - new Date(date).getTime()) < 7 * 86400000;
     const salary  = job.salary ? `${esc(job.salary)}` : '';
     const remote  = job.remote ? `<span class="chip remote">Remote</span>` : '';
     const jobType = job.jobType ? `<span class="chip">${esc(job.jobType)}</span>` : '';
 
-    // Weighted score + breakdown tooltip if analysis exists
+    // Weighted score + breakdown tooltip, plus the skills this job wants that
+    // you don't have yet ("what you're missing").
     let scoreHtml = '';
-    if (state.analysis) {
-      const { score, breakdown } = scoreJobDetailed(job, state.analysis);
+    let gapHtml   = '';
+    if (detail) {
+      const { score, breakdown } = detail;
       const pct   = Math.round(score * 100);
       const color = pct >= 70 ? 'var(--teal)' : pct >= 40 ? 'var(--cyan)' : 'var(--text-dim)';
       const tip = breakdown
@@ -875,6 +887,13 @@ function renderJobResults(jobs, sourceLabel) {
             .map(([k, v]) => `${k}: ${v}/${breakdown.weights[k]}`).join(' · ')
         : '';
       scoreHtml = `<span class="chip" title="${esc(tip)}" style="color:${color};border-color:${color}33">${pct}% match</span>`;
+
+      const missing = (breakdown && breakdown.skillsMissing) || [];
+      if (missing.length) {
+        const shown = missing.slice(0, 6).map(k => `<span class="gap-chip">${esc(skillLabel(k))}</span>`).join('');
+        const more  = missing.length > 6 ? `<span class="gap-more">+${missing.length - 6} more</span>` : '';
+        gapHtml = `<div class="job-card-gaps"><span class="gap-label">You're missing:</span> ${shown}${more}</div>`;
+      }
     }
 
     return `
@@ -895,6 +914,7 @@ function renderJobResults(jobs, sourceLabel) {
         ${job.distance ? `<span class="chip">${job.distance} km</span>` : ''}
         ${date ? `<span class="chip date ${isNew ? 'new' : ''}">${date}</span>` : ''}
       </div>
+      ${gapHtml}
       ${job.jobUrl ? `<a class="job-card-link" href="${esc(job.jobUrl)}" target="_blank" rel="noreferrer">View job →</a>` : ''}
       <button class="track-btn" data-job-idx="${i}">+ Save to Jobs</button>
     </article>
@@ -903,7 +923,7 @@ function renderJobResults(jobs, sourceLabel) {
 
   grid.querySelectorAll('.track-btn').forEach(btn =>
     btn.addEventListener('click', e => {
-      const job = jobs[Number(e.target.dataset.jobIdx)];
+      const job = ranked[Number(e.target.dataset.jobIdx)]?.job;
       if (job) prefillTracker(job);
     })
   );
@@ -1028,6 +1048,7 @@ async function scrapeAllPlatforms() {
   const distance = $('distance-select').value;
   const location = $('search-location-input').value.trim();
   const keyword  = ($('job-keyword-input')?.value || '').trim();
+  const pages    = Number($('depth-select')?.value) || 5;
   const progress = $('scrape-all-progress');
   const breakdown= $('platform-breakdown');
 
@@ -1053,7 +1074,7 @@ async function scrapeAllPlatforms() {
     const r = await fetch(`${baseUrl}/api/scrape-all`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ region, sector, distance, location, keyword })
+      body: JSON.stringify({ region, sector, distance, location, keyword, pages })
     });
     const data = await r.json();
     state.jobs  = data.jobs || [];
@@ -1119,6 +1140,15 @@ $('workmode-filter').addEventListener('change', rerenderJobs);
 // ── Match scoring (used inline on job cards) ────────────────────────────────
 // Weighted 6-criteria scoring (skills/role/location/remote/seniority/salary)
 // with a transparent breakdown — uses the shared scorer.js engine.
+// Turn an internal skill key (e.g. "rest api") into its display label ("REST APIs").
+function skillLabel(key) {
+  for (const g of skillGroups) {
+    const s = g.skills.find(x => x.key === key);
+    if (s) return s.label;
+  }
+  return key;
+}
+
 function scoreJobDetailed(job, analysis) {
   if (!analysis || !analysis.foundSkills.length || typeof window.Scorer === 'undefined') {
     return { score: 0, breakdown: null };
@@ -1280,7 +1310,7 @@ $('generate-cv-btn').addEventListener('click', async () => {
   state.docsCount++;
   updateStats();
   btn.disabled = false; btn.innerHTML = orig;
-  toast(usedAI ? 'AI CV generated (Claude)!' : 'CV draft generated (template).', 'success');
+  toast(usedAI ? 'AI CV generated!' : 'CV draft generated (template).', 'success');
 });
 
 $('generate-cover-btn').addEventListener('click', async () => {
@@ -1299,7 +1329,7 @@ $('generate-cover-btn').addEventListener('click', async () => {
 
   let text = '', usedAI = false;
   try {
-    // Try the real AI (Claude) endpoint first.
+    // Try the real AI endpoint first.
     const r = await api.post('/api/generate-cover', { jobTitle, company, name, skills, cvText });
     if (r && r.ok && r.source === 'ai' && r.text) { text = r.text; usedAI = true; }
   } catch (_) { /* fall back to template */ }
@@ -1311,7 +1341,7 @@ $('generate-cover-btn').addEventListener('click', async () => {
   state.docsCount++;
   updateStats();
   btn.disabled = false; btn.innerHTML = orig;
-  toast(usedAI ? 'AI cover letter generated (Claude)!' : 'Cover letter generated (template).', 'success');
+  toast(usedAI ? 'AI cover letter generated!' : 'Cover letter generated (template).', 'success');
 });
 
 function copyText(id) {

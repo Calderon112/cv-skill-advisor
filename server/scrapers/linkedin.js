@@ -10,62 +10,74 @@
  *   • 300–700 ms polite delay before each request
  */
 
-const { browserHeaders, stripHtml, sleep } = require('./utils');
+const { browserHeaders, stripHtml, sleep, maxPerSource } = require('./utils');
 
 const GUEST_URL = 'https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search';
+const PAGE_SIZE = 25;   // LinkedIn returns ~25 cards per "start" offset
+const MAX_START = 975;  // LinkedIn hard-stops guest paging around 1000 results
 
-async function fetch_({ keyword, location } = {}) {
+/** Parse one HTML page of LinkedIn job cards into normalized jobs. */
+function parsePage(html, location) {
+  const jobs = [];
+  const liRe = /<li[^>]*>([\s\S]*?)<\/li>/g;
+  let m;
+  while ((m = liRe.exec(html)) !== null) {
+    const card    = m[1];
+    const title   = (card.match(/class="[^"]*base-search-card__title[^"]*"[^>]*>\s*([\s\S]*?)\s*<\/h3>/) || [])[1];
+    const company = (card.match(/class="[^"]*base-search-card__subtitle[^"]*"[^>]*>\s*([\s\S]*?)\s*<\/[ha]>/) || [])[1];
+    const loc     = (card.match(/class="[^"]*job-search-card__location[^"]*"[^>]*>\s*([\s\S]*?)\s*<\/span>/) || [])[1];
+    const date    = (card.match(/datetime="([^"]+)"/) || [])[1];
+    const jobUrl  = (card.match(/href="(https:\/\/www\.linkedin\.com\/jobs\/view\/[^?"]+)/) || [])[1];
+
+    const t = stripHtml(title || '').trim();
+    const c = stripHtml(company || '').trim();
+    if (!t || !c) continue;
+
+    jobs.push({
+      platform:      'LinkedIn',
+      source:        'linkedin',
+      title:         t,
+      company:       c,
+      location:      stripHtml(loc || '').trim() || location || 'Germany',
+      description:   'Full description available on LinkedIn.',
+      jobUrl:        jobUrl || null,
+      publishedDate: date || null,
+      board:         'LinkedIn',
+      remote:        false,
+      jobType:       null,
+      salary:        null
+    });
+  }
+  return jobs;
+}
+
+async function fetch_({ keyword, location, maxPerSource: mps } = {}) {
+  const cap = maxPerSource({ maxPerSource: mps });
+  const out = [];
   try {
-    const params = new URLSearchParams({
-      keywords: keyword || '',
-      location: location || 'Germany',
-      f_TPR:    'r604800',    // last 7 days
-      start:    '0'
-    });
-
-    await sleep(300 + Math.random() * 400);
-
-    const r = await fetch(`${GUEST_URL}?${params}`, {
-      headers: browserHeaders('https://www.linkedin.com/jobs/search/', false)
-    });
-    if (!r.ok) return [];
-    const html = await r.text();
-    const jobs = [];
-
-    const liRe = /<li[^>]*>([\s\S]*?)<\/li>/g;
-    let m;
-    while ((m = liRe.exec(html)) !== null) {
-      const card    = m[1];
-      const title   = (card.match(/class="[^"]*base-search-card__title[^"]*"[^>]*>\s*([\s\S]*?)\s*<\/h3>/) || [])[1];
-      const company = (card.match(/class="[^"]*base-search-card__subtitle[^"]*"[^>]*>\s*([\s\S]*?)\s*<\/[ha]>/) || [])[1];
-      const loc     = (card.match(/class="[^"]*job-search-card__location[^"]*"[^>]*>\s*([\s\S]*?)\s*<\/span>/) || [])[1];
-      const date    = (card.match(/datetime="([^"]+)"/) || [])[1];
-      const jobUrl  = (card.match(/href="(https:\/\/www\.linkedin\.com\/jobs\/view\/[^?"]+)/) || [])[1];
-
-      const t = stripHtml(title || '').trim();
-      const c = stripHtml(company || '').trim();
-      if (!t || !c) continue;
-
-      jobs.push({
-        platform:      'LinkedIn',
-        source:        'linkedin',
-        title:         t,
-        company:       c,
-        location:      stripHtml(loc || '').trim() || location || 'Germany',
-        description:   'Full description available on LinkedIn.',
-        jobUrl:        jobUrl || null,
-        publishedDate: date || null,
-        board:         'LinkedIn',
-        remote:        false,
-        jobType:       null,
-        salary:        null
+    for (let start = 0; out.length < cap && start <= MAX_START; start += PAGE_SIZE) {
+      const params = new URLSearchParams({
+        keywords: keyword || '',
+        location: location || 'Germany',
+        f_TPR:    'r604800',    // last 7 days
+        start:    String(start)
       });
+
+      await sleep(300 + Math.random() * 400);   // polite delay (anti-bot)
+
+      const r = await fetch(`${GUEST_URL}?${params}`, {
+        headers: browserHeaders('https://www.linkedin.com/jobs/search/', false)
+      });
+      if (!r.ok) break;
+      const pageJobs = parsePage(await r.text(), location);
+      if (!pageJobs.length) break;               // no more results
+      out.push(...pageJobs);
+      if (pageJobs.length < 10) break;           // near the end of results
     }
-    return jobs;
   } catch (err) {
     console.warn('[linkedin] fetch failed:', err.message);
-    return [];
   }
+  return out.slice(0, cap);
 }
 
 module.exports = { fetch: fetch_ };

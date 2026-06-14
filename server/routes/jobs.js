@@ -26,12 +26,14 @@ async function handle(req, res, send, parsedUrl) {
   const region   = params.get('region')   || 'germany';
   const location = params.get('location') || '';
   const distance = params.get('distance') || 'all';
+  const maxParam = Number(params.get('max'));
+  const maxPerSource = Number.isFinite(maxParam) && maxParam > 0 ? maxParam : undefined;
 
   // Optional: filter by saved CV profile
   const token       = authLib.extractToken(req);
   const profileText = token ? storage.getProfile(token) : '';
 
-  const opts = { keyword, sector, region, location };
+  const opts = { keyword, sector, region, location, maxPerSource };
 
   let jobs        = [];
   let source      = 'fallback';

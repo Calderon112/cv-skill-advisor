@@ -6,51 +6,58 @@
  * Supports ?search=keyword for server-side filtering.
  */
 
-const { browserHeaders, stripHtml } = require('./utils');
+const { browserHeaders, stripHtml, sleep, maxPerSource } = require('./utils');
 
 const API_URL = 'https://www.arbeitnow.com/api/job-board-api';
 
-async function fetch_({ keyword } = {}) {
+function normalizeJob(j) {
+  return {
+    platform:      'Arbeitnow',
+    source:        'arbeitnow',
+    title:         j.title || 'Job offer',
+    company:       j.company_name || 'Unknown',
+    location:      j.location || 'Germany',
+    description:   stripHtml(j.description).slice(0, 400),
+    jobUrl:        j.url || null,
+    publishedDate: j.created_at ? new Date(j.created_at * 1000).toISOString().slice(0, 10) : null,
+    sector:        (j.tags || []).slice(0, 3).join(', '),
+    board:         'Arbeitnow',
+    remote:        j.remote || false,
+    jobType:       (j.job_types || []).join(', ') || null,
+    salary:        null
+  };
+}
+
+async function fetch_({ keyword, maxPerSource: mps } = {}) {
+  const cap = maxPerSource({ maxPerSource: mps });
+  const kw  = (keyword || '').toLowerCase();
+  const out = [];
   try {
-    const url = keyword
-      ? `${API_URL}?search=${encodeURIComponent(keyword)}`
-      : `${API_URL}?page=1`;
+    for (let page = 1; out.length < cap; page++) {
+      const url = `${API_URL}?page=${page}` + (keyword ? `&search=${encodeURIComponent(keyword)}` : '');
+      const r = await fetch(url, { headers: browserHeaders('https://www.arbeitnow.com', true) });
+      if (!r.ok) break;
+      const data = await r.json();
+      const jobs = data.data || [];
+      if (!jobs.length) break;
 
-    const r = await fetch(url, {
-      headers: browserHeaders('https://www.arbeitnow.com', true)
-    });
-    if (!r.ok) return [];
-    const data = await r.json();
-    const jobs = data.data || [];
+      // Client-side filter as a safety net when the API ignores ?search
+      const filtered = kw
+        ? jobs.filter(j =>
+            j.title?.toLowerCase().includes(kw) ||
+            (j.tags || []).some(t => t.toLowerCase().includes(kw)))
+        : jobs;
+      out.push(...filtered.map(normalizeJob));
 
-    // Client-side filter when search param is not supported
-    const kw = (keyword || '').toLowerCase();
-    const filtered = kw && jobs.length === (data.data || []).length
-      ? jobs.filter(j =>
-          j.title?.toLowerCase().includes(kw) ||
-          (j.tags || []).some(t => t.toLowerCase().includes(kw))
-        )
-      : jobs;
-
-    return filtered.map(j => ({
-      platform:      'Arbeitnow',
-      source:        'arbeitnow',
-      title:         j.title || 'Job offer',
-      company:       j.company_name || 'Unknown',
-      location:      j.location || 'Germany',
-      description:   stripHtml(j.description).slice(0, 400),
-      jobUrl:        j.url || null,
-      publishedDate: j.created_at ? new Date(j.created_at * 1000).toISOString().slice(0, 10) : null,
-      sector:        (j.tags || []).slice(0, 3).join(', '),
-      board:         'Arbeitnow',
-      remote:        j.remote || false,
-      jobType:       (j.job_types || []).join(', ') || null,
-      salary:        null
-    }));
+      const lastPage = Number(data?.meta?.last_page) || 0;
+      if (lastPage && page >= lastPage) break;     // no more pages
+      if (jobs.length < 100) break;                // short page = last page
+      await sleep(150 + Math.random() * 150);      // polite anti-quota delay
+    }
   } catch (err) {
     console.warn('[arbeitnow] fetch failed:', err.message);
-    return [];
   }
+  return out.slice(0, cap);
 }
 
 module.exports = { fetch: fetch_ };

@@ -163,6 +163,23 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 function stripHtml(str) {
   return (str || '').replace(/<[^>]*>/g, ' ').replace(/\s{2,}/g, ' ').trim();
 }
+
+// ── Scraping depth (how many pages each paginated source pulls) ───────────
+// Default comes from env (SCRAPE_PAGE_DEPTH); a search can override per-request
+// with ?pages=N. Clamped to keep us polite with the free upstream APIs.
+const DEFAULT_PAGE_DEPTH = Math.max(1, Number(process.env.SCRAPE_PAGE_DEPTH) || 5);
+const MAX_PAGE_DEPTH     = 20;
+
+function pageDepth(searchParams) {
+  const requested = Number(searchParams?.get?.('pages'));
+  if (Number.isFinite(requested) && requested > 0) return Math.min(Math.ceil(requested), MAX_PAGE_DEPTH);
+  return Math.min(DEFAULT_PAGE_DEPTH, MAX_PAGE_DEPTH);
+}
+
+// [1, 2, …, depth] — page numbers to fetch in parallel.
+function pageList(depth) {
+  return Array.from({ length: Math.max(1, depth) }, (_, i) => i + 1);
+}
 const NOMINATIM_BASE_URL = 'https://nominatim.openstreetmap.org/search';
 const locationCoordinatesCache = {};
 const NEWPLAN_BASE_URL = 'https://rest.arbeitsagentur.de';
@@ -243,7 +260,7 @@ async function fetchIndeedJobs(keyword, location, country, radius) {
   }
 }
 
-async function fetchJoobleJobs(keyword, location, radius) {
+async function fetchJoobleJobs(keyword, location, radius, depth = DEFAULT_PAGE_DEPTH) {
   if (!JOOBLE_API_KEY) {
     return { run: { note: 'Jooble API key not configured.' }, items: [] };
   }
@@ -251,7 +268,7 @@ async function fetchJoobleJobs(keyword, location, radius) {
   const headers = { 'Content-Type': 'application/json' };
   const url = `https://jooble.org/api/${encodeURIComponent(JOOBLE_API_KEY)}`;
 
-  // Jooble returns ~20 jobs per page, so fetch the first 5 pages in parallel.
+  // Jooble returns ~20 jobs per page; fetch `depth` pages in parallel.
   const fetchPage = async (page) => {
     try {
       const r = await fetch(url, {
@@ -268,7 +285,7 @@ async function fetchJoobleJobs(keyword, location, radius) {
   };
 
   try {
-    const pages = await Promise.all([1, 2, 3, 4, 5].map(fetchPage));
+    const pages = await Promise.all(pageList(depth).map(fetchPage));
     const items = pages.flat().map(normalizeJoobleJobFields);
     return { run: { pages: pages.length }, items };
   } catch (_) {
@@ -278,7 +295,7 @@ async function fetchJoobleJobs(keyword, location, radius) {
 
 // ── Adzuna — free aggregator API (de/ch/us). Surfaces StepStone/Indeed-listed
 // jobs legitimately, without scraping. Needs free ADZUNA_APP_ID + ADZUNA_APP_KEY.
-async function fetchAdzunaJobs(keyword, location, region) {
+async function fetchAdzunaJobs(keyword, location, region, depth = DEFAULT_PAGE_DEPTH) {
   if (!ADZUNA_APP_ID || !ADZUNA_APP_KEY) {
     return { run: { note: 'Adzuna credentials not configured.' }, items: [] };
   }
@@ -293,9 +310,9 @@ async function fetchAdzunaJobs(keyword, location, region) {
   if (location) params.set('where', location);
 
   try {
-    // Adzuna caps results_per_page at 50, so fetch the first 5 pages in
-    // parallel (up to 250 offers) instead of just page 1.
-    const pages = await Promise.all([1, 2, 3, 4, 5].map(p =>
+    // Adzuna caps results_per_page at 50, so fetch `depth` pages in parallel
+    // (50 offers each) instead of just page 1.
+    const pages = await Promise.all(pageList(depth).map(p =>
       fetch(`https://api.adzuna.com/v1/api/jobs/${country}/search/${p}?${params}`, { signal: AbortSignal.timeout(15000) })
         .then(r => r.ok ? r.json() : { results: [] })
         .catch(() => ({ results: [] }))
@@ -350,10 +367,10 @@ function matchesKeyword(tokens, ...fields) {
 }
 
 // ── Arbeitnow — free public API (no key, Germany-focused jobs) ───────────
-async function fetchArbeitnowJobs(keyword) {
+async function fetchArbeitnowJobs(keyword, depth = DEFAULT_PAGE_DEPTH) {
   try {
-    // Fetch pages 1-5 to increase coverage (100 jobs per page)
-    const pages = await Promise.all([1, 2, 3, 4, 5].map(p =>
+    // Fetch `depth` pages to increase coverage (100 jobs per page)
+    const pages = await Promise.all(pageList(depth).map(p =>
       fetch(`${ARBEITNOW_URL}?page=${p}`, { headers: browserHeaders('https://www.arbeitnow.com', true) })
         .then(r => r.ok ? r.json() : { data: [] })
         .catch(() => ({ data: [] }))
@@ -386,9 +403,10 @@ async function fetchArbeitnowJobs(keyword) {
 }
 
 // ── Remotive — free public API (remote jobs worldwide) ───────────────────
-async function fetchRemotiveJobs(keyword) {
+async function fetchRemotiveJobs(keyword, depth = DEFAULT_PAGE_DEPTH) {
   try {
-    const url = `${REMOTIVE_URL}?search=${encodeURIComponent(keyword || '')}&limit=200`;
+    const limit = Math.min(100 * depth, 500); // Remotive serves all jobs in one call
+    const url = `${REMOTIVE_URL}?search=${encodeURIComponent(keyword || '')}&limit=${limit}`;
     const r   = await fetch(url, { headers: browserHeaders('https://remotive.com', true) });
     if (!r.ok) return [];
     const data = await r.json();
@@ -414,67 +432,78 @@ async function fetchRemotiveJobs(keyword) {
 }
 
 // ── LinkedIn — public guest API (no auth, anti-bot headers) ──────────────
-async function fetchLinkedInJobs(keyword, location) {
+function parseLinkedInPage(html, location) {
+  const jobs = [];
+  // Each job card is a <li> containing a <div class="base-card">
+  const liRe = /<li>([\s\S]*?)<\/li>/g;
+  let m;
+  while ((m = liRe.exec(html)) !== null) {
+    const li = m[1];
+    // Title: inside h3 (any class)
+    const title   = (li.match(/<h3[^>]*>\s*<a[^>]*>\s*([^<\n]+)\s*<\/a>/) ||
+                     li.match(/<h3[^>]*>\s*([^<\n]+)\s*<\/h3>/) || [])[1];
+    // Company: inside h4 or .base-search-card__subtitle
+    const company = (li.match(/<h4[^>]*>\s*<a[^>]*>\s*([^<\n]+)\s*<\/a>/) ||
+                     li.match(/<h4[^>]*>\s*([^<\n]+)\s*<\/h4>/) || [])[1];
+    // Location: span with location class
+    const loc     = (li.match(/class="[^"]*location[^"]*"[^>]*>\s*([^<\n]+)/) || [])[1];
+    // Date: datetime attribute
+    const date    = (li.match(/datetime="([^"]+)"/) || [])[1];
+    // URL: href to /jobs/view/
+    const jobUrl  = (li.match(/href="(https:\/\/www\.linkedin\.com\/jobs\/view\/[^?"]+)/) || [])[1];
+
+    const t = stripHtml(title || '').trim();
+    const c = stripHtml(company || '').trim();
+    if (t.length < 2 || c.length < 2) continue;
+
+    jobs.push({
+      platform:      'LinkedIn',
+      source:        'linkedin',
+      title:         t,
+      company:       c,
+      location:      stripHtml(loc || '').trim() || location || 'Germany',
+      description:   'Full description on LinkedIn.',
+      jobUrl:        jobUrl || null,
+      publishedDate: date ? date.slice(0, 10) : null,
+      board:         'LinkedIn',
+      raw:           null
+    });
+  }
+  return jobs;
+}
+
+async function fetchLinkedInJobs(keyword, location, depth = DEFAULT_PAGE_DEPTH) {
+  const out = [];
   try {
-    const params = new URLSearchParams({
-      keywords: keyword || '',
-      location: location || 'Germany',
-      f_TPR:    'r2592000',   // last 30 days
-      start:    '0'
-    });
-    await sleep(300 + Math.random() * 400);
-
-    const r = await fetch(`${LINKEDIN_GUEST_URL}?${params}`, {
-      headers: {
-        'User-Agent':      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Referer':         'https://www.linkedin.com/jobs/search/',
-        'DNT':             '1'
-      }
-    });
-    if (!r.ok) return [];
-    const html = await r.text();
-    const jobs = [];
-
-    // Each job card is a <li> containing a <div class="base-card">
-    const liRe = /<li>([\s\S]*?)<\/li>/g;
-    let m;
-    while ((m = liRe.exec(html)) !== null) {
-      const li = m[1];
-      // Title: inside h3 (any class)
-      const title   = (li.match(/<h3[^>]*>\s*<a[^>]*>\s*([^<\n]+)\s*<\/a>/) ||
-                       li.match(/<h3[^>]*>\s*([^<\n]+)\s*<\/h3>/) || [])[1];
-      // Company: inside h4 or .base-search-card__subtitle
-      const company = (li.match(/<h4[^>]*>\s*<a[^>]*>\s*([^<\n]+)\s*<\/a>/) ||
-                       li.match(/<h4[^>]*>\s*([^<\n]+)\s*<\/h4>/) || [])[1];
-      // Location: span with location class
-      const loc     = (li.match(/class="[^"]*location[^"]*"[^>]*>\s*([^<\n]+)/) || [])[1];
-      // Date: datetime attribute
-      const date    = (li.match(/datetime="([^"]+)"/) || [])[1];
-      // URL: href to /jobs/view/
-      const jobUrl  = (li.match(/href="(https:\/\/www\.linkedin\.com\/jobs\/view\/[^?"]+)/) || [])[1];
-
-      const t = stripHtml(title || '').trim();
-      const c = stripHtml(company || '').trim();
-      if (t.length < 2 || c.length < 2) continue;
-
-      jobs.push({
-        platform:      'LinkedIn',
-        source:        'linkedin',
-        title:         t,
-        company:       c,
-        location:      stripHtml(loc || '').trim() || location || 'Germany',
-        description:   'Full description on LinkedIn.',
-        jobUrl:        jobUrl || null,
-        publishedDate: date ? date.slice(0, 10) : null,
-        board:         'LinkedIn',
-        raw:           null
+    // LinkedIn's guest API returns ~25 cards per `start` offset. Page through
+    // `depth` offsets sequentially with polite delays (anti-bot, ToS-sensitive).
+    for (let page = 0; page < depth; page++) {
+      const params = new URLSearchParams({
+        keywords: keyword || '',
+        location: location || 'Germany',
+        f_TPR:    'r2592000',   // last 30 days
+        start:    String(page * 25)
       });
+      await sleep(300 + Math.random() * 400);
+
+      const r = await fetch(`${LINKEDIN_GUEST_URL}?${params}`, {
+        headers: {
+          'User-Agent':      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Referer':         'https://www.linkedin.com/jobs/search/',
+          'DNT':             '1'
+        }
+      });
+      if (!r.ok) break;
+      const pageJobs = parseLinkedInPage(await r.text(), location);
+      if (!pageJobs.length) break;        // no more results
+      out.push(...pageJobs);
+      if (pageJobs.length < 10) break;    // near the end of the result set
     }
-    return jobs;
+    return out;
   } catch (_) {
-    return [];
+    return out;
   }
 }
 
@@ -881,12 +910,12 @@ function translateForBundes(keyword) {
   return EN_TO_DE[low] || keyword;
 }
 
-function buildBundesQueryParams(searchParams) {
+function buildBundesQueryParams(searchParams, page = 1) {
   const params = new URLSearchParams();
 
   params.set('angebotsart',        '1');
-  params.set('page',               '1');
-  params.set('size',               '200');
+  params.set('page',               String(page));
+  params.set('size',               '100');
   params.set('pav',                'false');
   params.set('veroeffentlichtseit','30');
 
@@ -981,17 +1010,17 @@ function runSourcesWithLogging(sources) {
   ));
 }
 
-function buildAllPlatformSources({ searchParams, keyword, location, region, distance }) {
+function buildAllPlatformSources({ searchParams, keyword, location, region, distance, depth = DEFAULT_PAGE_DEPTH }) {
   const loc = location
     || (region === 'switzerland' ? 'Switzerland' : region === 'usa' ? 'United States' : 'Germany');
   const sources = [
-    { key: 'Bundesagentur', run: () => fetchBundesJobs(searchParams),     pick: r => r?.jobs || [] },
-    { key: 'Arbeitnow',     run: () => fetchArbeitnowJobs(keyword),        pick: r => r || [] },
-    { key: 'LinkedIn',      run: () => fetchLinkedInJobs(keyword, loc),    pick: r => r || [] },
-    { key: 'Remotive',      run: () => fetchRemotiveJobs(keyword),         pick: r => r || [] },
+    { key: 'Bundesagentur', run: () => fetchBundesJobs(searchParams, depth),    pick: r => r?.jobs || [] },
+    { key: 'Arbeitnow',     run: () => fetchArbeitnowJobs(keyword, depth),       pick: r => r || [] },
+    { key: 'LinkedIn',      run: () => fetchLinkedInJobs(keyword, loc, depth),   pick: r => r || [] },
+    { key: 'Remotive',      run: () => fetchRemotiveJobs(keyword, depth),        pick: r => r || [] },
   ];
   if (ADZUNA_APP_ID && ADZUNA_APP_KEY) {
-    sources.push({ key: 'Adzuna', run: () => fetchAdzunaJobs(keyword, loc, region), pick: r => r?.items || [] });
+    sources.push({ key: 'Adzuna', run: () => fetchAdzunaJobs(keyword, loc, region, depth), pick: r => r?.items || [] });
   }
   if (APIFY_TOKEN) {
     sources.push({ key: 'StepStone', run: () => fetchApifyJobs(keyword, loc, distance),                              pick: r => r?.items || [] });
@@ -1000,39 +1029,44 @@ function buildAllPlatformSources({ searchParams, keyword, location, region, dist
   return sources;
 }
 
-async function fetchBundesJobs(searchParams) {
-  const params = buildBundesQueryParams(searchParams);
-  const url = `${JOBS_API_URL}?${params.toString()}`;
-
-  try {
-    const response = await fetch(url, {
-      headers: {
-        'X-API-Key': BUNDES_API_KEY,
-        Accept: 'application/json'
-      },
-      method: 'GET'
-    });
-
-    if (!response.ok) {
+async function fetchBundesJobs(searchParams, depth = DEFAULT_PAGE_DEPTH) {
+  const fetchPage = async (page) => {
+    const params = buildBundesQueryParams(searchParams, page);
+    try {
+      const response = await fetch(`${JOBS_API_URL}?${params.toString()}`, {
+        headers: { 'X-API-Key': BUNDES_API_KEY, Accept: 'application/json' },
+        method: 'GET'
+      });
+      if (!response.ok) return null;
+      const data = await response.json();
+      // Bundesagentur v6 API returns jobs in "ergebnisliste"
+      const hits = data?.ergebnisliste || data?.stelle || data?.stellenangebote || data?.jobs || (Array.isArray(data) ? data : []);
+      if (!Array.isArray(hits)) return null;
+      return { hits, total: data?.maxErgebnisse || hits.length };
+    } catch (_) {
       return null;
     }
+  };
 
-    const data = await response.json();
-    // Bundesagentur v6 API returns jobs in "ergebnisliste"
-    const hits = data?.ergebnisliste || data?.stelle || data?.stellenangebote || data?.jobs || (Array.isArray(data) ? data : []);
+  // Page 1 first — it tells us the total so we don't fetch empty pages.
+  const first = await fetchPage(1);
+  if (!first) return null;
 
-    if (!Array.isArray(hits)) {
-      return null;
-    }
-
-    return {
-      query: Object.fromEntries(params.entries()),
-      total: data?.maxErgebnisse || hits.length,
-      jobs:  hits.map((job) => extractBundesJobFields(job, searchParams))
-    };
-  } catch (error) {
-    return null;
+  const PAGE_SIZE = 100;
+  const totalPages = Math.min(depth, Math.max(1, Math.ceil((first.total || first.hits.length) / PAGE_SIZE)));
+  let hits = first.hits;
+  if (totalPages > 1) {
+    const rest = await Promise.all(
+      Array.from({ length: totalPages - 1 }, (_, i) => fetchPage(i + 2))
+    );
+    rest.forEach(r => { if (r) hits = hits.concat(r.hits); });
   }
+
+  return {
+    query: Object.fromEntries(buildBundesQueryParams(searchParams, 1).entries()),
+    total: first.total,
+    jobs:  hits.map((job) => extractBundesJobFields(job, searchParams))
+  };
 }
 
 async function fetchNewPlanResource(parsedUrl) {
@@ -1576,7 +1610,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // ── Writer Agent: AI cover letter (Claude) with template fallback ────────
+  // ── Writer Agent: AI cover letter (LLM) with template fallback ───────────
   if (parsedUrl.pathname === '/api/generate-cover' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -1605,7 +1639,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // ── AI learning roadmap from skill gaps (Claude) ─────────────────────────
+  // ── AI learning roadmap from skill gaps (LLM) ────────────────────────────
   if (parsedUrl.pathname === '/api/generate-roadmap' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -1633,7 +1667,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // ── Writer Agent: AI CV tailoring (Claude) with template fallback ────────
+  // ── Writer Agent: AI CV tailoring (LLM) with template fallback ───────────
   if (parsedUrl.pathname === '/api/generate-cv' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -1740,6 +1774,7 @@ const server = http.createServer(async (req, res) => {
     const distance = parsedUrl.searchParams.get('distance') || 'all';
     const location = buildSearchLocation(parsedUrl.searchParams);
     const keyword  = buildSearchKeyword(parsedUrl.searchParams);
+    const depth    = pageDepth(parsedUrl.searchParams);
 
     let jobs = [];
     let source = 'fallback';
@@ -1752,7 +1787,7 @@ const server = http.createServer(async (req, res) => {
       // Free sources always run; key/token-gated ones only when configured.
       const sources = buildAllPlatformSources({
         searchParams: parsedUrl.searchParams,
-        keyword, location, region, distance
+        keyword, location, region, distance, depth
       });
       logScrape(`▶ ALL platforms | keyword="${keyword || ''}" location="${location || ''}" | launching: ${sources.map(s => s.key).join(', ')}`);
       const settled = await runSourcesWithLogging(sources);
@@ -1771,20 +1806,20 @@ const server = http.createServer(async (req, res) => {
       logScrape(`■ ALL done | ${merged.length} raw → ${jobs.length} after dedup`);
 
     } else if (platform === 'bundesagentur') {
-      const result = await fetchBundesJobs(parsedUrl.searchParams);
+      const result = await fetchBundesJobs(parsedUrl.searchParams, depth);
       jobs   = result?.jobs || [];
       source = 'bundesagentur';
 
     } else if (platform === 'arbeitnow') {
-      jobs   = await fetchArbeitnowJobs(keyword);
+      jobs   = await fetchArbeitnowJobs(keyword, depth);
       source = 'arbeitnow';
 
     } else if (platform === 'remotive') {
-      jobs   = await fetchRemotiveJobs(keyword);
+      jobs   = await fetchRemotiveJobs(keyword, depth);
       source = 'remotive';
 
     } else if (platform === 'linkedin') {
-      jobs   = await fetchLinkedInJobs(keyword, location || 'Germany');
+      jobs   = await fetchLinkedInJobs(keyword, location || 'Germany', depth);
       source = 'linkedin';
 
     } else if (platform === 'indeed') {
@@ -2005,13 +2040,15 @@ const server = http.createServer(async (req, res) => {
     req.on('data', chunk => { body += chunk; });
     req.on('end', async () => {
       try {
-        const { keyword, location, region, sector, distance } = JSON.parse(body || '{}');
+        const { keyword, location, region, sector, distance, pages } = JSON.parse(body || '{}');
         const searchLocation = location || (region === 'germany' ? 'Germany' : region === 'switzerland' ? 'Switzerland' : 'United States');
         const searchDist     = distance || 'all';
 
         // Build searchParams for Bundesagentur helper (includes keyword + location)
         const sp = new URLSearchParams({ region: region || 'germany', sector: sector || 'all', keyword: keyword || '', location: searchLocation });
+        if (pages) sp.set('pages', String(pages));
         const searchKeyword  = buildSearchKeyword(sp);
+        const depth          = pageDepth(sp);
 
         // Free sources always run; Adzuna + Apify (StepStone/Indeed) are added
         // only when their key/token is configured (see buildAllPlatformSources).
@@ -2020,7 +2057,8 @@ const server = http.createServer(async (req, res) => {
           keyword: searchKeyword,
           location: searchLocation,
           region: region || 'germany',
-          distance: searchDist
+          distance: searchDist,
+          depth
         });
         logScrape(`▶ SCRAPE-ALL | keyword="${searchKeyword || ''}" location="${searchLocation}" | launching: ${sources.map(s => s.key).join(', ')}`);
         const settled = await runSourcesWithLogging(sources);
