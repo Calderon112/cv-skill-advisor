@@ -15,6 +15,8 @@
   <!-- Auth Screen (split-screen) -->
   <div id="auth-modal" class="auth-screen" role="dialog" aria-modal="true">
 
+    <button class="theme-toggle theme-toggle-auth" id="theme-toggle-auth" title="Switch light / dark" aria-label="Switch theme">🌙</button>
+
     <!-- LEFT: Robot Animation Panel -->
     <div class="auth-left">
       <div class="auth-grid-bg"></div>
@@ -886,19 +888,19 @@ gdprInit();
 
 // Light / dark theme toggle (persisted in localStorage)
 (function themeToggle() {
-  const btn = document.getElementById('theme-toggle');
-  if (!btn) return;
+  const btns = document.querySelectorAll('.theme-toggle');
+  if (!btns.length) return;
   const apply = (theme) => {
     if (theme === 'light') document.documentElement.setAttribute('data-theme', 'light');
     else document.documentElement.removeAttribute('data-theme');
-    btn.textContent = theme === 'light' ? '☀️' : '🌙';
+    btns.forEach(b => { b.textContent = theme === 'light' ? '☀️' : '🌙'; });
   };
   apply(localStorage.getItem('careerai-theme') || 'dark');
-  btn.addEventListener('click', () => {
+  btns.forEach(btn => btn.addEventListener('click', () => {
     const next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
     try { localStorage.setItem('careerai-theme', next); } catch (e) {}
     apply(next);
-  });
+  }));
 })();
 
 // Robot speech bubble — alternating phrases, synced with the pop animation

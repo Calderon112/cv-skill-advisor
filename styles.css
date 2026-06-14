@@ -67,6 +67,15 @@
   transition: background 0.15s, border-color 0.15s;
 }
 .theme-toggle:hover { background: var(--bg-hover); border-color: var(--border-hi); }
+.theme-toggle-auth {
+  position: absolute;
+  top: 18px; right: 18px;
+  z-index: 120;
+  width: 38px; height: 38px;
+  font-size: 17px;
+  background: rgba(255,255,255,0.06);
+  backdrop-filter: blur(6px);
+}
 
 /* ── Reset ─────────────────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
