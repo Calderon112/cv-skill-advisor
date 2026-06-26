@@ -1407,6 +1407,67 @@ async function extractPdfText(buffer) {
     .trim();
 }
 
+// Scan a PDF for embedded JPEGs — dependency-free. JPEGs are stored as `/DCTDecode`
+// image XObjects whose bytes sit verbatim between `stream` and `endstream` (no
+// inflate needed), so we can slice them out and read their declared /Width//Height.
+function scanPdfJpegs(buffer) {
+  const bin = buffer.toString('latin1');
+  const re = /DCTDecode/g;
+  const out = [];
+  let m;
+  const MIN_BYTES = 1500;
+  while ((m = re.exec(bin)) !== null) {
+    // Dimensions from this image's OWN dict — the values closest to the filter,
+    // not a neighbouring object's.
+    const dict = bin.slice(Math.max(0, m.index - 600), m.index + 60);
+    const ws = dict.match(/\/Width\s+(\d+)/g);
+    const hs = dict.match(/\/Height\s+(\d+)/g);
+    const w = ws ? parseInt(ws[ws.length - 1].replace(/\D+/g, ''), 10) : 0;
+    const h = hs ? parseInt(hs[hs.length - 1].replace(/\D+/g, ''), 10) : 0;
+    const si = bin.indexOf('stream', m.index);
+    if (si === -1) continue;
+    let start = si + 'stream'.length;
+    if (bin[start] === '\r') start++;
+    if (bin[start] === '\n') start++;
+    const ei = bin.indexOf('endstream', start);
+    if (ei === -1) continue;
+    if (ei - start < MIN_BYTES) continue;
+    let jpeg = buffer.slice(start, ei);
+    if (jpeg[0] !== 0xFF || jpeg[1] !== 0xD8) {
+      const soi = jpeg.indexOf(Buffer.from([0xFF, 0xD8]));
+      if (soi === -1) continue;
+      jpeg = jpeg.slice(soi);
+    }
+    const eoi = jpeg.lastIndexOf(Buffer.from([0xFF, 0xD9]));
+    if (eoi > 0) jpeg = jpeg.slice(0, eoi + 2);
+    out.push({ dataUrl: 'data:image/jpeg;base64,' + jpeg.toString('base64'), w, h, bytes: jpeg.length });
+  }
+  return out;
+}
+
+// The profile photo: the largest JPEG that PLAUSIBLY looks like a headshot — roughly
+// portrait/square (aspect ratio ~0.6–1.9). This rejects full-page sidebars/banners
+// (e.g. an image-based template whose whole left column is one tall 546×1712 graphic)
+// so we never insert a wrong image; returns null when there is no plausible headshot.
+function extractPdfImage(buffer) {
+  const cands = scanPdfJpegs(buffer)
+    .filter(im => !im.w || !im.h || (im.h / im.w >= 0.6 && im.h / im.w <= 1.9))
+    .sort((a, b) => b.bytes - a.bytes);
+  return cands.length ? cands[0].dataUrl : null;
+}
+
+// Large JPEG "panels" worth OCR-ing: image-based CV templates bake the name /
+// contact / skills text into a sidebar or banner graphic. We return only NON-headshot
+// images (aspect ratio outside the portrait range) so a normal CV's photo is never
+// OCR-ed needlessly; largest first, capped for payload size.
+function extractPdfOcrImages(buffer) {
+  return scanPdfJpegs(buffer)
+    .filter(im => im.bytes > 8000 && im.w && im.h && (im.h / im.w < 0.6 || im.h / im.w > 1.9))
+    .sort((a, b) => b.bytes - a.bytes)
+    .slice(0, 3)
+    .map(im => im.dataUrl);
+}
+
 function analyzeRoles(foundKeys) {
   return roles
     .map(role => {
@@ -2158,7 +2219,10 @@ const server = http.createServer(async (req, res) => {
           sendJson(res, 422, { error: 'No readable text found in PDF. Please paste your CV manually.' });
           return;
         }
-        sendJson(res, 200, { text });
+        let photo = null, images = [];
+        try { photo = extractPdfImage(buffer); } catch (_) { /* photo is best-effort */ }
+        try { images = extractPdfOcrImages(buffer); } catch (_) { /* OCR images best-effort */ }
+        sendJson(res, 200, { text, photo, images });
       } catch (e) {
         sendJson(res, 400, { error: 'PDF parse failed: ' + e.message });
       }

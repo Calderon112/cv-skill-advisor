@@ -549,7 +549,66 @@ async function extractPdfText(file) {
   });
   const data = await r.json();
   if (!r.ok) throw new Error(data.error || 'PDF parse failed');
-  return data.text || '';
+  return { text: data.text || '', photo: data.photo || '', images: data.images || [] };
+}
+
+// ── OCR (image-based CVs) ───────────────────────────────────────────────────
+// Some CV templates bake the name/contact/skills column into a graphic, so that
+// text is invisible to any PDF text parser. We OCR those image panels with
+// tesseract.js (German + English), loaded lazily from CDN only when needed.
+let _tesseractLoading = null;
+function loadTesseract() {
+  if (window.Tesseract) return Promise.resolve(window.Tesseract);
+  if (_tesseractLoading) return _tesseractLoading;
+  _tesseractLoading = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+    s.onload = () => resolve(window.Tesseract);
+    s.onerror = () => reject(new Error('Could not load the OCR library (are you offline?)'));
+    document.head.appendChild(s);
+  });
+  return _tesseractLoading;
+}
+
+async function ocrImages(images, onProgress) {
+  if (!images || !images.length) return '';
+  const T = await loadTesseract();
+  const worker = await T.createWorker(['deu', 'eng']);
+  let all = '';
+  try {
+    for (let i = 0; i < images.length; i++) {
+      if (onProgress) onProgress(i + 1, images.length);
+      const { data: { text } } = await worker.recognize(images[i]);
+      if (text && text.trim()) all += '\n' + text.trim();
+    }
+  } finally {
+    await worker.terminate();
+  }
+  return all.trim();
+}
+
+// Downscale any image data URL to a compact JPEG (keeps localStorage small) and
+// store it as the profile photo. Shared by the manual upload and PDF extraction.
+function setProfilePhoto(dataUrl) {
+  return new Promise(resolve => {
+    if (!dataUrl) { resolve(false); return; }
+    const img = new Image();
+    img.onload = () => {
+      const max = 320;
+      let { width, height } = img;
+      if (width > height && width > max) { height = height * max / width; width = max; }
+      else if (height > max) { width = width * max / height; height = max; }
+      const canvas = document.createElement('canvas');
+      canvas.width = width; canvas.height = height;
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      if (!state.profile) state.profile = emptyProfile();
+      state.profile.photo = canvas.toDataURL('image/jpeg', 0.82);
+      saveProfileToStorage();
+      resolve(true);
+    };
+    img.onerror = () => resolve(false);
+    img.src = dataUrl;
+  });
 }
 
 // ── Drop zone ─────────────────────────────────────────────────────────────
@@ -579,10 +638,33 @@ async function handleCvFile(file) {
     const isPdf = file.name.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf';
     if (isPdf) {
       $('cv-status-pill').textContent = 'Reading PDF…';
-      const text = await extractPdfText(file);
-      if (!text) { toast('No selectable text in PDF. Paste your CV manually.', 'error'); return; }
-      ta.value = text;
-      toast('PDF loaded successfully.', 'success');
+      const { text, photo, images } = await extractPdfText(file);
+      let fullText = text || '';
+      let gotPhoto = false;
+      if (photo) gotPhoto = await setProfilePhoto(photo);
+
+      // Image-based CV: OCR the graphic panels to recover hidden name/contact/skills.
+      let ocrText = '';
+      if (images && images.length) {
+        $('cv-status-pill').textContent = 'Reading image (OCR)…';
+        toast('Image-based CV detected — running OCR…', 'info');
+        try {
+          ocrText = await ocrImages(images, (i, n) => {
+            $('cv-status-pill').textContent = `OCR ${i}/${n}…`;
+          });
+        } catch (e) {
+          toast('OCR unavailable: ' + e.message, 'error');
+        }
+        if (ocrText) fullText = (fullText + '\n\n' + ocrText).trim();
+      }
+
+      if (!fullText) { toast('No readable text in PDF. Paste your CV manually.', 'error'); return; }
+      ta.value = fullText;
+      if (gotPhoto && typeof renderProfileForm === 'function') renderProfileForm();
+      const bits = [];
+      if (gotPhoto) bits.push('photo extracted');
+      if (ocrText) bits.push('text recovered via OCR');
+      toast(bits.length ? `PDF loaded — ${bits.join(' + ')}.` : 'PDF loaded successfully.', 'success');
     } else {
       ta.value = await file.text();
       toast('File loaded.', 'success');
@@ -1245,11 +1327,27 @@ function readWriterOptions(prefix) {
   };
 }
 
+// jsPDF's standard fonts only cover Windows-1252, so decorative Unicode (box-drawing
+// rules, ✓/○ bullets, arrows) renders as garbage like "%P" / "%Ë". Replace those with
+// safe equivalents before drawing. The bullet "•" and dashes are CP1252-safe and kept.
+function pdfSafeText(s) {
+  return String(s)
+    .replace(/[╔╗╚╝╠╣╦╩╬]/g, '')        // box corners/junctions → drop
+    .replace(/[═━─_]{3,}/g, m => '-'.repeat(Math.min(m.length, 60))) // rules → dashes
+    .replace(/[═━─]/g, '-')
+    .replace(/[║│┃]/g, '|')
+    .replace(/[✓✔☑]/g, '•')          // checkmarks → bullet
+    .replace(/[○◦▪▫◆■□●]/g, '•')     // misc bullets → bullet
+    .replace(/→/g, '->').replace(/←/g, '<-').replace(/↑/g, '^').replace(/↓/g, 'v')
+    .replace(/[‘’]/g, "'").replace(/[“”]/g, '"');
+}
+
 // Render any plain-text document to a clean, paginated PDF (jsPDF).
-function downloadTextAsPDF(text, filename, title) {
+function downloadTextAsPDF(rawText, filename, title) {
   const lib = window.jspdf;
   if (!lib || !lib.jsPDF) { toast('PDF library not loaded — refresh the page.', 'error'); return; }
-  if (!text || !text.trim()) { toast('Nothing to export yet.', 'error'); return; }
+  if (!rawText || !rawText.trim()) { toast('Nothing to export yet.', 'error'); return; }
+  const text = pdfSafeText(rawText);
 
   const doc = new lib.jsPDF({ unit: 'pt', format: 'a4' });
   const PAGE_W = doc.internal.pageSize.getWidth();
@@ -1279,8 +1377,14 @@ function downloadTextAsPDF(text, filename, title) {
 
 const _cvPdfBtn = $('download-cv-pdf-btn');
 if (_cvPdfBtn) _cvPdfBtn.addEventListener('click', () => {
-  const name = [state.profile?.firstName, state.profile?.lastName].filter(Boolean).join('_') || 'CareerAI';
-  downloadTextAsPDF($('generated-cv-output').value, `${name}_CV.pdf`, 'Curriculum Vitae');
+  // Download the polished, photo-bearing CV (profile design), tailored to the
+  // typed target role — same clean output as the Profile and per-job downloads.
+  const target = $('target-job-input')?.value.trim();
+  const built = buildProfilePdfDoc(state.profile, target ? { title: target } : null);
+  if (!built) return;
+  const fileName = (built.name.replace(/\s+/g, '_') || 'CareerAI') + '_CV.pdf';
+  built.doc.save(fileName);
+  toast(`${fileName} downloaded!`, 'success');
 });
 const _coverPdfBtn = $('download-cover-pdf-btn');
 if (_coverPdfBtn) _coverPdfBtn.addEventListener('click', () => {
@@ -1288,63 +1392,74 @@ if (_coverPdfBtn) _coverPdfBtn.addEventListener('click', () => {
   downloadTextAsPDF($('generated-cover-output').value, `${co}_Cover_Letter.pdf`, 'Cover Letter');
 });
 
+// Clean, ATS-friendly plain-text CV built from the structured profile (falls back to
+// raw CV text). Uses only Windows-1252-safe characters so it reads well on screen,
+// copies cleanly, and exports without garbage. The downloadable PDF uses the polished
+// design (buildProfilePdfDoc); this text is the editable preview / fallback.
 function buildImprovedCV(cvText, targetJob, analysis) {
-  const skills   = analysis?.foundSkills?.map(s => s.label) || [];
-  const domain   = analysis?.domain || 'Technology';
-  const topRole  = targetJob || analysis?.roles?.[0]?.name || `${domain} Professional`;
-  const date     = new Date().toLocaleDateString('en-GB');
-  const missing  = analysis?.missingSkills?.slice(0, 3).map(s => s.label) || [];
+  const p = state.profile || {};
+  const name    = [p.firstName, p.lastName].filter(Boolean).join(' ') || '[Your Name]';
+  const topRole = targetJob || p.title || analysis?.roles?.[0]?.name || 'Professional';
+  const contact = [p.email, p.phone, p.location, p.nationality].filter(Boolean).join(' • ');
+  const skills  = (p.skills && p.skills.length)
+    ? p.skills.map(s => s.label || s)
+    : (analysis?.foundSkills?.map(s => s.label) || []);
+  const date = new Date().toLocaleDateString('en-GB');
+  const rule = '-'.repeat(54);
+  const out = [];
 
-  const domainSections = {
-    'Software Development':  'TECHNICAL PROJECTS\n──────────────────────────────────────────────────────────\n  [Project Name] — Brief description and technologies used\n  [Project Name] — Brief description and technologies used',
-    'DevOps & Cloud':        'INFRASTRUCTURE & TOOLS\n──────────────────────────────────────────────────────────\n  Cloud: [AWS / Azure / GCP]\n  IaC:   [Terraform / Ansible]\n  CI/CD: [Jenkins / GitHub Actions]',
-    'Data & AI':             'DATA PROJECTS\n──────────────────────────────────────────────────────────\n  [Dataset/Project] — Model type, accuracy, outcome\n  [Dashboard/Report] — Tools, audience, business impact',
-    'Cybersecurity':         'CERTIFICATIONS & TOOLS\n──────────────────────────────────────────────────────────\n  [CompTIA Security+, CEH, OSCP or equivalent]\n  Tools: [Splunk, Nessus, Burp Suite, Wireshark]',
-    'Finance & Accounting':  'FINANCIAL ACHIEVEMENTS\n──────────────────────────────────────────────────────────\n  [Reduced costs by X% / Managed portfolio of €Xm]\n  [Certification: ACCA, CFA, CPA or equivalent]',
-    'Marketing & Sales':     'CAMPAIGN RESULTS\n──────────────────────────────────────────────────────────\n  [Campaign name] — +X% leads, €X revenue generated\n  [Channel/Tool] — X% CTR, X ROAS',
-    'Design & UX':           'PORTFOLIO HIGHLIGHTS\n──────────────────────────────────────────────────────────\n  [Project] — Problem, process, and measurable outcome\n  Portfolio: [figma.com/xxx or behance.net/xxx]',
-    'Healthcare & Nursing':  'PRAKTISCHE ERFAHRUNGEN\n──────────────────────────────────────────────────────────\n  [Institution] — Bereich, Dauer, Hauptaufgaben\n  [Institution] — Bereich, Dauer, Hauptaufgaben\n\nZERTIFIKATE & FORTBILDUNGEN\n──────────────────────────────────────────────────────────\n  [Pflegehilfskraft-Ausbildung · Institution · Jahr]\n  [Erste-Hilfe-Kurs · Jahr] · [Hygieneschulung · Jahr]',
-  };
+  out.push(name);
+  out.push(topRole);
+  if (contact)      out.push(contact);
+  if (p.languages)  out.push('Languages: ' + p.languages);
+  out.push('');
 
-  const domainSection = domainSections[domain] || domainSections['Software Development'];
+  out.push('PROFESSIONAL PROFILE', rule);
+  out.push(p.summary
+    || `Results-driven ${topRole} with expertise in ${skills.slice(0, 4).join(', ') || 'the field'}. `
+       + 'Committed to delivering high-quality work and continuously developing technical skills.');
+  out.push('');
 
-  return `╔══════════════════════════════════════════════════════════╗
-║            CURRICULUM VITAE — CareerAI Draft              ║
-╚══════════════════════════════════════════════════════════╝
+  out.push('CORE COMPETENCIES', rule);
+  out.push(skills.length ? skills.map(s => '• ' + s).join('\n') : '• [Add your key skills here]');
+  out.push('');
 
-PROFESSIONAL PROFILE
-──────────────────────────────────────────────────────────
-Results-driven ${topRole} with expertise in ${
-  skills.length ? skills.slice(0, 4).join(', ') : domain.toLowerCase() + ' best practices'
-}. Passionate about delivering high-quality work and continuously expanding technical skills to meet evolving industry demands.
+  if (p.experience && p.experience.length) {
+    out.push('PROFESSIONAL EXPERIENCE', rule);
+    p.experience.forEach(x => {
+      const head  = [x.role, x.org].filter(Boolean).join(' — ');
+      const dates = [x.start, x.end].filter(Boolean).join(' – ');
+      if (head)       out.push(head + (dates ? `  (${dates})` : ''));
+      if (x.location) out.push(x.location);
+      if (x.desc)     out.push(x.desc);
+      out.push('');
+    });
+  } else if (cvText && cvText.trim()) {
+    out.push('PROFESSIONAL EXPERIENCE', rule);
+    cvText.split('\n').filter(l => l.trim()).slice(0, 30).forEach(l => out.push(l.trim()));
+    out.push('');
+  }
 
-  Target Role:  ${topRole}
-  Domain:       ${domain}
-  Generated:    ${date}
+  if (p.education && p.education.length) {
+    out.push('EDUCATION', rule);
+    p.education.forEach(x => {
+      const head  = [x.degree, x.org].filter(Boolean).join(' — ');
+      const dates = [x.start, x.end].filter(Boolean).join(' – ');
+      if (head)       out.push(head + (dates ? `  (${dates})` : ''));
+      if (x.location) out.push(x.location);
+    });
+    out.push('');
+  }
 
-CORE COMPETENCIES
-──────────────────────────────────────────────────────────
-${skills.length
-  ? skills.map(s => `  ✓  ${s}`).join('\n')
-  : '  ✓  [Add your key skills here]'}
-${missing.length ? '\n  SKILLS TO DEVELOP SOON:\n' + missing.map(s => `  ○  ${s}`).join('\n') : ''}
+  if (p.certifications && p.certifications.length) {
+    out.push('CERTIFICATIONS', rule);
+    p.certifications.forEach(c => out.push('• ' + [c.name, c.year].filter(Boolean).join(' · ')));
+    out.push('');
+  }
 
-PROFESSIONAL EXPERIENCE
-──────────────────────────────────────────────────────────
-${cvText.split('\n').filter(l => l.trim()).slice(0, 30).map(l => '  ' + l).join('\n')}
-
-${domainSection}
-
-EDUCATION
-──────────────────────────────────────────────────────────
-  [Degree · Institution · Year]
-
-LANGUAGES
-──────────────────────────────────────────────────────────
-  [e.g. English (fluent) · German (B2) · French (A2)]
-
-──────────────────────────────────────────────────────────
-Generated by CareerAI Writer Agent — ${date}`;
+  out.push(rule);
+  out.push(`Tailored for: ${topRole}  •  ${date}`);
+  return out.join('\n');
 }
 
 function buildCoverLetter({ jobTitle, company, name, skills: skillsStr }) {
@@ -1391,7 +1506,7 @@ Thank you for considering my application.
 Yours sincerely,
 ${name || '[Your Name]'}
 
-──────────────────────────────────────────────────────────
+------------------------------------------------------
 Generated by CareerAI Writer Agent — ${date}`;
 }
 
@@ -2036,10 +2151,11 @@ async function generateJobCover() {
   const name = [p.firstName, p.lastName].filter(Boolean).join(' ');
   const skills = (p.skills || []).slice(0, 6).map(s => s.label || s).join(', ');
   const cvText = (typeof profileToText === 'function' ? profileToText() : '') || state.cvText || '';
+  const options = { ...readWriterOptions('cover-opt'), language: $('jw-lang')?.value || 'auto' };
   let text = '', usedAI = false;
   try {
     const r = await api.post('/api/generate-cover', {
-      jobTitle: app.title, company: app.company, name, skills, cvText, jobDescription: app.description || ''
+      jobTitle: app.title, company: app.company, name, skills, cvText, jobDescription: app.description || '', options
     });
     if (r && r.ok && r.source === 'ai' && r.text) { text = r.text; usedAI = true; }
   } catch (_) {}
@@ -2052,6 +2168,40 @@ async function generateJobCover() {
   $('jw-docs')?.classList.add('hidden');
   btn.disabled = false; btn.innerHTML = orig;
   toast(usedAI ? 'Cover letter generated (AI)!' : 'Cover letter generated.', 'success');
+}
+
+// Detect a document's language (DE vs EN) from its text — used to keep the email in
+// the same language the AI wrote the cover letter in when "Auto" is selected.
+function detectDocLang(text) {
+  const t = String(text || '');
+  if (/[äöüß]|\b(und|der|die|das|für|mit|nicht|eine|Ihre|Sehr geehrte|Bewerbung|Kenntnisse|Erfahrung|Stelle)\b/.test(t)) return 'de';
+  return 'en';
+}
+
+// Localised application email (subject + body) so it matches the cover letter's language.
+function buildApplicationEmail({ title, company, name, email, lang }) {
+  if (lang === 'de') {
+    return {
+      subject: `Bewerbung als ${title}${company ? ' bei ' + company : ''}`,
+      body: `Sehr geehrte Damen und Herren,\n\n`
+        + `anbei sende ich Ihnen meinen Lebenslauf und mein Anschreiben für die Position als ${title}`
+        + `${company ? ' bei ' + company : ''}. Über die Gelegenheit zu einem persönlichen Gespräch würde ich mich sehr freuen.\n\n`
+        + `Mit freundlichen Grüßen,\n${name || '[Ihr Name]'}\n${email || ''}`,
+    };
+  }
+  return {
+    subject: `Application for ${title}${company ? ' at ' + company : ''}`,
+    body: `Dear Hiring Team,\n\nPlease find attached my CV and cover letter for the ${title} position`
+      + `${company ? ' at ' + company : ''}. I would welcome the opportunity to discuss how my `
+      + `background fits your needs.\n\nKind regards,\n${name || '[Your name]'}\n${email || ''}`,
+  };
+}
+
+// Gmail compose URL (web). Attachments can't be pre-filled by any site (browser
+// security), so we pre-fill recipient/subject/body and the user attaches the PDFs.
+function gmailComposeUrl({ to, subject, body }) {
+  const q = new URLSearchParams({ view: 'cm', fs: '1', to: to || '', su: subject || '', body: body || '' });
+  return 'https://mail.google.com/mail/?' + q.toString();
 }
 
 // One-click: generate CV + cover letter + application email for this job.
@@ -2073,7 +2223,8 @@ async function generateJobDocs() {
   const name = [p.firstName, p.lastName].filter(Boolean).join(' ');
   const skills = (p.skills || []).slice(0, 6).map(s => s.label || s).join(', ');
   const cvText = (typeof profileToText === 'function' ? profileToText() : '') || state.cvText || '';
-  const opts = readWriterOptions('cover-opt');
+  const langChoice = $('jw-lang')?.value || 'auto';
+  const opts = { ...readWriterOptions('cover-opt'), language: langChoice };
 
   const [cover, cv] = await Promise.all([
     genDoc('/api/generate-cover',
@@ -2084,21 +2235,21 @@ async function generateJobDocs() {
       () => (typeof buildImprovedCV === 'function' ? buildImprovedCV(cvText, app.title, state.analysis) : cvText)),
   ]);
 
-  const email = `Subject: Application for ${app.title}${app.company ? ' at ' + app.company : ''}\n\n`
-    + `Dear Hiring Team,\n\nPlease find attached my CV and cover letter for the ${app.title} position`
-    + `${app.company ? ' at ' + app.company : ''}. I would welcome the opportunity to discuss how my `
-    + `background fits your needs.\n\nKind regards,\n${name || '[Your name]'}\n${p.email || ''}`;
+  // Pre-compose the email in the SAME language as the cover letter. When "Auto",
+  // follow the language the AI actually wrote the cover in (detected from its text).
+  const emailLang = langChoice !== 'auto' ? langChoice : detectDocLang(cover.text);
+  const mail = buildApplicationEmail({ title: app.title, company: app.company, name, email: p.email, lang: emailLang });
 
-  const documents = { cv: cv.text, cover: cover.text, email, generatedAt: new Date().toISOString(), ai: !!(cover.ai || cv.ai) };
+  const documents = { cv: cv.text, cover: cover.text, mail, generatedAt: new Date().toISOString(), ai: !!(cover.ai || cv.ai) };
   renderJobDocs(app, documents);
-  state.docsCount += 3; updateStats();
+  state.docsCount += 2; updateStats();
 
   // Persist the generated documents on the application so they survive a refresh.
   await updateAppData(app.id, { documents });
   renderKanban();
 
   btn.disabled = false; btn.innerHTML = orig;
-  toast((cover.ai || cv.ai) ? 'CV, cover letter & email generated & saved (AI)!' : 'CV, cover letter & email generated & saved.', 'success');
+  toast((cover.ai || cv.ai) ? 'CV & cover letter generated & saved (AI)!' : 'CV & cover letter generated & saved.', 'success');
 }
 
 function renderJobDocs(app, docs) {
@@ -2117,18 +2268,43 @@ function renderJobDocs(app, docs) {
   const savedNote = docs.generatedAt
     ? `<div class="hint" style="margin-bottom:8px">Saved documents (generated ${new Date(docs.generatedAt).toLocaleString('en-GB')}${docs.ai ? ', AI' : ''}). Click <strong>Generate documents</strong> to refresh.</div>`
     : '';
+  // Pre-composed email (subject + body). Support legacy saved docs that stored a
+  // single `email` string by splitting its first "Subject:/Betreff:" line off.
+  let mail = docs.mail;
+  if (!mail && docs.email) {
+    const lines = String(docs.email).split('\n');
+    const subj = (lines[0].match(/^(?:Subject|Betreff):\s*(.*)$/) || [])[1] || '';
+    mail = { subject: subj, body: lines.slice(subj ? 1 : 0).join('\n').trim() };
+  }
+
   wrap.innerHTML = savedNote
     + block('cv', 'Tailored CV', docs.cv || '')
     + block('cover', 'Cover Letter', docs.cover || '')
-    + block('email', 'Application Email', docs.email || '');
+    + (mail ? `
+    <div class="jw-doc">
+      <div class="jw-doc-head"><strong>Application email</strong></div>
+      <div class="hint" style="margin:2px 0 8px">Opens Gmail with the subject &amp; message ready. Attach the CV &amp; cover letter PDFs (downloaded above) — sites can't pre-attach files.</div>
+      <button id="jw-gmail-btn" class="btn btn-primary btn-sm">✉ Open in Gmail</button>
+    </div>` : '');
   wrap.classList.remove('hidden');
 
-  const pdfTitles = { cv: 'Curriculum Vitae', cover: 'Cover Letter', email: 'Application Email' };
   const tag = (app.company || 'job').replace(/\s+/g, '_');
   wrap.querySelectorAll('[data-copy]').forEach(b =>
     b.addEventListener('click', () => copyText(`jw-doc-${b.dataset.copy}`)));
   wrap.querySelectorAll('[data-pdf]').forEach(b =>
-    b.addEventListener('click', () => downloadTextAsPDF($(`jw-doc-${b.dataset.pdf}`).value, `${tag}_${b.dataset.pdf}.pdf`, pdfTitles[b.dataset.pdf])));
+    b.addEventListener('click', () => {
+      const key = b.dataset.pdf;
+      // The CV downloads in the polished, photo-bearing profile design (tailored to
+      // this job's title); the cover letter exports as clean text.
+      if (key === 'cv') downloadTailoredCvPDF(app);
+      else downloadTextAsPDF($(`jw-doc-${key}`).value, `${tag}_${key}.pdf`, 'Cover Letter');
+    }));
+
+  const gmailBtn = $('jw-gmail-btn');
+  if (gmailBtn && mail) gmailBtn.addEventListener('click', () => {
+    window.open(gmailComposeUrl({ subject: mail.subject, body: mail.body }), '_blank', 'noopener');
+    toast('Gmail opened — now attach your CV & cover letter PDFs.', 'info');
+  });
 }
 
 (function wireJobWorkspace() {
@@ -2601,13 +2777,18 @@ if (_photoRemove) _photoRemove.addEventListener('click', () => {
   state.profile.photo = ''; saveProfileToStorage(); renderProfileForm(); toast('Photo removed.', 'info');
 });
 
-// ── Profile: Download as PDF (jsPDF — direct download) ──────────────────────
-function downloadProfilePDF() {
-  const p = state.profile || emptyProfile();
+// ── Profile → structured CV PDF (jsPDF) ─────────────────────────────────────
+// Builds the polished, photo-bearing CV from the structured profile and returns
+// the jsPDF doc. `overrides` lets callers tailor a copy (e.g. the target job title)
+// without mutating the saved profile. This is the single CV renderer used both by
+// the Profile "Download PDF" button and the per-job "Tailored CV" export, so every
+// generated CV shares the same clean design.
+function buildProfilePdfDoc(profile, overrides) {
+  const p = Object.assign({}, profile || emptyProfile(), overrides || {});
   const name = [p.firstName, p.lastName].filter(Boolean).join(' ') || 'Your Name';
 
   const lib = window.jspdf;
-  if (!lib || !lib.jsPDF) { toast('PDF library not loaded — try refreshing the page.', 'error'); return; }
+  if (!lib || !lib.jsPDF) { toast('PDF library not loaded — try refreshing the page.', 'error'); return null; }
 
   const doc = new lib.jsPDF({ unit: 'pt', format: 'a4' });
   const PAGE_W = doc.internal.pageSize.getWidth();
@@ -2710,9 +2891,25 @@ function downloadProfilePDF() {
     });
   }
 
-  const fileName = (name.replace(/\s+/g, '_') || 'CareerAI') + '_CV.pdf';
-  doc.save(fileName);
+  return { doc, name };
+}
+
+// Profile page: download the CV exactly as the profile defines it.
+function downloadProfilePDF() {
+  const built = buildProfilePdfDoc(state.profile);
+  if (!built) return;
+  const fileName = (built.name.replace(/\s+/g, '_') || 'CareerAI') + '_CV.pdf';
+  built.doc.save(fileName);
   toast(`${fileName} downloaded!`, 'success');
+}
+
+// Per-job: same polished design + photo, with the title set to the target role.
+function downloadTailoredCvPDF(app) {
+  const built = buildProfilePdfDoc(state.profile, { title: (app && app.title) || state.profile?.title });
+  if (!built) return;
+  const tag = ((app && app.company) || 'job').replace(/\s+/g, '_');
+  built.doc.save(`${tag}_CV.pdf`);
+  toast(`${tag}_CV.pdf downloaded!`, 'success');
 }
 
 ['pf-download-pdf', 'pf-download-pdf-2'].forEach(id => {

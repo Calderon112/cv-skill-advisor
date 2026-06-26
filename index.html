@@ -786,7 +786,14 @@
         <button id="jw-update-profile" class="btn btn-ghost btn-sm">✎ Update profile</button>
         <button id="jw-recheck" class="btn btn-ghost btn-sm">↻ Re-check match</button>
         <button id="jw-cover" class="btn btn-ghost btn-sm">Cover letter only</button>
-        <button id="jw-docs-btn" class="btn btn-primary btn-sm">Generate documents (CV + letter + email)</button>
+        <label for="jw-lang" style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-muted)">Language
+          <select id="jw-lang" class="field" style="width:auto;padding:6px 8px">
+            <option value="auto">Auto (match job)</option>
+            <option value="en">English</option>
+            <option value="de">Deutsch</option>
+          </select>
+        </label>
+        <button id="jw-docs-btn" class="btn btn-primary btn-sm">Generate documents (CV + cover letter)</button>
       </div>
       <textarea id="jw-cover-output" class="field hidden" rows="12" readonly placeholder="Your cover letter will appear here…"></textarea>
       <div id="jw-docs" class="jw-docs hidden"></div>
