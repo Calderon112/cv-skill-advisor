@@ -8,6 +8,8 @@ const zlib   = require('zlib');
 const crypto = require('crypto');
 const agents = require('./server/agents.js');
 const dedup  = require('./server/dedup.js');
+const rerank = require('./rerank.js');
+const { buildReport } = require('./server/report.js');
 const SecurityLearning = require('./security-learning.js');
 
 // ── Colour helpers ────────────────────────────────────────────────────────
@@ -521,6 +523,41 @@ test('dedupeJobs: handles empty input', () => {
   assertEqual(dedup.dedupeJobs([]).length, 0, 'empty');
 });
 
+// ── 12. Outcome-based re-ranking (rerank.js) ─────────────────────────────
+section('Outcome-based re-ranking');
+
+const detectKeys = (text) => findSkills(text).map(s => s.key);
+
+test('successSignal: aggregates skills only from interview/offer apps', () => {
+  const apps = [
+    { status: 'interview', title: 'SOC Analyst with linux and python' },
+    { status: 'offer',     title: 'Penetration tester python' },
+    { status: 'applied',   title: 'Cloud security engineer' }, // ignored (not positive)
+  ];
+  const sig = rerank.successSignal(apps, detectKeys);
+  assertEqual(sig.count, 2, 'only positive apps counted');
+  assert(sig.skills['python'] >= 2, 'python aggregated from both successes');
+});
+
+test('boostFor: rewards jobs sharing skills with past successes', () => {
+  const sig = rerank.successSignal(
+    [{ status: 'offer', title: 'linux python network security' }], detectKeys);
+  const { points, matched } = rerank.boostFor(['python', 'linux'], sig);
+  assert(points > 0, 'positive boost');
+  assertIncludes(matched, 'python', 'python matched');
+});
+
+test('boostFor: no signal → no boost', () => {
+  const { points } = rerank.boostFor(['python'], { count: 0, skills: {} });
+  assertEqual(points, 0, 'zero boost without history');
+});
+
+test('boostFor: boost is capped at MAX_BOOST', () => {
+  const skills = {}; ['a','b','c','d','e','f'].forEach(k => skills[k] = 1);
+  const { points } = rerank.boostFor(['a','b','c','d','e','f'], { count: 6, skills });
+  assert(points <= rerank.MAX_BOOST, 'capped at MAX_BOOST');
+});
+
 (async function runAgentTests() {
   section('Multi-Agent Architecture');
 
@@ -687,6 +724,21 @@ test('dedupeJobs: handles empty input', () => {
     assert(result.recommendations.length === 0, 'no recommendations without injected recommender');
   });
 
+
+  section('Market report');
+
+  await atest('buildReport: aggregates skills, locations and totals', async () => {
+    const jobs = [
+      { title: 'Python Developer', description: 'python linux', company: 'Acme', location: 'Berlin, DE' },
+      { title: 'Python Engineer',  description: 'python',       company: 'Globex', location: 'Berlin' },
+      { title: 'SOC Analyst',      description: 'incident response', company: 'SecOps', location: 'Munich' },
+    ];
+    const report = await buildReport(jobs, { findSkills }, 'python');
+    assertEqual(report.total_jobs, 3, 'counts all jobs');
+    assert(report.top_skills.length > 0, 'skills aggregated');
+    assert(report.top_locations.some(l => l.name === 'Berlin' && l.count === 2), 'Berlin counted twice');
+    assert(typeof report.summary === 'string' && report.summary.length > 0, 'summary produced');
+  });
 
   const total = passed + failed + skipped;
   const bar   = '─'.repeat(50);

@@ -15,6 +15,7 @@ const email  = require('./server/email.js');
 const agents = require('./server/agents.js');
 const { dedupeJobs } = require('./server/dedup.js');
 const Scorer = require('./scorer.js');
+const { buildReport } = require('./server/report.js');
 const SecurityLearning = require('./security-learning.js');
 
 
@@ -114,7 +115,7 @@ function validateToken(token) {
 loadStorage();
 
 const BUNDES_API_KEY       = process.env.BUNDES_API_KEY  || 'jobboerse-jobsuche';
-const NEWPLAN_API_KEY      = process.env.NEWPLAN_API_KEY || '7679c728-db18-43ce-beb8-52a9d571d419';
+const NEWPLAN_API_KEY      = process.env.NEWPLAN_API_KEY || '';  // set in .env (never hardcode keys)
 const APIFY_TOKEN          = process.env.APIFY_TOKEN     || '';
 const JOOBLE_API_KEY       = process.env.JOOBLE_API_KEY  || '';
 const ADZUNA_APP_ID        = process.env.ADZUNA_APP_ID   || '';
@@ -127,6 +128,7 @@ const REMOTIVE_URL         = 'https://remotive.com/api/remote-jobs';
 const LINKEDIN_GUEST_URL   = 'https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search';
 const INDEED_RSS_URL       = 'https://de.indeed.com/jobs';
 const STEPSTONE_SEARCH_URL = 'https://www.stepstone.de/jobs';
+const XING_SEARCH_URL      = 'https://www.xing.com/jobs/search';
 
 // ── Anti-bot realistic browser headers ───────────────────────────────────
 const USER_AGENTS = [
@@ -601,7 +603,9 @@ async function fetchStepstoneJobs(keyword, location) {
     const url = `${STEPSTONE_SEARCH_URL}/${kw}/`;
     await sleep(400 + Math.random() * 600);
 
-    const r = await fetch(url, { headers: browserHeaders('https://www.stepstone.de', false) });
+    // Cap at 8s — StepStone is bot-protected and often hangs; failing fast keeps
+    // the whole scrape-all snappy instead of waiting >70s for nothing.
+    const r = await fetch(url, { headers: browserHeaders('https://www.stepstone.de', false), signal: AbortSignal.timeout(8000) });
     if (!r.ok) return [];
     const html = await r.text();
     const jobs = [];
@@ -654,6 +658,80 @@ async function fetchStepstoneJobs(keyword, location) {
             });
           });
         } catch (_) {}
+      }
+    }
+
+    return jobs;
+  } catch (_) {
+    return [];
+  }
+}
+
+// ── Xing — HTML + JSON-LD scraping ───────────────────────────────────────
+async function fetchXingJobs(keyword, location) {
+  try {
+    const params = new URLSearchParams();
+    params.set('keywords', keyword || 'IT');
+    if (location) params.set('location', location);
+    const url = `${XING_SEARCH_URL}?${params.toString()}`;
+    await sleep(400 + Math.random() * 600);
+
+    const r = await fetch(url, { headers: browserHeaders('https://www.xing.com', false) });
+    if (!r.ok) return [];
+    const html = await r.text();
+    const jobs = [];
+
+    // JSON-LD job postings (most reliable when present)
+    const jsonLdRe = /<script type="application\/ld\+json">([\s\S]*?)<\/script>/g;
+    let m;
+    while ((m = jsonLdRe.exec(html)) !== null) {
+      try {
+        const parsed = JSON.parse(m[1]);
+        const items = Array.isArray(parsed) ? parsed : (Array.isArray(parsed['@graph']) ? parsed['@graph'] : [parsed]);
+        items.forEach(obj => {
+          if (!obj || obj['@type'] !== 'JobPosting') return;
+          jobs.push({
+            platform:      'Xing',
+            source:        'xing',
+            title:         obj.title || 'Job offer',
+            company:       obj.hiringOrganization?.name || 'Unknown',
+            location:      obj.jobLocation?.address?.addressLocality || location || 'Germany',
+            description:   stripHtml(obj.description || '').slice(0, 400),
+            jobUrl:        obj.url || null,
+            publishedDate: obj.datePosted?.slice(0, 10) || null,
+            salary:        obj.baseSalary
+              ? `${obj.baseSalary.value?.value || obj.baseSalary.value?.minValue || ''}–${obj.baseSalary.value?.maxValue || ''} ${obj.baseSalary.currency || ''}`.trim()
+              : null,
+            jobType:       obj.employmentType || null,
+            board:         'Xing',
+            raw:           null
+          });
+        });
+      } catch (_) {}
+    }
+
+    // Fallback: extract distinct /jobs/ links + their anchor text as titles.
+    if (!jobs.length) {
+      const seen = new Set();
+      const linkRe = /<a[^>]+href="(\/jobs\/[^"?#]+)"[^>]*>([\s\S]*?)<\/a>/g;
+      let a;
+      while ((a = linkRe.exec(html)) !== null && jobs.length < 15) {
+        const href = a[1];
+        if (href.includes('/search') || seen.has(href)) continue;
+        const title = stripHtml(a[2]).trim();
+        if (!title || title.length < 5) continue;
+        seen.add(href);
+        jobs.push({
+          platform: 'Xing',
+          source:   'xing',
+          title,
+          company:  'Unknown',
+          location: location || 'Germany',
+          description: '',
+          jobUrl:   'https://www.xing.com' + href,
+          board:    'Xing',
+          raw:      null
+        });
       }
     }
 
@@ -997,17 +1075,31 @@ function logScrape(...args) {
   console.log(`[scrape ${t}]`, ...args);
 }
 
-// Run sources in parallel, logging each one the moment it finishes (success or
-// failure), then return the settled results in the same order.
-function runSourcesWithLogging(sources) {
-  return Promise.allSettled(sources.map(s =>
-    Promise.resolve()
+// Run sources in parallel, logging each one (with timing) the moment it finishes.
+// Returns the settled results in the same order; if a `sink` array is passed, it
+// is filled with a structured per-source log the frontend can display.
+function runSourcesWithLogging(sources, sink) {
+  logScrape(`▶ Launching ${sources.length} sources in parallel: ${sources.map(s => s.key).join(', ')}`);
+  const t0all = Date.now();
+  return Promise.allSettled(sources.map(s => {
+    const t0 = Date.now();
+    return Promise.resolve()
       .then(() => s.run())
       .then(
-        v => { logScrape(`   ✓ ${s.key}: ${s.pick(v).length} offers`); return v; },
-        e => { logScrape(`   ✗ ${s.key}: ${e && e.message ? e.message : e}`); throw e; }
-      )
-  ));
+        v => {
+          const ms = Date.now() - t0, n = s.pick(v).length;
+          logScrape(`   ✓ ${s.key}: ${n} offers (${ms} ms)`);
+          if (sink) sink.push({ source: s.key, count: n, ms, ok: true });
+          return v;
+        },
+        e => {
+          const ms = Date.now() - t0, msg = e && e.message ? e.message : String(e);
+          logScrape(`   ✗ ${s.key}: ${msg} (${ms} ms)`);
+          if (sink) sink.push({ source: s.key, count: 0, ms, ok: false, error: msg });
+          throw e;
+        }
+      );
+  })).then(r => { logScrape(`■ All sources done in ${Date.now() - t0all} ms`); return r; });
 }
 
 function buildAllPlatformSources({ searchParams, keyword, location, region, distance, depth = DEFAULT_PAGE_DEPTH }) {
@@ -1018,7 +1110,12 @@ function buildAllPlatformSources({ searchParams, keyword, location, region, dist
     { key: 'Arbeitnow',     run: () => fetchArbeitnowJobs(keyword, depth),       pick: r => r || [] },
     { key: 'LinkedIn',      run: () => fetchLinkedInJobs(keyword, loc, depth),   pick: r => r || [] },
     { key: 'Remotive',      run: () => fetchRemotiveJobs(keyword, depth),        pick: r => r || [] },
+    { key: 'Xing',          run: () => fetchXingJobs(keyword, loc),              pick: r => r || [] },
   ];
+  // Free HTML StepStone scraper when no paid Apify token is configured.
+  if (!APIFY_TOKEN) {
+    sources.push({ key: 'StepStone', run: () => fetchStepstoneJobs(keyword, loc), pick: r => r || [] });
+  }
   if (ADZUNA_APP_ID && ADZUNA_APP_KEY) {
     sources.push({ key: 'Adzuna', run: () => fetchAdzunaJobs(keyword, loc, region, depth), pick: r => r?.items || [] });
   }
@@ -1354,6 +1451,17 @@ function scoreJob(job, analysis) {
   return { score: r.score, breakdown: r.breakdown };
 }
 
+// Writer options → a directive appended to the LLM prompt (language/tone/length).
+function writerDirective(options) {
+  const o = options || {};
+  const lang = o.language === 'de' ? 'Write the document in German.'
+    : o.language === 'en' ? 'Write the document in English.'
+    : 'Match the language of the CV/role (German or English).';
+  const tone = { professional: 'professional', friendly: 'warm and friendly', formal: 'formal and respectful', confident: 'confident and assertive' }[o.tone] || 'professional';
+  const length = { short: 'Keep it concise — about half the usual length.', detailed: 'Be thorough and detailed.', standard: 'Use a standard length.' }[o.length] || 'Use a standard length.';
+  return `${lang} Tone: ${tone}. ${length}`;
+}
+
 // Dependency bundle injected into the agent layer (server/agents.js).
 function buildAgentDeps() {
   // Resolve a skill key → { key, label, category } over the full taxonomy so
@@ -1594,6 +1702,22 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ── Market report: aggregate scraped jobs into trend stats (+ LLM summary) ─
+  if (parsedUrl.pathname === '/api/market-report' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const { jobs, query } = JSON.parse(body || '{}');
+        const report = await buildReport(jobs || [], { findSkills }, query);
+        sendJson(res, 200, report);
+      } catch (error) {
+        sendJson(res, 400, { error: 'Invalid request payload' });
+      }
+    });
+    return;
+  }
+
   // ── Multi-agent pipeline: Scout → Matcher with status log & error isolation
   if (parsedUrl.pathname === '/api/pipeline' && req.method === 'POST') {
     let body = '';
@@ -1616,12 +1740,12 @@ const server = http.createServer(async (req, res) => {
     req.on('data', chunk => { body += chunk; });
     req.on('end', async () => {
       try {
-        const { jobTitle, company, name, skills, cvText, jobDescription } = JSON.parse(body || '{}');
+        const { jobTitle, company, name, skills, cvText, jobDescription, options } = JSON.parse(body || '{}');
         if (!llm.isAvailable()) { sendJson(res, 200, { ok: false, source: 'template' }); return; }
-        const system = 'You are a professional career coach. Write a concise, compelling one-page cover letter. '
+        const system = 'You are a professional career coach. Write a compelling one-page cover letter. '
           + 'Ground it in the candidate\'s real experience from the CV, and explicitly address how they meet the '
           + 'specific requirements in the job posting. Use ONLY information provided; do not invent facts, '
-          + 'employers or qualifications. Match the language of the CV/role (German or English).';
+          + 'employers or qualifications. ' + writerDirective(options);
         const user = `Write a cover letter for this application.\n\n`
           + `Position: ${jobTitle || '[role]'}\nCompany: ${company || '[company]'}\n`
           + `Candidate name: ${name || '[name]'}\nKey skills to highlight: ${skills || '(infer from CV)'}\n\n`
@@ -1632,6 +1756,36 @@ const server = http.createServer(async (req, res) => {
         // token budget on internal reasoning, so a low cap truncates the letter.
         const text = await llm.chat({ system, user, maxTokens: 4000, temperature: 0.6 });
         sendJson(res, 200, { ok: true, source: 'ai', provider: llm.provider(), text });
+      } catch (error) {
+        sendJson(res, 200, { ok: false, source: 'template', error: String(error.message || error) });
+      }
+    });
+    return;
+  }
+
+  // ── Interview prep: AI-generated questions + tips for a target role ───────
+  if (parsedUrl.pathname === '/api/generate-interview' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const { role, skills, domain } = JSON.parse(body || '{}');
+        if (!llm.isAvailable()) { sendJson(res, 200, { ok: false, source: 'template' }); return; }
+        const schema = '{ "common": ["..."], "roleSpecific": ["..."], "tips": ["..."] }';
+        const system = 'You are an experienced technical interviewer and career coach. Produce realistic '
+          + 'interview preparation. Respond with ONLY a JSON object matching the schema — no markdown, no commentary. '
+          + 'Write in English.';
+        const user = `Target role: ${role || 'IT professional'}\n`
+          + `Candidate skills: ${Array.isArray(skills) ? skills.join(', ') : (skills || '(unknown)')}\n`
+          + `Domain: ${domain || '(general)'}\n\n`
+          + `Schema:\n${schema}\n\n`
+          + `Give 6 "common" behavioural/HR questions, 6 "roleSpecific" technical questions tailored to this exact `
+          + `role and the candidate's skills, and 5 actionable "tips" (incl. STAR method, company research, questions to ask). `
+          + `Return the JSON.`;
+        const raw = await llm.chat({ system, user, maxTokens: 2500, temperature: 0.5 });
+        const data = parseJsonObject(raw);
+        if (!data) { sendJson(res, 200, { ok: false, source: 'template' }); return; }
+        sendJson(res, 200, { ok: true, source: 'ai', provider: llm.provider(), data });
       } catch (error) {
         sendJson(res, 200, { ok: false, source: 'template', error: String(error.message || error) });
       }
@@ -1673,14 +1827,15 @@ const server = http.createServer(async (req, res) => {
     req.on('data', chunk => { body += chunk; });
     req.on('end', async () => {
       try {
-        const { cvText, targetRole, foundSkills } = JSON.parse(body || '{}');
+        const { cvText, targetRole, foundSkills, options } = JSON.parse(body || '{}');
         if (!llm.isAvailable()) { sendJson(res, 200, { ok: false, source: 'template' }); return; }
         if (!cvText || !cvText.trim()) { sendJson(res, 400, { error: 'CV text is required' }); return; }
         const skills = Array.isArray(foundSkills) ? foundSkills.join(', ') : (foundSkills || '');
         const system = 'You are a professional CV editor. Rewrite the candidate CV into a clean, well-structured, '
           + 'ATS-friendly CV tailored to the target role. Use ONLY information present in the source CV — '
-          + 'never invent employers, dates, degrees or skills. Keep the candidate\'s language (German or English). '
-          + 'Output plain text with clear section headers (Profile, Skills, Experience, Education, Languages).';
+          + 'never invent employers, dates, degrees or skills. '
+          + 'Output plain text with clear section headers (Profile, Skills, Experience, Education, Languages). '
+          + writerDirective(options);
         const user = `Target role: ${targetRole || '(general)'}\n`
           + `Detected skills to emphasise: ${skills || '(infer from CV)'}\n\n`
           + `Source CV:\n${cvText.slice(0, 8000)}\n\n`
@@ -1694,31 +1849,6 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // ── Auto email notification: high-match jobs (Resend) ────────────────────
-  if (parsedUrl.pathname === '/api/notify-jobs' && req.method === 'POST') {
-    let body = '';
-    req.on('data', chunk => { body += chunk; });
-    req.on('end', async () => {
-      try {
-        const { to, jobs } = JSON.parse(body || '{}');
-        if (!to) { sendJson(res, 400, { error: 'Recipient email is required' }); return; }
-        if (!Array.isArray(jobs) || jobs.length === 0) { sendJson(res, 200, { ok: false, reason: 'no-jobs' }); return; }
-        if (!email.isAvailable()) { sendJson(res, 200, { ok: false, fallback: 'mailto' }); return; }
-        const lines = jobs.slice(0, 15).map((j, i) =>
-          `${i + 1}. ${j.title || 'Job'} — ${j.company || ''} (${Math.round((j.score || 0) * 100)}% match)`
-          + (j.url ? `\n   ${j.url}` : '')
-        ).join('\n\n');
-        const subject = `CyberCareer: ${jobs.length} new high-match job${jobs.length > 1 ? 's' : ''} (>=70%)`;
-        const text = `Hi,\n\nCyberCareer found ${jobs.length} job(s) matching your profile at 70% or higher:\n\n`
-          + `${lines}\n\nOpen the app to generate a tailored CV and cover letter.\n\n— CyberCareer`;
-        await email.sendEmail({ to, subject, text });
-        sendJson(res, 200, { ok: true, sent: true, count: jobs.length });
-      } catch (error) {
-        sendJson(res, 200, { ok: false, fallback: 'mailto', error: String(error.message || error) });
-      }
-    });
-    return;
-  }
 
   // ── Email notification / send application (Resend) with mailto fallback ──
   if (parsedUrl.pathname === '/api/send-email' && req.method === 'POST') {
@@ -1829,6 +1959,10 @@ const server = http.createServer(async (req, res) => {
     } else if (platform === 'stepstone') {
       jobs   = await fetchStepstoneJobs(keyword, location || 'Deutschland');
       source = 'stepstone';
+
+    } else if (platform === 'xing') {
+      jobs   = await fetchXingJobs(keyword, location || 'Deutschland');
+      source = 'xing';
 
     } else if (platform === 'apify-indeed') {
       if (APIFY_TOKEN) {
@@ -2061,7 +2195,8 @@ const server = http.createServer(async (req, res) => {
           depth
         });
         logScrape(`▶ SCRAPE-ALL | keyword="${searchKeyword || ''}" location="${searchLocation}" | launching: ${sources.map(s => s.key).join(', ')}`);
-        const settled = await runSourcesWithLogging(sources);
+        const scrapeLog = [];
+        const settled = await runSourcesWithLogging(sources, scrapeLog);
 
         const platformBreakdown = {};
         let merged = [];
@@ -2079,7 +2214,10 @@ const server = http.createServer(async (req, res) => {
         if (sector && sector !== 'all') jobs = jobs.filter(j => jobMatchesSector(j, sector));
 
         logScrape(`■ SCRAPE-ALL done | ${merged.length} raw → ${before} dedup → ${jobs.length} after "${sector || 'all'}" filter`);
-        sendJson(res, 200, { jobs, platformBreakdown, source: 'all-platforms', total: jobs.length });
+        sendJson(res, 200, {
+          jobs, platformBreakdown, source: 'all-platforms', total: jobs.length,
+          scrapeLog, rawTotal: merged.length, dedupTotal: before,
+        });
       } catch (err) {
         sendJson(res, 500, { error: 'Scrape-all failed', detail: err.message });
       }

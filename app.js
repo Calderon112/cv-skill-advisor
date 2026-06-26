@@ -646,6 +646,33 @@ function localAnalyze(text) {
   };
 }
 
+// Guarantee we have a CV-based analysis to score & rank jobs against. If the user
+// hasn't run "Analyze CV" yet, derive one from their saved profile skills (or CV
+// text) so matching always reflects the CV — high-fit jobs end up on top.
+function ensureAnalysis() {
+  if (state.analysis && state.analysis.foundSkills && state.analysis.foundSkills.length) {
+    return state.analysis;
+  }
+  const p = state.profile || {};
+  if (p.skills && p.skills.length) {
+    const foundKeys = p.skills.map(s => s.key || normalize(s.label || s));
+    const allSkills = skillGroups.flatMap(g => g.skills);
+    state.analysis = {
+      foundSkills:   p.skills.map(s => ({ key: s.key || normalize(s.label || s), label: s.label || s })),
+      missingSkills: allSkills.filter(s => !foundKeys.includes(s.key)),
+      roles:         analyzeRolesLocal(foundKeys),
+      domain:        detectDomain(foundKeys),
+    };
+    return state.analysis;
+  }
+  const cv = state.cvText || (typeof profileToText === 'function' ? profileToText() : '');
+  if (cv && cv.trim()) { state.analysis = localAnalyze(cv); return state.analysis; }
+  return null;
+}
+
+// Minimum match to consider a job a "strong fit" (used for ranking emphasis + email).
+const HIGH_MATCH_THRESHOLD = 0.75;
+
 function renderAnalysisResults(result) {
   const panel   = $('analysis-results-panel');
   const allCount = skillGroups.flatMap(g => g.skills).length;
@@ -765,7 +792,8 @@ async function generateAIRoadmap() {
 // ── Scout Agent: Job Search ───────────────────────────────────────────────
 async function searchJobs() {
   const region   = $('region-select').value;
-  const platform = $('platform-select').value;
+  // No platform dropdown in the current UI → default to the all-platforms scrape.
+  const platform = $('platform-select')?.value || 'all';
   const sector   = $('sector-select').value;
   const distance = $('distance-select').value;
   const location = $('search-location-input').value.trim();
@@ -821,7 +849,6 @@ async function searchJobs() {
   $('search-status-pill').textContent = `${state.jobs.length} found`;
   if (state.jobs.length > 0) toast(`${state.jobs.length} jobs found!`, 'success');
   updateStats();
-  notifyHighMatches(state.jobs);
 }
 
 // Detect whether a job is remote — uses explicit flags first, then keyword
@@ -851,13 +878,24 @@ function renderJobResults(jobs, sourceLabel) {
   const panel = $('jobs-results-panel');
   const grid  = $('job-results');
 
-  // Pre-compute the match score once per job, then rank surest → least sure so the
-  // strongest fits (your ≥70% jobs) always sit at the top of the list.
+  // Make sure we have a CV-based analysis (from profile/CV) so jobs get scored.
+  ensureAnalysis();
+
+  // No keyword ranking on the cards. We only float jobs the Oracle has actually
+  // assessed to the top (by their real AI score); everything else keeps the order
+  // it was scraped in.
   let ranked = jobs.map(job => ({
     job,
     detail: state.analysis ? scoreJobDetailed(job, state.analysis) : null,
   }));
-  if (state.analysis) ranked.sort((a, b) => b.detail.score - a.detail.score);
+  ranked.sort((a, b) => {
+    const aAi = a.detail && a.detail.breakdown && a.detail.breakdown.aiAssessed;
+    const bAi = b.detail && b.detail.breakdown && b.detail.breakdown.aiAssessed;
+    if (aAi && bAi) return (b.detail.score || 0) - (a.detail.score || 0);
+    if (aAi) return -1;
+    if (bAi) return 1;
+    return 0; // preserve scrape order for non-assessed jobs
+  });
 
   $('job-count-badge').textContent = ranked.length;
   panel.classList.remove('hidden');
@@ -874,26 +912,14 @@ function renderJobResults(jobs, sourceLabel) {
     const remote  = job.remote ? `<span class="chip remote">Remote</span>` : '';
     const jobType = job.jobType ? `<span class="chip">${esc(job.jobType)}</span>` : '';
 
-    // Weighted score + breakdown tooltip, plus the skills this job wants that
-    // you don't have yet ("what you're missing").
+    // No keyword "match %" on cards — the Oracle (open a job) gives the real match.
+    // We only surface a score chip once the AI consultant has assessed this job.
     let scoreHtml = '';
-    let gapHtml   = '';
-    if (detail) {
-      const { score, breakdown } = detail;
-      const pct   = Math.round(score * 100);
-      const color = pct >= 70 ? 'var(--teal)' : pct >= 40 ? 'var(--cyan)' : 'var(--text-dim)';
-      const tip = breakdown
-        ? 'Score breakdown — ' + Object.entries(breakdown.points)
-            .map(([k, v]) => `${k}: ${v}/${breakdown.weights[k]}`).join(' · ')
-        : '';
-      scoreHtml = `<span class="chip" title="${esc(tip)}" style="color:${color};border-color:${color}33">${pct}% match</span>`;
-
-      const missing = (breakdown && breakdown.skillsMissing) || [];
-      if (missing.length) {
-        const shown = missing.slice(0, 6).map(k => `<span class="gap-chip">${esc(skillLabel(k))}</span>`).join('');
-        const more  = missing.length > 6 ? `<span class="gap-more">+${missing.length - 6} more</span>` : '';
-        gapHtml = `<div class="job-card-gaps"><span class="gap-label">You're missing:</span> ${shown}${more}</div>`;
-      }
+    const gapHtml  = '';
+    if (detail && detail.breakdown && detail.breakdown.aiAssessed) {
+      const pct   = Math.round(detail.score * 100);
+      const color = pct >= 75 ? 'var(--teal)' : pct >= 40 ? 'var(--cyan)' : 'var(--text-dim)';
+      scoreHtml = `<span class="chip" title="AI consultant's match for this job" style="color:${color};border-color:${color}33">${pct}% match <span style="font-size:9px;font-weight:800">AI</span></span>`;
     }
 
     return `
@@ -948,64 +974,6 @@ function prefillTracker(job) {
   };
   $('app-title').focus();
   toast('Job details pre-filled. Add deadline and save!', 'info');
-}
-
-// ── Auto email notification for high-match jobs (≥70%) ──────────────────────
-const NOTIFY_KEY = 'careerai-notify-jobs';
-const NOTIFY_EMAIL_KEY = 'careerai-notify-email';
-
-function setupNotifyToggle() {
-  const cb = $('notify-jobs-toggle');
-  if (!cb) return;
-  const row = $('notify-email-row');
-  const input = $('notify-email-input');
-
-  cb.checked = localStorage.getItem(NOTIFY_KEY) === '1';
-  if (input) input.value = localStorage.getItem(NOTIFY_EMAIL_KEY) || (state.profile && state.profile.email) || '';
-  if (row) row.classList.toggle('hidden', !cb.checked);
-
-  cb.addEventListener('change', () => {
-    localStorage.setItem(NOTIFY_KEY, cb.checked ? '1' : '0');
-    if (row) row.classList.toggle('hidden', !cb.checked);
-    if (cb.checked) {
-      if (input && !input.value) input.value = (state.profile && state.profile.email) || '';
-      const mail = ((input && input.value) || '').trim();
-      if (mail) { localStorage.setItem(NOTIFY_EMAIL_KEY, mail); toast(`High-match jobs will be emailed to ${mail}.`, 'success'); }
-      else if (input) input.focus();
-    }
-  });
-
-  if (input) input.addEventListener('change', () => {
-    const mail = input.value.trim();
-    if (mail) localStorage.setItem(NOTIFY_EMAIL_KEY, mail);
-  });
-}
-
-async function notifyHighMatches(jobs) {
-  const cb = $('notify-jobs-toggle');
-  if (!cb || !cb.checked || !state.analysis) return;
-
-  const high = (jobs || [])
-    .map(j => ({ ...j, score: calculateMatchScore(j, state.analysis) }))
-    .filter(j => j.score >= 0.7)
-    .sort((a, b) => b.score - a.score);
-  if (!high.length) return;
-
-  const to = (($('notify-email-input') && $('notify-email-input').value) || '').trim()
-    || localStorage.getItem(NOTIFY_EMAIL_KEY) || (state.profile && state.profile.email) || '';
-  if (!to) return;
-
-  const payload = high.slice(0, 15).map(j => ({
-    title: j.title, company: j.company, score: j.score, url: j.jobUrl || j.url || ''
-  }));
-
-  try {
-    const r = await api.post('/api/notify-jobs', { to, jobs: payload });
-    if (r && r.ok && r.sent) toast(`Emailed ${r.count} high-match job(s) to ${to}.`, 'success');
-    else toast(`${high.length} high-match job(s) found — add RESEND_API_KEY to receive them by email.`, 'info');
-  } catch (_) {
-    toast(`${high.length} high-match job(s) found (email not sent).`, 'info');
-  }
 }
 
 // ── Geolocation ───────────────────────────────────────────────────────────
@@ -1113,7 +1081,6 @@ async function scrapeAllPlatforms() {
     $('search-status-pill').textContent = `${state.jobs.length} found`;
     if (state.jobs.length > 0) toast(`${state.jobs.length} jobs collected from all platforms!`, 'success');
     updateStats();
-    notifyHighMatches(state.jobs);
 
   } catch (err) {
     console.error('scrapeAll error:', err);
@@ -1137,6 +1104,49 @@ $('scrape-all-btn').addEventListener('click', scrapeAllPlatforms);
 $('analyze-btn').addEventListener('click', analyzeCV);
 $('workmode-filter').addEventListener('change', rerenderJobs);
 
+// ── Market report (aggregate trend stats + LLM summary) ─────────────────────
+const _marketBtn = $('market-report-btn');
+if (_marketBtn) _marketBtn.addEventListener('click', async () => {
+  if (!state.jobs.length) { toast('Search for jobs first.', 'error'); return; }
+  const out = $('market-report');
+  const orig = _marketBtn.innerHTML;
+  _marketBtn.disabled = true; _marketBtn.innerHTML = 'Analyzing…';
+  try {
+    const keyword = ($('job-keyword-input')?.value || '').trim();
+    const report = await api.post('/api/market-report', { jobs: state.jobs, query: keyword });
+    renderMarketReport(report);
+    out.classList.remove('hidden');
+    out.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  } catch (e) {
+    toast('Could not build report: ' + e.message, 'error');
+  }
+  _marketBtn.disabled = false; _marketBtn.innerHTML = orig;
+});
+
+function renderMarketReport(r) {
+  const out = $('market-report');
+  const bars = (items, color) => items.map(it => {
+    const max = items[0]?.count || 1;
+    const w = Math.round((it.count / max) * 100);
+    return `<div class="mr-row"><span class="mr-label">${esc(it.name)}</span>`
+      + `<span class="mr-bar"><span class="mr-fill" style="width:${w}%;background:${color}"></span></span>`
+      + `<span class="mr-count">${it.count}</span></div>`;
+  }).join('');
+  const remote = Object.entries(r.remote_split || {}).map(([k, v]) => `${esc(k)}: ${v}`).join(' · ');
+  const sal = r.salary && r.salary.min
+    ? `${r.salary.min.toLocaleString()}–${(r.salary.max || r.salary.min).toLocaleString()} € (from ${r.salary.count} listings)`
+    : 'not enough salary data';
+  out.innerHTML = `
+    <div class="card-header"><h2>Market Report <span class="count-badge">${r.total_jobs}</span></h2></div>
+    <p style="font-size:13px;line-height:1.55;margin-bottom:14px">${esc(r.summary || '')}</p>
+    <div class="three-col">
+      <div><h3 class="col-label">Most requested skills</h3>${bars(r.top_skills, 'var(--cyan)')}</div>
+      <div><h3 class="col-label">Top locations</h3>${bars(r.top_locations, 'var(--teal)')}</div>
+      <div><h3 class="col-label">Top companies</h3>${bars(r.top_companies, 'var(--orange)')}</div>
+    </div>
+    <p class="hint" style="margin-top:12px">Work mode — ${esc(remote)} &nbsp;·&nbsp; Salary range — ${esc(sal)}</p>`;
+}
+
 // ── Match scoring (used inline on job cards) ────────────────────────────────
 // Weighted 6-criteria scoring (skills/role/location/remote/seniority/salary)
 // with a transparent breakdown — uses the shared scorer.js engine.
@@ -1149,8 +1159,19 @@ function skillLabel(key) {
   return key;
 }
 
+// Authoritative AI match scores, keyed by job identity. Once the Oracle has
+// deeply analysed a job, its score becomes the single source of truth shown
+// everywhere (card + workspace), so the same job never shows two numbers.
+const aiMatchByJob = {};
+function jobKey(job) {
+  return `${normalize(job.title || '')}|${normalize(job.company || '')}`.trim();
+}
+
 function scoreJobDetailed(job, analysis) {
   if (!analysis || !analysis.foundSkills.length || typeof window.Scorer === 'undefined') {
+    // Even without a local analysis, surface an AI score if the Oracle assessed this job.
+    const ai = aiMatchByJob[jobKey(job)];
+    if (ai != null) return { score: ai, breakdown: { aiAssessed: true, points: {}, weights: {} } };
     return { score: 0, breakdown: null };
   }
   const p = state.profile || {};
@@ -1164,7 +1185,43 @@ function scoreJobDetailed(job, analysis) {
   };
   const jobText = normalize([job.title, job.description, job.sector, job.board].filter(Boolean).join(' '));
   const jobSkillKeys = findSkillsLocal(jobText).map(s => s.key);
-  return window.Scorer.scoreJob(job, profile, jobSkillKeys);
+  const r = window.Scorer.scoreJob(job, profile, jobSkillKeys);
+
+  // Outcome-based re-ranking boost: jobs similar to past interviews/offers rank higher.
+  const signal = getRerankSignal();
+  if (window.Rerank && signal && signal.count) {
+    const { points, matched } = window.Rerank.boostFor(jobSkillKeys, signal);
+    if (points > 0) {
+      r.score100 = Math.min(100, (r.score100 != null ? r.score100 : r.score * 100) + points);
+      r.score = Math.round((r.score100 / 100) * 1000) / 1000;
+      if (r.breakdown) { r.breakdown.rerankBoost = points; r.breakdown.rerankMatched = matched; }
+    }
+  }
+
+  // If the AI consultant has deeply assessed this job, its score wins — keeping the
+  // deterministic breakdown (skills/gaps) but unifying the headline % everywhere.
+  const ai = aiMatchByJob[jobKey(job)];
+  if (ai != null) {
+    r.score = ai;
+    r.score100 = Math.round(ai * 100);
+    if (r.breakdown) r.breakdown.aiAssessed = true;
+  }
+  return r;
+}
+
+// Memoised "success signal" from the Tracker (apps that got interview/offer).
+let _rerankCache = { key: '', signal: null };
+function getRerankSignal() {
+  if (typeof window.Rerank === 'undefined') return null;
+  const apps = state.apps || [];
+  const key = apps.map(a => `${a.status}:${a.title || ''}`).join('|');
+  if (key !== _rerankCache.key) {
+    _rerankCache = {
+      key,
+      signal: window.Rerank.successSignal(apps, t => findSkillsLocal(t).map(s => s.key)),
+    };
+  }
+  return _rerankCache.signal;
 }
 
 function calculateMatchScore(job, analysis) {
@@ -1178,6 +1235,58 @@ function syncWriterCv() {
   const source = profileToText() || state.cvText;
   if (source && !ta.value.trim()) ta.value = source;
 }
+
+// Writer options (language / tone / length) read from the page selects.
+function readWriterOptions(prefix) {
+  return {
+    language: $(`${prefix}-lang`)?.value || 'auto',
+    tone:     $(`${prefix}-tone`)?.value || 'professional',
+    length:   $(`${prefix}-length`)?.value || 'standard',
+  };
+}
+
+// Render any plain-text document to a clean, paginated PDF (jsPDF).
+function downloadTextAsPDF(text, filename, title) {
+  const lib = window.jspdf;
+  if (!lib || !lib.jsPDF) { toast('PDF library not loaded — refresh the page.', 'error'); return; }
+  if (!text || !text.trim()) { toast('Nothing to export yet.', 'error'); return; }
+
+  const doc = new lib.jsPDF({ unit: 'pt', format: 'a4' });
+  const PAGE_W = doc.internal.pageSize.getWidth();
+  const PAGE_H = doc.internal.pageSize.getHeight();
+  const M = 48, W = PAGE_W - M * 2;
+  let y = M;
+
+  if (title) {
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(16); doc.setTextColor(124, 58, 237);
+    doc.text(title, M, y); y += 10;
+    doc.setDrawColor(124, 58, 237); doc.setLineWidth(1.5); doc.line(M, y, M + W, y); y += 18;
+  }
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(11); doc.setTextColor(20, 20, 30);
+
+  // Preserve blank lines; wrap long lines to the page width.
+  String(text).split('\n').forEach(line => {
+    const wrapped = line.trim() ? doc.splitTextToSize(line, W) : [''];
+    wrapped.forEach(seg => {
+      if (y > PAGE_H - M) { doc.addPage(); y = M; }
+      doc.text(seg, M, y); y += 16;
+    });
+  });
+
+  doc.save(filename);
+  toast(`${filename} downloaded.`, 'success');
+}
+
+const _cvPdfBtn = $('download-cv-pdf-btn');
+if (_cvPdfBtn) _cvPdfBtn.addEventListener('click', () => {
+  const name = [state.profile?.firstName, state.profile?.lastName].filter(Boolean).join('_') || 'CareerAI';
+  downloadTextAsPDF($('generated-cv-output').value, `${name}_CV.pdf`, 'Curriculum Vitae');
+});
+const _coverPdfBtn = $('download-cover-pdf-btn');
+if (_coverPdfBtn) _coverPdfBtn.addEventListener('click', () => {
+  const co = $('cover-company')?.value.trim().replace(/\s+/g, '_') || 'Cover';
+  downloadTextAsPDF($('generated-cover-output').value, `${co}_Cover_Letter.pdf`, 'Cover Letter');
+});
 
 function buildImprovedCV(cvText, targetJob, analysis) {
   const skills   = analysis?.foundSkills?.map(s => s.label) || [];
@@ -1299,7 +1408,7 @@ $('generate-cv-btn').addEventListener('click', async () => {
   let text = '', usedAI = false;
   try {
     const foundSkills = (state.analysis?.foundSkills || []).map(s => s.label);
-    const r = await api.post('/api/generate-cv', { cvText, targetRole: target, foundSkills });
+    const r = await api.post('/api/generate-cv', { cvText, targetRole: target, foundSkills, options: readWriterOptions('cv-opt') });
     if (r && r.ok && r.source === 'ai' && r.text) { text = r.text; usedAI = true; }
   } catch (_) { /* fall back to template */ }
 
@@ -1330,7 +1439,7 @@ $('generate-cover-btn').addEventListener('click', async () => {
   let text = '', usedAI = false;
   try {
     // Try the real AI endpoint first.
-    const r = await api.post('/api/generate-cover', { jobTitle, company, name, skills, cvText });
+    const r = await api.post('/api/generate-cover', { jobTitle, company, name, skills, cvText, options: readWriterOptions('cover-opt') });
     if (r && r.ok && r.source === 'ai' && r.text) { text = r.text; usedAI = true; }
   } catch (_) { /* fall back to template */ }
 
@@ -1436,7 +1545,9 @@ async function addApplication(app) {
     norm(a.title) === norm(app.title) && norm(a.company) === norm(app.company));
   if (exists) { toast(`"${app.title}" is already in your tracker.`, 'info'); return; }
 
-  const newApp = { ...app, id: genId(), status: 'applied', createdAt: new Date().toISOString() };
+  const now = new Date().toISOString();
+  const newApp = { ...app, id: genId(), status: 'applied', createdAt: now,
+    history: [{ status: 'applied', at: now }] };
   state.apps.push(newApp);
   saveAppsLocally();
 
@@ -1453,13 +1564,29 @@ async function addApplication(app) {
 }
 
 async function moveApplication(id, newStatus) {
-  state.apps = state.apps.map(a => a.id === id ? { ...a, status: newStatus } : a);
+  const at = new Date().toISOString();
+  state.apps = state.apps.map(a => {
+    if (a.id !== id) return a;
+    const history = (a.history || []).concat({ status: newStatus, at });
+    return { ...a, status: newStatus, history };
+  });
   saveAppsLocally();
+  if (jwCurrentApp && jwCurrentApp.id === id) jwCurrentApp = state.apps.find(a => a.id === id);
   if (state.token && state.online) {
-    try { await api.put(`/api/applications/${id}`, { status: newStatus }); } catch (_) {}
+    try { await api.put(`/api/applications/${id}`, { status: newStatus, history: state.apps.find(a => a.id === id)?.history }); } catch (_) {}
   }
   renderKanban();
-  toast(`Moved to ${newStatus}.`, 'info');
+  toast(`Moved to ${esc(STATUS_LABELS[newStatus] || newStatus)}.`, 'info');
+}
+
+// Patch an application's data (e.g. saved documents) + persist locally and server-side.
+async function updateAppData(id, patch) {
+  state.apps = state.apps.map(a => a.id === id ? { ...a, ...patch } : a);
+  saveAppsLocally();
+  if (jwCurrentApp && jwCurrentApp.id === id) jwCurrentApp = state.apps.find(a => a.id === id);
+  if (state.token && state.online) {
+    try { await api.put(`/api/applications/${id}`, patch); } catch (_) {}
+  }
 }
 
 async function deleteApplication(id) {
@@ -1509,9 +1636,31 @@ function setupKanbanDnD() {
   });
 }
 
+// Conversion funnel: Saved → Applied → Interviews → Offers + response rate.
+function renderFunnel() {
+  const el = $('tracker-funnel');
+  if (!el) return;
+  const apps = state.apps || [];
+  if (!apps.length) { el.classList.add('hidden'); return; }
+  const count = s => apps.filter(a => a.status === s).length;
+  const saved      = count('applied');                                  // status "applied" = label "Saved"
+  const applied    = count('review') + count('interview') + count('offer') + count('rejected'); // actually sent
+  const interviews = count('interview') + count('offer');               // reached the interview stage
+  const offers     = count('offer');
+  const card = (val, lbl, color) =>
+    `<div class="funnel-card"><div class="funnel-val" style="color:${color}">${val}</div><div class="funnel-lbl">${esc(lbl)}</div></div>`;
+  el.innerHTML =
+      card(saved, 'Saved', 'var(--text)')
+    + card(applied, 'Applied', 'var(--cyan)')
+    + card(interviews, 'Interviews', 'var(--teal)')
+    + card(offers, 'Offers', '#ffc940');
+  el.classList.remove('hidden');
+}
+
 function renderKanban() {
   dedupeApps();
   setupKanbanDnD();
+  renderFunnel();
   const emptyEl = $('jobs-empty');
   if (emptyEl) emptyEl.classList.toggle('hidden', state.apps.length > 0);
 
@@ -1534,6 +1683,7 @@ function renderKanban() {
         <div class="app-card" draggable="true" data-id="${app.id}">
           <div class="app-card-title">${esc(app.title)}</div>
           <div class="app-card-company">${esc(app.company)}${app.location ? ' · ' + esc(app.location) : ''}</div>
+          ${app.documents ? `<div class="app-card-docs">📄 Documents ready</div>` : ''}
           ${app.deadline ? `<div class="app-card-deadline" style="color:${deadlineColor}">${deadlineLabel}${esc(app.deadline)}</div>` : ''}
           ${app.url ? `<a class="app-card-link" href="${esc(app.url)}" target="_blank" rel="noreferrer">View job →</a>` : ''}
           ${app.notes ? `<div class="app-card-notes">${esc(app.notes)}</div>` : ''}
@@ -1645,13 +1795,53 @@ const ORACLE_ICON = `<svg width="40" height="40" viewBox="0 0 48 48" fill="none"
   <path d="M33 37 L35.5 34.5 L38 36 L41 32.5" stroke="#10B981" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>`;
 
-async function openJobWorkspace(app) {
+// Cache AI consultations per job + profile, so re-opening a card costs no LLM
+// call (this is the main source of Gemini free-tier rate-limits). The key includes
+// a profile signature, so the consult refreshes automatically when your CV changes.
+const _consultCache = {};
+function profileSig() {
+  const p = state.profile || {};
+  return (p.skills || []).map(s => s.key || s.label || s).join(',') + '|' + (p.title || '');
+}
+function consultKey(app) {
+  return `${app.id || (app.title + '|' + app.company)}::${profileSig()}`;
+}
+
+// Compact status timeline from an application's history (Saved → Applied → …).
+function renderStatusTimeline(app) {
+  const h = app && app.history;
+  if (!Array.isArray(h) || !h.length) return '';
+  const fmt = at => { try { return new Date(at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }); } catch (_) { return ''; } };
+  const steps = h.map(e =>
+    `<span class="tl-step"><span class="tl-dot ${esc(e.status)}"></span>${esc(STATUS_LABELS[e.status] || e.status)}`
+    + `<span class="tl-date">${fmt(e.at)}</span></span>`).join('<span class="tl-arrow">→</span>');
+  return `<div class="jw-timeline">${steps}</div>`;
+}
+
+async function openJobWorkspace(app, force) {
   jwCurrentApp = app;
   $('jw-title').textContent = app.title || 'Job';
-  $('jw-company').textContent = [app.company, app.location].filter(Boolean).join(' · ');
+  $('jw-company').innerHTML = esc([app.company, app.location].filter(Boolean).join(' · '))
+    + renderStatusTimeline(app);
   const out = $('jw-cover-output');
   out.classList.add('hidden'); out.value = '';
   $('job-workspace').classList.remove('hidden');
+
+  // Show previously saved documents (persisted on the application) right away.
+  if (app.documents && (app.documents.cv || app.documents.cover || app.documents.email)) {
+    renderJobDocs(app, app.documents);
+  } else {
+    $('jw-docs')?.classList.add('hidden');
+  }
+
+  // Cached consultation → render instantly, no AI call.
+  const key = consultKey(app);
+  if (!force && _consultCache[key]) {
+    renderJobConsult(_consultCache[key]);
+    $('jw-match').insertAdjacentHTML('afterbegin',
+      `<div class="hint" style="margin-bottom:8px">Cached analysis — click <strong>Re-check match</strong> to refresh.</div>`);
+    return;
+  }
 
   // Oracle = AI consultation: read the posting, compare to the profile. Falls
   // back to the local keyword analysis when no LLM key is configured.
@@ -1661,26 +1851,53 @@ async function openJobWorkspace(app) {
     + `<span>The AI consultant is analysing the job<span class="jw-dots"></span></span></div>`;
   $('jw-gaps').innerHTML = '';
   $('jw-oracle').innerHTML = '';
-  let consult = null;
-  try {
-    const profileText = (typeof profileToText === 'function' ? profileToText() : '') || state.cvText || '';
-    const r = await fetch(`${baseUrl}/api/job-consult`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jobTitle: app.title, company: app.company, jobDescription: app.description || '', profileText })
-    });
-    const d = await r.json();
-    if (d && d.ok && d.consult) consult = d.consult;
-  } catch (_) { /* offline / no key → keyword fallback */ }
 
-  if (jwCurrentApp !== app) return;     // a newer card was opened meanwhile
-  if (consult) { renderJobConsult(consult); return; }
+  // One attempt → returns { consult } or { reason }.
+  async function attempt() {
+    try {
+      const profileText = (typeof profileToText === 'function' ? profileToText() : '') || state.cvText || '';
+      const r = await fetch(`${baseUrl}/api/job-consult`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobTitle: app.title, company: app.company, jobDescription: app.description || '', profileText })
+      });
+      const d = await r.json();
+      if (d && d.ok && d.consult) return { consult: d.consult };
+      return { reason: (d && d.reason) || 'error' };
+    } catch (_) { return { reason: 'offline' }; }
+  }
 
-  // AI consultation unavailable → keyword fallback, clearly labelled + retry.
+  // Auto-retry transient failures (Gemini per-minute rate-limit / busy). The quota
+  // resets within ~1 min, so we wait and retry instead of giving up immediately.
+  const MAX = 3;
+  for (let i = 1; i <= MAX; i++) {
+    const res = await attempt();
+    if (jwCurrentApp !== app) return;                 // user opened another card
+    if (res.consult) { _consultCache[key] = res.consult; renderJobConsult(res.consult); return; }
+
+    // Don't retry these — retrying won't help.
+    if (res.reason === 'llm-not-configured' || res.reason === 'offline') break;
+
+    if (i < MAX) {
+      // Show a live countdown while we wait for the rate-limit window to reset.
+      for (let s = 18; s > 0; s--) {
+        if (jwCurrentApp !== app) return;
+        $('jw-match').innerHTML =
+          `<div class="jw-oracle-item" style="border-color:var(--orange);background:var(--orange-dim)">`
+          + `AI busy (free-tier rate limit). Auto-retrying in <strong>${s}s</strong>… `
+          + `<span class="hint">(attempt ${i + 1}/${MAX})</span></div>`;
+        await new Promise(r => setTimeout(r, 1000));
+      }
+    }
+  }
+
+  if (jwCurrentApp !== app) return;
+  // Still failing after retries → keyword fallback, clearly labelled + manual retry.
   renderJobWorkspace();
   $('jw-match').insertAdjacentHTML('afterbegin',
     `<div class="jw-oracle-item" style="margin-bottom:12px;border-color:var(--orange);background:var(--orange-dim)">`
-    + `⚠️ The AI consultant didn't answer (provider busy or free-tier rate-limit). `
-    + `Showing a basic keyword analysis — click <strong>Re-check match</strong> to retry the full AI consultation.</div>`);
+    + `⚠️ The AI consultant is still busy (free-tier rate-limit). `
+    + `Showing a basic keyword analysis — click <strong>Re-check match</strong> to retry, `
+    + `or add a free <strong>OpenRouter</strong> key as a fallback provider.</div>`);
 }
 
 // Render the AI consultation (opinion + strengths + gaps + certs + learning).
@@ -1694,11 +1911,17 @@ function renderJobConsult(c) {
     + `<a href="${courses(label)}" target="_blank" rel="noreferrer">Coursera →</a></div>`;
 
   const pct = Math.max(0, Math.min(100, Math.round(Number(c.matchPercent) || 0)));
-  const color = pct >= 70 ? 'var(--teal)' : pct >= 40 ? 'var(--cyan)' : 'var(--orange)';
+  const color = pct >= 75 ? 'var(--teal)' : pct >= 40 ? 'var(--cyan)' : 'var(--orange)';
   $('jw-match').innerHTML =
     `<span class="jw-match-score" style="color:${color}">${pct}%</span> match`
     + `<div class="jw-bar"><div style="width:${pct}%;background:${color}"></div></div>`
     + (c.matchSummary ? `<p style="font-size:13px;color:var(--text-muted);margin-top:8px">${esc(c.matchSummary)}</p>` : '');
+
+  // Make this AI score authoritative for this job everywhere (cards converge to it).
+  if (jwCurrentApp) {
+    aiMatchByJob[jobKey(jwCurrentApp)] = pct / 100;
+    if (state.jobs && state.jobs.length) rerenderJobs();
+  }
 
   const strengths = Array.isArray(c.strengths) ? c.strengths : [];
   const missing   = Array.isArray(c.missing) ? c.missing : [];
@@ -1826,8 +2049,86 @@ async function generateJobCover() {
   const out = $('jw-cover-output');
   out.value = text || 'Could not generate a cover letter.';
   out.classList.remove('hidden');
+  $('jw-docs')?.classList.add('hidden');
   btn.disabled = false; btn.innerHTML = orig;
   toast(usedAI ? 'Cover letter generated (AI)!' : 'Cover letter generated.', 'success');
+}
+
+// One-click: generate CV + cover letter + application email for this job.
+async function genDoc(endpoint, payload, fallback) {
+  try {
+    const r = await api.post(endpoint, payload);
+    if (r && r.ok && r.source === 'ai' && r.text) return { text: r.text, ai: true };
+  } catch (_) {}
+  return { text: (fallback && fallback()) || '', ai: false };
+}
+
+async function generateJobDocs() {
+  const app = jwCurrentApp;
+  if (!app) return;
+  const btn = $('jw-docs-btn'); const orig = btn.innerHTML;
+  btn.disabled = true; btn.innerHTML = 'Generating…';
+
+  const p = state.profile || {};
+  const name = [p.firstName, p.lastName].filter(Boolean).join(' ');
+  const skills = (p.skills || []).slice(0, 6).map(s => s.label || s).join(', ');
+  const cvText = (typeof profileToText === 'function' ? profileToText() : '') || state.cvText || '';
+  const opts = readWriterOptions('cover-opt');
+
+  const [cover, cv] = await Promise.all([
+    genDoc('/api/generate-cover',
+      { jobTitle: app.title, company: app.company, name, skills, cvText, jobDescription: app.description || '', options: opts },
+      () => (typeof buildCoverLetter === 'function' ? buildCoverLetter({ jobTitle: app.title, company: app.company, name, skills }) : '')),
+    genDoc('/api/generate-cv',
+      { cvText, targetRole: app.title, foundSkills: (state.analysis?.foundSkills || []).map(s => s.label), options: opts },
+      () => (typeof buildImprovedCV === 'function' ? buildImprovedCV(cvText, app.title, state.analysis) : cvText)),
+  ]);
+
+  const email = `Subject: Application for ${app.title}${app.company ? ' at ' + app.company : ''}\n\n`
+    + `Dear Hiring Team,\n\nPlease find attached my CV and cover letter for the ${app.title} position`
+    + `${app.company ? ' at ' + app.company : ''}. I would welcome the opportunity to discuss how my `
+    + `background fits your needs.\n\nKind regards,\n${name || '[Your name]'}\n${p.email || ''}`;
+
+  const documents = { cv: cv.text, cover: cover.text, email, generatedAt: new Date().toISOString(), ai: !!(cover.ai || cv.ai) };
+  renderJobDocs(app, documents);
+  state.docsCount += 3; updateStats();
+
+  // Persist the generated documents on the application so they survive a refresh.
+  await updateAppData(app.id, { documents });
+  renderKanban();
+
+  btn.disabled = false; btn.innerHTML = orig;
+  toast((cover.ai || cv.ai) ? 'CV, cover letter & email generated & saved (AI)!' : 'CV, cover letter & email generated & saved.', 'success');
+}
+
+function renderJobDocs(app, docs) {
+  $('jw-cover-output').classList.add('hidden');
+  const wrap = $('jw-docs');
+  const block = (key, title, text) => `
+    <div class="jw-doc">
+      <div class="jw-doc-head"><strong>${esc(title)}</strong>
+        <span>
+          <button class="btn btn-ghost btn-xs" data-copy="${key}">Copy</button>
+          <button class="btn btn-ghost btn-xs" data-pdf="${key}">PDF</button>
+        </span>
+      </div>
+      <textarea id="jw-doc-${key}" class="field" rows="9" readonly>${esc(text)}</textarea>
+    </div>`;
+  const savedNote = docs.generatedAt
+    ? `<div class="hint" style="margin-bottom:8px">Saved documents (generated ${new Date(docs.generatedAt).toLocaleString('en-GB')}${docs.ai ? ', AI' : ''}). Click <strong>Generate documents</strong> to refresh.</div>`
+    : '';
+  wrap.innerHTML = savedNote
+    + block('cv', 'Tailored CV', docs.cv || '')
+    + block('cover', 'Cover Letter', docs.cover || '')
+    + block('email', 'Application Email', docs.email || '');
+  wrap.classList.remove('hidden');
+
+  const pdfTitles = { cv: 'Curriculum Vitae', cover: 'Cover Letter', email: 'Application Email' };
+  const tag = (app.company || 'job').replace(/\s+/g, '_');
+  wrap.querySelectorAll('[data-copy]').forEach(b =>
+    b.addEventListener('click', () => copyText(`jw-doc-${b.dataset.copy}`)));
+  wrap.querySelectorAll('[data-pdf]').forEach(b =>
+    b.addEventListener('click', () => downloadTextAsPDF($(`jw-doc-${b.dataset.pdf}`).value, `${tag}_${b.dataset.pdf}.pdf`, pdfTitles[b.dataset.pdf])));
 }
 
 (function wireJobWorkspace() {
@@ -1837,8 +2138,10 @@ async function generateJobCover() {
   $('jw-close').addEventListener('click', close);
   overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
-  $('jw-recheck').addEventListener('click', () => { if (jwCurrentApp) openJobWorkspace(jwCurrentApp); toast('Re-consulting with your current profile…', 'info'); });
+  $('jw-recheck').addEventListener('click', () => { if (jwCurrentApp) openJobWorkspace(jwCurrentApp, true); toast('Re-consulting with your current profile…', 'info'); });
   $('jw-cover').addEventListener('click', generateJobCover);
+  const _jwDocs = $('jw-docs-btn');
+  if (_jwDocs) _jwDocs.addEventListener('click', generateJobDocs);
   $('jw-update-profile').addEventListener('click', () => {
     jwReturnApp = jwCurrentApp;          // remember the job to re-match after saving
     close();
@@ -2002,8 +2305,8 @@ function initChat() {
 // ── Stats ───────────────────────────────────────────────────────────────────
 function updateStats() {
   const set = (id, v) => { const el = $(id); if (el) el.textContent = v; };
-  const highMatches = state.analysis
-    ? state.jobs.filter(j => calculateMatchScore(j, state.analysis) >= 0.7).length
+  const highMatches = ensureAnalysis()
+    ? state.jobs.filter(j => calculateMatchScore(j, state.analysis) >= HIGH_MATCH_THRESHOLD).length
     : 0;
   set('stat-jobs',    state.jobs.length);
   set('stat-matches', highMatches);
@@ -2700,20 +3003,41 @@ function generateInterview(role) {
   return { role: role || state.profile?.title || domain || 'your target role', common, roleQs, tips };
 }
 
-const _interviewBtn = $('generate-interview-btn');
-if (_interviewBtn) _interviewBtn.addEventListener('click', () => {
-  const role = $('interview-role').value.trim() || state.profile?.title || '';
-  const data = generateInterview(role);
-  const section = arr => arr.map(q => `<li>${esc(q)}</li>`).join('');
+function renderInterview(role, common, roleSpecific, tips, usedAI) {
+  const section = arr => (arr || []).map(q => `<li>${esc(q)}</li>`).join('');
   $('interview-content').innerHTML = `
-    <div class="iv-block"><h3 class="col-label">Common questions</h3><ol class="iv-list">${section(data.common)}</ol></div>
-    <div class="iv-block"><h3 class="col-label">Role-specific (${esc(data.role)})</h3><ol class="iv-list">${section(data.roleQs)}</ol></div>
-    <div class="iv-block"><h3 class="col-label">Tips</h3><ul class="iv-list">${section(data.tips)}</ul></div>`;
+    <div class="iv-block"><h3 class="col-label">Common questions</h3><ol class="iv-list">${section(common)}</ol></div>
+    <div class="iv-block"><h3 class="col-label">Role-specific (${esc(role)})</h3><ol class="iv-list">${section(roleSpecific)}</ol></div>
+    <div class="iv-block"><h3 class="col-label">Tips</h3><ul class="iv-list">${section(tips)}</ul></div>`;
   $('interview-output').classList.remove('hidden');
   state.docsCount++;
   refreshGettingStarted();
   updateStats();
-  toast('Interview prep generated!', 'success');
+  toast(usedAI ? 'AI interview prep generated!' : 'Interview prep generated (template).', 'success');
+}
+
+const _interviewBtn = $('generate-interview-btn');
+if (_interviewBtn) _interviewBtn.addEventListener('click', async () => {
+  const role = $('interview-role').value.trim() || state.profile?.title || '';
+  const btn = _interviewBtn; const orig = btn.innerHTML;
+  btn.disabled = true; btn.innerHTML = 'Generating…';
+
+  // Try the AI endpoint first; fall back to the local template generator.
+  let done = false;
+  try {
+    const skills = (state.profile?.skills || state.analysis?.foundSkills || []).map(s => s.label || s).slice(0, 10);
+    const r = await api.post('/api/generate-interview', { role, skills, domain: state.analysis?.domain || '' });
+    if (r && r.ok && r.source === 'ai' && r.data) {
+      renderInterview(role || 'your target role', r.data.common, r.data.roleSpecific, r.data.tips, true);
+      done = true;
+    }
+  } catch (_) { /* fall back */ }
+
+  if (!done) {
+    const d = generateInterview(role);
+    renderInterview(d.role, d.common, d.roleQs, d.tips, false);
+  }
+  btn.disabled = false; btn.innerHTML = orig;
 });
 
 const _ivCopy = $('copy-interview-btn');
@@ -2767,7 +3091,6 @@ function mergeSecuritySkills() {
   refreshGettingStarted();
   updateStats();
   initChat();
-  setupNotifyToggle();
 
   if (state.token && !state.user) {
     state.token = null;

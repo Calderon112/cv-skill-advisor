@@ -1623,6 +1623,53 @@ option   { color: var(--text); background: var(--bg-card); }
 /* ── "Also on" chip (fuzzy cross-source dedup) ─────────────────────────── */
 .chip.also-on { color: var(--teal); border-color: rgba(16,185,129,0.3); }
 
+/* ── Writer options row (compact 3-col) ────────────────────────────────── */
+.writer-options { grid-template-columns: repeat(3, 1fr) !important; gap: 10px; margin-bottom: 12px; }
+.writer-options .form-group { margin-bottom: 0; }
+.writer-options label { font-size: 10px; }
+
+/* ── Job workspace: generated documents ────────────────────────────────── */
+.jw-docs { display: flex; flex-direction: column; gap: 14px; margin-top: 12px; }
+.jw-doc { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px; background: rgba(255,255,255,0.02); }
+.jw-doc-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; font-size: 13px; }
+.jw-doc textarea { font-family: 'Cascadia Code', Consolas, monospace; font-size: 12px; line-height: 1.5; }
+
+/* ── Tracker funnel / conversion stats ─────────────────────────────────── */
+.funnel { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
+.funnel-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; text-align: center; }
+.funnel-val { font-size: 26px; font-weight: 800; line-height: 1; }
+.funnel-lbl { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.07em; margin-top: 5px; }
+
+/* ── Application status timeline + docs badge ──────────────────────────── */
+.jw-timeline { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; font-size: 11px; color: var(--text-muted); }
+.tl-step { display: inline-flex; align-items: center; gap: 5px; }
+.tl-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; background: var(--text-dim); }
+.tl-dot.applied { background: #4a9eff; } .tl-dot.review { background: var(--cyan); }
+.tl-dot.interview { background: var(--teal); } .tl-dot.offer { background: #ffc940; } .tl-dot.rejected { background: #ff4060; }
+.tl-date { color: var(--text-dim); }
+.tl-arrow { color: var(--text-dim); }
+.app-card-docs { font-size: 10px; color: var(--teal); margin-top: 2px; }
+
+/* ── Scrape log ────────────────────────────────────────────────────────── */
+.scrape-log {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 12px 14px; margin-bottom: 16px; font-family: 'Cascadia Code', Consolas, monospace; font-size: 12px;
+}
+.sl-head { font-weight: 700; margin-bottom: 8px; color: var(--text); font-family: var(--font, inherit); }
+.sl-row { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; padding: 3px 0; color: var(--text-muted); }
+.sl-row .sl-src { color: var(--teal); }
+.sl-row.err .sl-src { color: #ff4060; }
+.sl-row .sl-ms { color: var(--text-dim); min-width: 56px; text-align: right; }
+.sl-total { border-top: 1px solid var(--border); margin-top: 6px; padding-top: 6px; color: var(--text); }
+.sl-total .sl-src { color: var(--orange); }
+
+/* ── Market report bars ────────────────────────────────────────────────── */
+.mr-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 12px; }
+.mr-label { width: 42%; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mr-bar { flex: 1; height: 8px; background: rgba(255,255,255,0.06); border-radius: 4px; overflow: hidden; }
+.mr-fill { display: block; height: 100%; border-radius: 4px; }
+.mr-count { width: 26px; text-align: right; color: var(--text-muted); }
+
 /* ── Role gap recommendations (missing X → learn Y) ────────────────────── */
 .role-gap { font-size: 11px; color: var(--text-muted); margin-top: 4px; line-height: 1.45; }
 .role-gap.ok { color: var(--teal); }

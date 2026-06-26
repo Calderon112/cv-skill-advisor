@@ -359,15 +359,6 @@
                 <option value="20">Maximum (slowest)</option>
               </select>
             </div>
-            <label class="notify-toggle" for="notify-jobs-toggle">
-              <input type="checkbox" id="notify-jobs-toggle" />
-              <span>Email me jobs with ≥70% match</span>
-            </label>
-            <div id="notify-email-row" class="form-group hidden" style="margin-top:8px">
-              <label for="notify-email-input">Send notifications to</label>
-              <input id="notify-email-input" type="email" class="field" placeholder="you@example.com" />
-              <p class="hint" id="notify-email-hint">Free Resend tier: use the email you signed up to Resend with.</p>
-            </div>
             <button id="scrape-all-btn" class="btn btn-scrape-all">
               Scrape All Platforms
             </button>
@@ -399,11 +390,10 @@
                 <option value="remote">Remote only</option>
                 <option value="onsite">On-site only</option>
               </select>
-              <span class="legend high">≥70%</span>
-              <span class="legend mid">≥40%</span>
-              <span class="legend low">&lt;40%</span>
+              <button id="market-report-btn" class="btn btn-ghost btn-sm" style="margin-left:8px">Market Report</button>
             </div>
           </div>
+          <div id="market-report" class="card hidden" style="margin-bottom:16px"></div>
           <div id="job-results" class="jobs-grid"></div>
         </div>
       </section>
@@ -427,6 +417,11 @@
             <label>CV Text <span class="hint" style="text-transform:none;font-weight:400">— auto-fills from your Profile</span></label>
             <textarea id="cv-for-writer" class="field" rows="6" placeholder="Paste CV content, or complete your Professional Profile first…"></textarea>
           </div>
+          <div class="form-row writer-options">
+            <div class="form-group"><label>Language</label><select id="cv-opt-lang" class="field"><option value="auto">Auto (match CV)</option><option value="en">English</option><option value="de">Deutsch</option></select></div>
+            <div class="form-group"><label>Tone</label><select id="cv-opt-tone" class="field"><option value="professional">Professional</option><option value="friendly">Friendly</option><option value="formal">Formal</option><option value="confident">Confident</option></select></div>
+            <div class="form-group"><label>Length</label><select id="cv-opt-length" class="field"><option value="standard">Standard</option><option value="short">Short</option><option value="detailed">Detailed</option></select></div>
+          </div>
           <button id="generate-cv-btn" class="btn btn-primary">Generate Improved CV</button>
           <div id="cv-output-block" class="output-block hidden">
             <div class="output-header">
@@ -434,6 +429,7 @@
               <div>
                 <button id="copy-cv-btn" class="btn btn-ghost btn-xs">Copy</button>
                 <button id="download-cv-btn" class="btn btn-ghost btn-xs">Download</button>
+                <button id="download-cv-pdf-btn" class="btn btn-ghost btn-xs">PDF</button>
               </div>
             </div>
             <textarea id="generated-cv-output" class="field output-area" readonly></textarea>
@@ -475,6 +471,11 @@
             <label>Skills to Highlight</label>
             <input id="cover-skills" type="text" class="field" placeholder="Comma-separated, or auto-fills from Profile" />
           </div>
+          <div class="form-row writer-options">
+            <div class="form-group"><label>Language</label><select id="cover-opt-lang" class="field"><option value="auto">Auto (match role)</option><option value="en">English</option><option value="de">Deutsch</option></select></div>
+            <div class="form-group"><label>Tone</label><select id="cover-opt-tone" class="field"><option value="professional">Professional</option><option value="friendly">Friendly</option><option value="formal">Formal</option><option value="confident">Confident</option></select></div>
+            <div class="form-group"><label>Length</label><select id="cover-opt-length" class="field"><option value="standard">Standard</option><option value="short">Short</option><option value="detailed">Detailed</option></select></div>
+          </div>
           <button id="generate-cover-btn" class="btn btn-primary">Generate Cover Letter</button>
           <div id="cover-output-block" class="output-block hidden">
             <div class="output-header">
@@ -482,6 +483,7 @@
               <div>
                 <button id="copy-cover-btn" class="btn btn-ghost btn-xs">Copy</button>
                 <button id="download-cover-btn" class="btn btn-ghost btn-xs">Download</button>
+                <button id="download-cover-pdf-btn" class="btn btn-ghost btn-xs">PDF</button>
                 <button id="email-cover-btn" class="btn btn-ghost btn-xs">Send by email</button>
               </div>
             </div>
@@ -526,6 +528,8 @@
           </div>
           <button id="add-app-btn" class="btn btn-primary">+ Add Job</button>
         </div>
+
+        <div id="tracker-funnel" class="funnel hidden"></div>
 
         <div id="add-app-form" class="card hidden">
           <h2>New Job</h2>
@@ -781,9 +785,11 @@
       <div class="jw-actions">
         <button id="jw-update-profile" class="btn btn-ghost btn-sm">✎ Update profile</button>
         <button id="jw-recheck" class="btn btn-ghost btn-sm">↻ Re-check match</button>
-        <button id="jw-cover" class="btn btn-primary btn-sm">Generate cover letter</button>
+        <button id="jw-cover" class="btn btn-ghost btn-sm">Cover letter only</button>
+        <button id="jw-docs-btn" class="btn btn-primary btn-sm">Generate documents (CV + letter + email)</button>
       </div>
       <textarea id="jw-cover-output" class="field hidden" rows="12" readonly placeholder="Your cover letter will appear here…"></textarea>
+      <div id="jw-docs" class="jw-docs hidden"></div>
     </div>
   </div>
 
@@ -791,6 +797,7 @@
   <script src="security-skills.js"></script>
   <script src="scorer.js"></script>
   <script src="security-learning.js"></script>
+  <script src="rerank.js"></script>
   <script src="app.js"></script>
   <!-- ── GDPR Banner ── -->
 <div id="gdpr-banner" style="

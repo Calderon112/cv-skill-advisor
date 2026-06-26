@@ -52,8 +52,39 @@ cv-skill-advisor/
 |---|---|---|
 | **Scout** | CV upload, PDF parsing, skill extraction | ✅ Sprint 1 |
 | **Matcher** | Job search, gap analysis, skill comparison | ✅ Sprint 1 |
-| **Writer** | Cover letter generation | 🔜 Sprint 2 |
-| **Tracker** | Application tracking & status | ✅ Sprint 1 |
+| **Writer** | CV, cover letter, email & roadmap generation | ✅ Sprint 2-3 |
+| **Tracker** | Application tracking, status & documents | ✅ Sprint 1-3 |
+
+The agents are explicitly separated and orchestrated — see [ARCHITECTURE.md](ARCHITECTURE.md).
+
+---
+
+## ✨ Sprint 2 & 3 — Features delivered
+
+### Matching & job discovery
+- **Extended security taxonomy** — 232 IT-Security skills across 14 sub-domains (`security-skills.js`).
+- **Real multi-source scraping** — Bundesagentur, Arbeitnow, Remotive, LinkedIn, **Xing**, free **StepStone** (+ Adzuna / Apify / Jooble when keys are set), run in parallel with a per-source **scrape log** (counts + timing) shown in the UI and server console.
+- **Fuzzy cross-source de-duplication** (`server/dedup.js`) — Sørensen-Dice on title+company; merges near-duplicates ("(m/w/d)", GmbH/AG) and records "also on …".
+- **Weighted scoring engine** (`scorer.js`) — deterministic 6-criteria score (skills 45 · role 20 · location 10 · remote 10 · seniority 10 · salary 5) with a transparent breakdown.
+- **Outcome-based re-ranking** (`rerank.js`) — boosts jobs similar to applications that reached interview/offer.
+- **The Oracle** — `POST /api/job-consult`: the LLM reads a posting + your profile and returns a deep match %, strengths, gaps, certifications and advice. **Its score is the single source of truth** shown on the job card once analysed (cached per job + profile signature, with auto-retry on rate-limits).
+- **Market Report** (`server/report.js`) — aggregates scraped jobs into skill/location/company/salary stats + an LLM summary.
+
+### Writer (document generation)
+- **AI CV, cover letter, email & learning roadmap** — `POST /api/generate-cv` · `/api/generate-cover` · `/api/generate-roadmap`, each with a deterministic template fallback.
+- **Writer options** — language (DE/EN), tone, length.
+- **PDF export** of any generated document (jsPDF).
+- **One-click documents from the Tracker** — generate CV + cover letter + email for a saved job; **documents are persisted** on the application and survive a refresh.
+- **AI interview prep** — `POST /api/generate-interview`: role-specific questions + tips.
+
+### Tracker
+- Kanban with **drag-and-drop**, deadline urgency, **status-history timeline**, and a **conversion funnel** (Saved → Applied → Interviews → Offers + response rate).
+
+### AI providers
+- Multi-provider LLM client (`server/llm.js`): **Anthropic, Google Gemini (free), OpenRouter (free), OpenAI** — automatic fallback + retry/backoff. Without any key, every AI feature degrades to a deterministic template.
+
+### Quality
+- **70 unit tests** (`node tests/test.js`) — pure functions, multi-agent contracts, fuzzy dedup, re-ranking, market report. No external framework.
 
 ---
 
