@@ -926,11 +926,13 @@ async function searchJobs() {
     jooble: 'Jooble', adzuna: 'Adzuna'
   };
 
+  state.semanticSims = null;                 // fresh search → drop stale relevance
   renderJobResults(state.jobs, platformLabels[platform] || platform);
   setAgentStatus('scout', state.jobs.length > 0 ? 'done' : 'error');
   $('search-status-pill').textContent = `${state.jobs.length} found`;
   if (state.jobs.length > 0) toast(`${state.jobs.length} jobs found!`, 'success');
   updateStats();
+  fetchSemanticScores(state.jobs);           // RAG re-rank (no-op without a key)
 }
 
 // Detect whether a job is remote — uses explicit flags first, then keyword
@@ -956,6 +958,33 @@ function rerenderJobs() {
   renderJobResults(filterByWorkMode(state.jobs || []), state.jobsLabel || 'Jobs');
 }
 
+// Stable key for matching a job to its semantic score.
+function jobKey(job) {
+  return `${(job.title || '').toLowerCase().trim()}|${(job.company || '').toLowerCase().trim()}`;
+}
+
+// RAG semantic matching: embed the profile + each job server-side, get a cosine
+// similarity per job, then re-rank. Gracefully no-ops when no embeddings key is
+// set (server replies available:false) so the keyword flow is unaffected.
+async function fetchSemanticScores(jobs) {
+  try {
+    const profileText = (typeof profileToText === 'function' ? profileToText() : '') || state.cvText || '';
+    if (!profileText || !Array.isArray(jobs) || !jobs.length) return;
+    const payload = jobs.slice(0, 300).map(j => ({ id: jobKey(j), text: `${j.title || ''} — ${j.description || ''}` }));
+    const r = await fetch(`${baseUrl}/api/semantic-match`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ profile: profileText, jobs: payload }),
+    });
+    const d = await r.json();
+    if (!d || !d.available || !Array.isArray(d.scores) || !d.scores.length) return;
+    state.semanticSims = {};
+    d.scores.forEach(s => { state.semanticSims[s.id] = s.sim; });
+    rerenderJobs();
+    $('search-status-pill').textContent = `${(state.jobs || []).length} found · AI-ranked`;
+  } catch (_) { /* embeddings unavailable → keep keyword order */ }
+}
+
 function renderJobResults(jobs, sourceLabel) {
   const panel = $('jobs-results-panel');
   const grid  = $('job-results');
@@ -969,6 +998,7 @@ function renderJobResults(jobs, sourceLabel) {
   let ranked = jobs.map(job => ({
     job,
     detail: state.analysis ? scoreJobDetailed(job, state.analysis) : null,
+    sem: state.semanticSims ? state.semanticSims[jobKey(job)] : undefined,
   }));
   ranked.sort((a, b) => {
     const aAi = a.detail && a.detail.breakdown && a.detail.breakdown.aiAssessed;
@@ -976,7 +1006,11 @@ function renderJobResults(jobs, sourceLabel) {
     if (aAi && bAi) return (b.detail.score || 0) - (a.detail.score || 0);
     if (aAi) return -1;
     if (bAi) return 1;
-    return 0; // preserve scrape order for non-assessed jobs
+    // Neither AI-assessed → float the most semantically relevant jobs up (RAG),
+    // otherwise preserve scrape order.
+    const as = typeof a.sem === 'number' ? a.sem : -1;
+    const bs = typeof b.sem === 'number' ? b.sem : -1;
+    return bs - as;
   });
 
   $('job-count-badge').textContent = ranked.length;
@@ -987,7 +1021,7 @@ function renderJobResults(jobs, sourceLabel) {
     return;
   }
 
-  grid.innerHTML = ranked.map(({ job, detail }, i) => {
+  grid.innerHTML = ranked.map(({ job, detail, sem }, i) => {
     const date    = job.publishedDate ? String(job.publishedDate).slice(0, 10) : null;
     const isNew   = date && (Date.now() - new Date(date).getTime()) < 7 * 86400000;
     const salary  = job.salary ? `${esc(job.salary)}` : '';
@@ -1002,6 +1036,10 @@ function renderJobResults(jobs, sourceLabel) {
       const pct   = Math.round(detail.score * 100);
       const color = pct >= 75 ? 'var(--teal)' : pct >= 40 ? 'var(--cyan)' : 'var(--text-dim)';
       scoreHtml = `<span class="chip" title="AI consultant's match for this job" style="color:${color};border-color:${color}33">${pct}% match <span style="font-size:9px;font-weight:800">AI</span></span>`;
+    } else if (typeof sem === 'number') {
+      // RAG semantic relevance (profile ↔ posting), shown until the Oracle assesses it.
+      const rp = Math.round(sem * 100);
+      scoreHtml = `<span class="chip" title="Semantic relevance to your profile (RAG embeddings)" style="color:var(--blue-neon);border-color:rgba(6,182,212,0.3)">🧠 ${rp}% relevant</span>`;
     }
 
     return `
@@ -1158,11 +1196,13 @@ async function scrapeAllPlatforms() {
     }
 
     state.jobsLabel = 'All Platforms';
+    state.semanticSims = null;                // fresh search → drop stale relevance
     rerenderJobs();
     setAgentStatus('scout', state.jobs.length > 0 ? 'done' : 'error');
     $('search-status-pill').textContent = `${state.jobs.length} found`;
     if (state.jobs.length > 0) toast(`${state.jobs.length} jobs collected from all platforms!`, 'success');
     updateStats();
+    fetchSemanticScores(state.jobs);          // RAG re-rank (no-op without a key)
 
   } catch (err) {
     console.error('scrapeAll error:', err);
@@ -2316,6 +2356,7 @@ function renderJobDocs(app, docs) {
   document.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
   $('jw-recheck').addEventListener('click', () => { if (jwCurrentApp) openJobWorkspace(jwCurrentApp, true); toast('Re-consulting with your current profile…', 'info'); });
   $('jw-cover').addEventListener('click', generateJobCover);
+  $('jw-graph-btn')?.addEventListener('click', runAgentGraph);
   const _jwDocs = $('jw-docs-btn');
   if (_jwDocs) _jwDocs.addEventListener('click', generateJobDocs);
   $('jw-update-profile').addEventListener('click', () => {
@@ -2325,6 +2366,51 @@ function renderJobDocs(app, docs) {
     toast('Update your profile and click "Save Profile" — we\'ll re-check this job automatically.', 'info');
   });
 })();
+
+// Run the LangGraph multi-agent pipeline (Scout → Matcher → Writer ⇄ Critic) on
+// the current job and show the execution trace + self-improved letter + score.
+async function runAgentGraph() {
+  const app = jwCurrentApp;
+  if (!app) return;
+  const btn = $('jw-graph-btn'); const orig = btn.innerHTML;
+  btn.disabled = true; btn.innerHTML = 'Running graph…';
+  const panel = $('jw-graph-panel');
+  panel.classList.remove('hidden');
+  panel.innerHTML = '<div class="hint">Scout → Matcher → Writer ⇄ Critic …</div>';
+  const cvText = (typeof profileToText === 'function' ? profileToText() : '') || state.cvText || '';
+  try {
+    const r = await fetch(`${baseUrl}/api/graph-run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({
+        cvText,
+        profile: state.profile || {},
+        job: { title: app.title, company: app.company },
+        jobDescription: app.description || '',
+      }),
+    });
+    const d = await r.json();
+    if (!d || !d.available) {
+      panel.innerHTML = `<div class="hint">The agent graph needs an LLM key. ${esc((d && (d.reason || d.error)) || '')}</div>`;
+      return;
+    }
+    const steps = (d.trace || []).map(t => `<li><strong>${esc(t.node)}</strong> — ${esc(t.note)}</li>`).join('');
+    const pass = d.score >= d.qualityBar;
+    panel.innerHTML =
+      `<div class="jw-graph-head">🔗 LangGraph · <strong>${d.revisions}</strong> revision(s) · `
+      + `Critic <strong style="color:${pass ? 'var(--teal)' : 'var(--orange)'}">${d.score}/100</strong> (bar ${d.qualityBar})</div>`
+      + `<ol class="jw-graph-trace">${steps}</ol>`
+      + (d.feedback ? `<div class="hint" style="margin-top:6px"><strong>Last critique:</strong> ${esc(d.feedback)}</div>` : '');
+    const out = $('jw-cover-output');
+    out.value = d.coverLetter || '';
+    out.classList.remove('hidden');
+    toast(`Agent graph done — ${d.revisions} revision(s), score ${d.score}/100.`, 'success');
+  } catch (e) {
+    panel.innerHTML = `<div class="hint">Graph failed: ${esc(e.message)}</div>`;
+  } finally {
+    btn.disabled = false; btn.innerHTML = orig;
+  }
+}
 
 // ── CareerBot Chat Assistant ────────────────────────────────────────────────
 const chatKnowledge = [
@@ -2442,7 +2528,7 @@ function initChat() {
 
   closeBtn.addEventListener('click', () => panel.classList.add('hidden'));
 
-  function sendMessage(text) {
+  async function sendMessage(text) {
     const msg = (text != null ? text : input.value).trim();
     if (!msg) return;
     addChatMsg(msg, 'user');
@@ -2457,12 +2543,28 @@ function initChat() {
     box.appendChild(typing);
     box.scrollTop = box.scrollHeight;
 
-    const delay = 500 + Math.random() * 500;
-    setTimeout(() => {
-      typing.remove();
+    // Try the grounded RAG endpoint first; fall back to keyword answers when no
+    // embeddings/LLM key is configured or the request fails.
+    let reply = null, sources = null;
+    try {
+      const profileText = (typeof profileToText === 'function' ? profileToText() : '') || state.cvText || '';
+      const r = await fetch(`${baseUrl}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ message: msg, profile: profileText }),
+      });
+      const d = await r.json();
+      if (d && d.available && d.reply) { reply = d.reply; sources = d.sources; }
+    } catch (_) { /* offline → fall back below */ }
+
+    typing.remove();
+    if (reply) {
+      const cite = sources && sources.length ? `\n\n**Sources:** ${sources.slice(0, 3).join(' · ')}` : '';
+      addChatMsg(reply + cite, 'bot');
+    } else {
       addChatMsg(getChatResponse(msg), 'bot');
-      if (panel.classList.contains('hidden')) toggleBtn.classList.add('has-new');
-    }, delay);
+    }
+    if (panel.classList.contains('hidden')) toggleBtn.classList.add('has-new');
   }
 
   sendBtn.addEventListener('click', () => sendMessage());

@@ -17,6 +17,9 @@ const { dedupeJobs } = require('./server/dedup.js');
 const Scorer = require('./scorer.js');
 const { buildReport } = require('./server/report.js');
 const SecurityLearning = require('./security-learning.js');
+const embeddings = require('./server/embeddings.js');
+const rag = require('./server/rag.js');
+const graph = require('./server/graph.js');
 
 
 // ── Password hashing (scrypt — Node.js built-in, no npm needed) ──────────
@@ -1445,12 +1448,101 @@ function scanPdfJpegs(buffer) {
   return out;
 }
 
-// The profile photo: the largest JPEG that PLAUSIBLY looks like a headshot — roughly
-// portrait/square (aspect ratio ~0.6–1.9). This rejects full-page sidebars/banners
-// (e.g. an image-based template whose whole left column is one tall 546×1712 graphic)
-// so we never insert a wrong image; returns null when there is no plausible headshot.
+// CRC-32 (for assembling PNG chunks).
+const CRC_TABLE = (() => {
+  const t = new Int32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c;
+  }
+  return t;
+})();
+function crc32(buf) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+function pngChunk(type, data) {
+  const len = Buffer.alloc(4); len.writeUInt32BE(data.length, 0);
+  const typeBuf = Buffer.from(type, 'latin1');
+  const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(Buffer.concat([typeBuf, data])), 0);
+  return Buffer.concat([len, typeBuf, data, crc]);
+}
+function buildPng(w, h, colorType, idat) {
+  const sig = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8; ihdr[9] = colorType; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+  return Buffer.concat([sig, pngChunk('IHDR', ihdr), pngChunk('IDAT', idat), pngChunk('IEND', Buffer.alloc(0))]);
+}
+
+// Turn raw (inflated) PDF image samples into a real PNG. Handles 8-bit Gray/RGB,
+// with or without PDF "Predictor" filter bytes (which are PNG-compatible). Returns
+// null for anything we can't safely interpret (CMYK, indexed, 16-bit, …).
+function rawSamplesToPng(raw, w, h) {
+  const px = w * h;
+  let comp, colorType, hasFilterBytes;
+  if      (raw.length === px * 3)        { comp = 3; colorType = 2; hasFilterBytes = false; }
+  else if (raw.length === px)            { comp = 1; colorType = 0; hasFilterBytes = false; }
+  else if (raw.length === h * (1 + w * 3)) { comp = 3; colorType = 2; hasFilterBytes = true; }
+  else if (raw.length === h * (1 + w))     { comp = 1; colorType = 0; hasFilterBytes = true; }
+  else return null;
+
+  let scan;
+  if (hasFilterBytes) {
+    scan = raw; // PDF predictor rows already carry PNG-style filter bytes
+  } else {
+    const rowLen = w * comp;
+    scan = Buffer.alloc(h * (1 + rowLen));
+    for (let y = 0; y < h; y++) {
+      scan[y * (1 + rowLen)] = 0;
+      raw.copy(scan, y * (1 + rowLen) + 1, y * rowLen, y * rowLen + rowLen);
+    }
+  }
+  try { return buildPng(w, h, colorType, zlib.deflateSync(scan)); } catch (_) { return null; }
+}
+
+// Scan a PDF for FlateDecode (zlib) image XObjects — the format Word/Canva/LibreOffice
+// commonly use for photos. We inflate the stream and rebuild a PNG so the headshot can
+// be extracted just like the JPEG path below.
+function scanPdfFlateImages(buffer) {
+  const bin = buffer.toString('latin1');
+  const out = [];
+  const re = /\/Subtype\s*\/Image/g;
+  let m;
+  while ((m = re.exec(bin)) !== null) {
+    const dictStart = bin.lastIndexOf('<<', m.index);
+    const sIdx = bin.indexOf('stream', m.index);
+    if (sIdx === -1) continue;
+    const dict = bin.slice(dictStart === -1 ? Math.max(0, m.index - 300) : dictStart, sIdx);
+    if (!/FlateDecode/.test(dict)) continue;                     // only Flate here (JPEGs handled separately)
+    if (/DCTDecode|JPXDecode|CCITTFax|JBIG2|\/Indexed/.test(dict)) continue; // unsupported / not a headshot
+    const w   = parseInt((dict.match(/\/Width\s+(\d+)/) || [])[1], 10);
+    const h   = parseInt((dict.match(/\/Height\s+(\d+)/) || [])[1], 10);
+    const bpc = parseInt((dict.match(/\/BitsPerComponent\s+(\d+)/) || [])[1], 10) || 8;
+    if (!w || !h || bpc !== 8) continue;
+    let start = sIdx + 'stream'.length;
+    if (bin[start] === '\r') start++;
+    if (bin[start] === '\n') start++;
+    const eIdx = bin.indexOf('endstream', start);
+    if (eIdx === -1) continue;
+    let raw;
+    try { raw = zlib.inflateSync(buffer.slice(start, eIdx)); }
+    catch (_) { try { raw = zlib.inflateRawSync(buffer.slice(start, eIdx)); } catch (__) { continue; } }
+    const png = rawSamplesToPng(raw, w, h);
+    if (png) out.push({ dataUrl: 'data:image/png;base64,' + png.toString('base64'), w, h, bytes: png.length });
+  }
+  return out;
+}
+
+// The profile photo: the largest image that PLAUSIBLY looks like a headshot — roughly
+// portrait/square (aspect ratio ~0.6–1.9). Considers both embedded JPEGs and rebuilt
+// PNGs. This rejects full-page sidebars/banners (e.g. an image-based template whose
+// whole left column is one tall 546×1712 graphic) so we never insert a wrong image;
+// returns null when there is no plausible headshot.
 function extractPdfImage(buffer) {
-  const cands = scanPdfJpegs(buffer)
+  const cands = [...scanPdfJpegs(buffer), ...scanPdfFlateImages(buffer)]
     .filter(im => !im.w || !im.h || (im.h / im.w >= 0.6 && im.h / im.w <= 1.9))
     .sort((a, b) => b.bytes - a.bytes);
   return cands.length ? cands[0].dataUrl : null;
@@ -2225,6 +2317,87 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 200, { text, photo, images });
       } catch (e) {
         sendJson(res, 400, { error: 'PDF parse failed: ' + e.message });
+      }
+    });
+    return;
+  }
+
+  // ── RAG: semantic job matching ───────────────────────────────────────────
+  // Embeds the profile and each job, returns a cosine similarity per job so the
+  // client can blend it with the deterministic keyword score. Public.
+  if (parsedUrl.pathname === '/api/semantic-match' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        if (!embeddings.isAvailable()) { sendJson(res, 200, { available: false, scores: [] }); return; }
+        const { profile, jobs } = JSON.parse(body || '{}');
+        const list = Array.isArray(jobs) ? jobs.slice(0, 300) : [];
+        if (!profile || !list.length) { sendJson(res, 200, { available: true, scores: [] }); return; }
+
+        const [profVec] = await embeddings.embed([String(profile).slice(0, 2000)]);
+        const jobVecs = await embeddings.embed(list.map(j => String(j.text || '').slice(0, 1000)));
+        const scores = list.map((j, i) => ({
+          id: j.id,
+          sim: Math.max(0, embeddings.cosine(profVec, jobVecs[i])), // clamp negatives to 0
+        }));
+        sendJson(res, 200, { available: true, provider: embeddings.embedProvider(), scores });
+      } catch (e) {
+        sendJson(res, 200, { available: false, error: e.message, scores: [] });
+      }
+    });
+    return;
+  }
+
+  // ── RAG: grounded CareerBot chat ─────────────────────────────────────────
+  // Retrieves the most relevant knowledge-base chunks and asks the LLM to answer
+  // strictly from them. Falls back (available:false) when no key is configured.
+  if (parsedUrl.pathname === '/api/chat' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        if (!embeddings.isAvailable() || !llm.isAvailable()) {
+          sendJson(res, 200, { available: false, reply: '', sources: [] });
+          return;
+        }
+        const { message, profile } = JSON.parse(body || '{}');
+        const q = String(message || '').trim();
+        if (!q) { sendJson(res, 400, { error: 'message required' }); return; }
+
+        const hits = await rag.retrieve(q, 4);
+        const context = hits.map((h, i) => `[${i + 1}] ${h.title}: ${h.text}`).join('\n');
+        const system = 'You are CareerBot, the assistant of the CareerAI job app for IT-Security students. '
+          + 'Answer the user using ONLY the context below plus the user profile. Be concise and practical. '
+          + 'If the context does not cover the question, say so briefly and give general career guidance. '
+          + 'Do not invent job listings or fake resources.';
+        const user = `CONTEXT:\n${context || '(no relevant knowledge found)'}\n\n`
+          + (profile ? `USER PROFILE:\n${String(profile).slice(0, 1200)}\n\n` : '')
+          + `QUESTION:\n${q}`;
+        const reply = await llm.chat({ system, user, maxTokens: 1200, temperature: 0.4 });
+        sendJson(res, 200, { available: true, reply, sources: hits.map(h => h.title) });
+      } catch (e) {
+        sendJson(res, 200, { available: false, error: e.message, reply: '', sources: [] });
+      }
+    });
+    return;
+  }
+
+  // ── LangGraph: multi-agent pipeline with a Writer⇄Critic refine loop ──────
+  // Runs Scout → Matcher → (route) → Writer ⇄ Critic and returns the improved
+  // cover letter, the Critic's score, the number of revisions, and the node-by-
+  // node execution trace. Requires an LLM key; degrades to available:false.
+  if (parsedUrl.pathname === '/api/graph-run' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        if (!llm.isAvailable()) { sendJson(res, 200, { available: false, reason: 'no LLM key' }); return; }
+        const input = JSON.parse(body || '{}');
+        const result = await graph.runGraph(input, buildAgentDeps(), llm, rag);
+        sendJson(res, 200, { available: true, ...result });
+      } catch (e) {
+        sendJson(res, 200, { available: false, error: e.message });
       }
     });
     return;
