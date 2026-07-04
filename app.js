@@ -979,7 +979,8 @@ async function fetchSemanticScores(jobs) {
     const d = await r.json();
     if (!d || !d.available || !Array.isArray(d.scores) || !d.scores.length) return;
     state.semanticSims = {};
-    d.scores.forEach(s => { state.semanticSims[s.id] = s.sim; });
+    // Use the calibrated relevance (rel) for display/ranking; fall back to raw sim.
+    d.scores.forEach(s => { state.semanticSims[s.id] = (typeof s.rel === 'number' ? s.rel : s.sim); });
     rerenderJobs();
     $('search-status-pill').textContent = `${(state.jobs || []).length} found · AI-ranked`;
   } catch (_) { /* embeddings unavailable → keep keyword order */ }

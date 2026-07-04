@@ -104,4 +104,15 @@ function cosine(a, b) {
   return dot / (Math.sqrt(na) * Math.sqrt(nb));
 }
 
-module.exports = { embed, cosine, isAvailable, embedProvider };
+// Raw cosine for these models clusters in a narrow band (~0.55 unrelated ↔ ~0.82
+// strong), so a raw 0.56 would display as a misleading "56% relevant". `relevance`
+// rescales that band to a calibrated 0..1 so an unrelated job reads ~0% and a
+// strong match ~100%. Anchors are model-dependent and env-tunable.
+const REL_FLOOR = Number(process.env.EMBED_REL_FLOOR) || 0.55;
+const REL_CEIL  = Number(process.env.EMBED_REL_CEIL)  || 0.82;
+function relevance(sim) {
+  const r = (sim - REL_FLOOR) / (REL_CEIL - REL_FLOOR || 1);
+  return Math.max(0, Math.min(1, r));
+}
+
+module.exports = { embed, cosine, relevance, isAvailable, embedProvider };
