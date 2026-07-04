@@ -2427,6 +2427,28 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ── LangGraph (streaming): same pipeline, but pushes each node's step live ──
+  // over Server-Sent Events so the UI can show the agents working in real time.
+  if (parsedUrl.pathname === '/api/graph-stream' && req.method === 'POST') {
+    if (rateLimited(req, 'graph', 10, 60000)) { sendJson(res, 429, { available: false, error: 'Rate limit — the agent graph is expensive; wait a moment.' }); return; }
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', async () => {
+      if (!llm.isAvailable()) { sendJson(res, 200, { available: false, reason: 'no LLM key' }); return; }
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no' });
+      const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+      try {
+        const input = JSON.parse(body || '{}');
+        const result = await graph.runGraphStream(input, buildAgentDeps(), llm, rag, (step) => send({ type: 'step', step }));
+        send({ type: 'done', result });
+      } catch (e) {
+        send({ type: 'error', error: e.message });
+      }
+      res.end();
+    });
+    return;
+  }
+
   // ── Scrape-All endpoint ──────────────────────────────────────────────────
   if (parsedUrl.pathname === '/api/scrape-all' && req.method === 'POST') {
     // Scrape-all is public — no login required to search jobs

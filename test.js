@@ -11,6 +11,8 @@ const dedup  = require('./server/dedup.js');
 const rerank = require('./rerank.js');
 const { buildReport } = require('./server/report.js');
 const SecurityLearning = require('./security-learning.js');
+const embeddings = require('./server/embeddings.js');
+const graph = require('./server/graph.js');
 
 // ── Colour helpers ────────────────────────────────────────────────────────
 const c = {
@@ -738,6 +740,68 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
     assert(report.top_skills.length > 0, 'skills aggregated');
     assert(report.top_locations.some(l => l.name === 'Berlin' && l.count === 2), 'Berlin counted twice');
     assert(typeof report.summary === 'string' && report.summary.length > 0, 'summary produced');
+  });
+
+  // ── RAG: embeddings maths (pure, no API) ─────────────────────────────────
+  section('RAG — embeddings');
+
+  await atest('cosine: identical vectors = 1, orthogonal = 0', async () => {
+    assert(Math.abs(embeddings.cosine([1, 2, 3], [1, 2, 3]) - 1) < 1e-9, 'identical → 1');
+    assert(Math.abs(embeddings.cosine([1, 0], [0, 1]) - 0) < 1e-9, 'orthogonal → 0');
+    assertEqual(embeddings.cosine([1, 2], [1, 2, 3]), 0, 'length mismatch → 0');
+  });
+
+  await atest('relevance: calibrates raw cosine to an honest 0..1', async () => {
+    assertEqual(embeddings.relevance(0.55), 0, 'at/below floor → 0');
+    assertEqual(embeddings.relevance(0.40), 0, 'below floor clamps to 0');
+    assertEqual(embeddings.relevance(0.82), 1, 'at/above ceil → 1');
+    const mid = embeddings.relevance(0.685); // midpoint of [0.55, 0.82]
+    assert(mid > 0.45 && mid < 0.55, `midpoint ≈ 0.5 (got ${mid.toFixed(3)})`);
+    assert(embeddings.relevance(0.56) < embeddings.relevance(0.81), 'monotonic (preserves ranking)');
+  });
+
+  // ── LangGraph: routing + Writer⇄Critic loop (mocked LLM, deterministic) ───
+  section('LangGraph — multi-agent pipeline');
+
+  const gDeps = {
+    findSkills: () => [{ key: 'siem', label: 'SIEM' }],
+    analyzeRoles: () => [{ name: 'SOC Analyst', score: 0.8 }],
+    allSkills: () => [{ key: 'siem', label: 'SIEM' }, { key: 'edr', label: 'EDR' }],
+    scoreJob: () => ({ score: 0.8, breakdown: {} }),
+    recommend: () => [],
+  };
+  const noRag = { isAvailable: () => false, retrieve: async () => [] };
+
+  await atest('graph: Writer⇄Critic loop refines until the quality bar', async () => {
+    let criticCalls = 0;
+    const mockLlm = {
+      isAvailable: () => true,
+      chat: async ({ system }) => {
+        if (/Critic/.test(system)) { criticCalls++; return JSON.stringify({ score: criticCalls === 1 ? 50 : 95, feedback: 'add specifics' }); }
+        return 'Dear Manager, a tailored letter mentioning SIEM and Splunk.';
+      },
+    };
+    const r = await graph.runGraph(
+      { cvText: 'siem splunk', profile: { title: 'SOC' }, job: { title: 'SOC Analyst' }, jobDescription: 'monitor SIEM alerts' },
+      gDeps, mockLlm, noRag,
+    );
+    assert(r.coverLetter.length > 0, 'produces a letter');
+    assertEqual(r.revisions, 2, 'looped once (score 50 → refine → 95)');
+    assertEqual(r.score, 95, 'final Critic score above the bar');
+    assert(r.trace.some(t => t.node === 'Scout') && r.trace.some(t => t.node === 'Critic'), 'trace records the path');
+  });
+
+  await atest('graph: conditional route — no job → no letter (ends after Matcher)', async () => {
+    const mockLlm = { isAvailable: () => true, chat: async () => 'x' };
+    const r = await graph.runGraph({ cvText: 'siem', profile: {}, job: null, jobDescription: '' }, gDeps, mockLlm, noRag);
+    assertEqual(r.coverLetter, '', 'routed straight to END');
+    assertEqual(r.revisions, 0, 'Writer never ran');
+  });
+
+  await atest('graph: per-node error isolation (LLM failure → trace, no crash)', async () => {
+    const throwLlm = { isAvailable: () => true, chat: async () => { throw new Error('boom'); } };
+    const r = await graph.runGraph({ cvText: 'siem', profile: {}, job: { title: 'X' }, jobDescription: 'x' }, gDeps, throwLlm, noRag);
+    assert(r.trace.some(t => /error/i.test(t.note)), 'error captured in the trace, pipeline still returns');
   });
 
   const total = passed + failed + skipped;

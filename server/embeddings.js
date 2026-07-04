@@ -8,6 +8,9 @@
  * never pay to embed the same job/knowledge chunk twice in a session.
  */
 const https = require('https');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
 
 const GEMINI_EMBED_MODEL = process.env.GEMINI_EMBED_MODEL || 'gemini-embedding-001';
 const OPENAI_EMBED_MODEL = process.env.OPENAI_EMBED_MODEL || 'text-embedding-3-small';
@@ -54,7 +57,32 @@ function httpsJson(options, payload) {
   });
 }
 
-const _cache = new Map(); // text → number[]
+// Persistent embedding cache: hash(text) → number[]. Survives restarts so the
+// KB and previously-seen jobs are never re-embedded (saves latency + API cost).
+const _cache = new Map();
+const CACHE_FILE = process.env.EMBED_CACHE_FILE || path.join(__dirname, '..', '.embeddings-cache.json');
+const MAX_CACHE = Number(process.env.EMBED_CACHE_MAX) || 5000;
+const keyOf = (t) => crypto.createHash('sha1').update(String(t)).digest('base64');
+
+(function loadCache() {
+  try {
+    const obj = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
+    for (const k in obj) _cache.set(k, obj[k]);
+  } catch (_) { /* no cache yet */ }
+})();
+
+let _saveTimer = null;
+function scheduleSave() {
+  if (_saveTimer) return;
+  _saveTimer = setTimeout(() => {
+    _saveTimer = null;
+    try {
+      let entries = [..._cache.entries()];
+      if (entries.length > MAX_CACHE) entries = entries.slice(entries.length - MAX_CACHE); // keep most recent
+      fs.writeFileSync(CACHE_FILE, JSON.stringify(Object.fromEntries(entries)));
+    } catch (_) { /* best-effort persistence */ }
+  }, 3000);
+}
 
 // One OpenAI-compatible call (works for both Gemini and OpenAI).
 async function embedBatch(provider, texts) {
@@ -85,14 +113,19 @@ async function embed(texts) {
   if (!provider) throw new Error('No embeddings API key configured (set GEMINI_API_KEY or OPENAI_API_KEY)');
 
   const missing = [];
-  for (const t of texts) if (!_cache.has(t)) missing.push(t);
+  const seen = new Set();
+  for (const t of texts) {
+    const h = keyOf(t);
+    if (!_cache.has(h) && !seen.has(h)) { missing.push(t); seen.add(h); }
+  }
 
   for (let i = 0; i < missing.length; i += BATCH) {
     const chunk = missing.slice(i, i + BATCH);
     const vecs = await embedBatch(provider, chunk);
-    chunk.forEach((t, j) => { if (vecs[j]) _cache.set(t, vecs[j]); });
+    chunk.forEach((t, j) => { if (vecs[j]) _cache.set(keyOf(t), vecs[j]); });
   }
-  return texts.map((t) => _cache.get(t) || []);
+  if (missing.length) scheduleSave();
+  return texts.map((t) => _cache.get(keyOf(t)) || []);
 }
 
 /** Cosine similarity of two equal-length vectors → [-1, 1] (≈0..1 in practice). */

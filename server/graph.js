@@ -47,7 +47,8 @@ function firstJson(text) {
  * @param llm   server/llm.js (chat)
  * @param rag   server/rag.js (retrieve, isAvailable) — optional
  */
-async function runGraph(input, deps, llm, rag) {
+// Build + compile the graph (shared by the invoke and streaming callers).
+function buildGraph(deps, llm, rag) {
   // ── Nodes ────────────────────────────────────────────────────────────────
   const scout = (s) => {
     const analysis = ScoutAgent.run({ cvText: s.cvText || '' }, null, deps);
@@ -111,15 +112,28 @@ async function runGraph(input, deps, llm, rag) {
     return { score, feedback, trace: [{ node: 'Critic', note: `score ${score}/100 · ${feedback || 'ok'}` }] };
   };
 
+  // ── Per-node error isolation ─────────────────────────────────────────────
+  // A failing node (e.g. an LLM timeout mid-loop) no longer crashes the whole
+  // run: it records the error in the trace and returns a safe fallback so the
+  // graph can continue or terminate cleanly.
+  const wrap = (name, fn, fallback) => async (s) => {
+    try { return await fn(s); }
+    catch (e) {
+      const fb = typeof fallback === 'function' ? fallback(s, e) : (fallback || {});
+      return { ...fb, trace: [{ node: name, note: `⚠ error: ${e.message}` }] };
+    }
+  };
+  const EMPTY_ANALYSIS = { foundSkills: [], foundKeys: [], missingSkills: [], roles: [], recommendations: [] };
+
   // ── Conditional edges (the graph-only behaviour) ─────────────────────────
   const afterMatch = (s) => (s.job ? 'writer' : END);
   const afterCritic = (s) => (s.score < QUALITY_BAR && s.revisions < MAX_REVISIONS ? 'writer' : END);
 
   const graph = new StateGraph(GraphState)
-    .addNode('scout', scout)
-    .addNode('matcher', matcher)
-    .addNode('writer', writer)
-    .addNode('critic', critic)
+    .addNode('scout',   wrap('Scout', scout, { analysis: EMPTY_ANALYSIS }))
+    .addNode('matcher', wrap('Matcher', matcher, (s) => ({ matching: { matches: [], highCount: 0 }, job: s.job })))
+    .addNode('writer',  wrap('Writer', writer, (s) => ({ draft: s.draft || '(letter generation failed)', revisions: s.revisions + 1 })))
+    .addNode('critic',  wrap('Critic', critic, { score: QUALITY_BAR, feedback: '' })) // exit the loop on Critic failure
     .addEdge(START, 'scout')
     .addEdge('scout', 'matcher')
     .addConditionalEdges('matcher', afterMatch, { writer: 'writer', [END]: END })
@@ -127,22 +141,58 @@ async function runGraph(input, deps, llm, rag) {
     .addConditionalEdges('critic', afterCritic, { writer: 'writer', [END]: END })
     .compile();
 
-  const final = await graph.invoke({
+  return graph;
+}
+
+function initialState(input) {
+  return {
     cvText: input.cvText || '',
     jobs: input.jobs || [],
     profile: input.profile || {},
     job: input.job || null,
     jobDescription: input.jobDescription || '',
-  }, { recursionLimit: 25 });
-
-  return {
-    coverLetter: final.draft || '',
-    score: final.score ?? null,
-    feedback: final.feedback || '',
-    revisions: final.revisions || 0,
-    qualityBar: QUALITY_BAR,
-    trace: final.trace || [],
   };
 }
 
-module.exports = { runGraph, GraphState };
+function formatResult(s) {
+  return {
+    coverLetter: s.draft || '',
+    score: s.score ?? null,
+    feedback: s.feedback || '',
+    revisions: s.revisions || 0,
+    qualityBar: QUALITY_BAR,
+    trace: s.trace || [],
+  };
+}
+
+/** Run the graph to completion and return the final result. */
+async function runGraph(input, deps, llm, rag) {
+  const graph = buildGraph(deps, llm, rag);
+  const final = await graph.invoke(initialState(input), { recursionLimit: 25 });
+  return formatResult(final);
+}
+
+/**
+ * Stream the graph node-by-node. `onStep(traceEntry)` is called live as each
+ * node finishes, then the accumulated final result is returned.
+ */
+async function runGraphStream(input, deps, llm, rag, onStep) {
+  const graph = buildGraph(deps, llm, rag);
+  const stream = await graph.stream(initialState(input), { recursionLimit: 25, streamMode: 'updates' });
+  const acc = { trace: [] };
+  for await (const update of stream) {
+    for (const nodeName in update) {
+      const st = update[nodeName] || {};
+      for (const k in st) {
+        if (k === 'trace') {
+          for (const t of st.trace || []) { acc.trace.push(t); if (onStep) onStep(t); }
+        } else {
+          acc[k] = st[k];
+        }
+      }
+    }
+  }
+  return formatResult(acc);
+}
+
+module.exports = { runGraph, runGraphStream, GraphState };

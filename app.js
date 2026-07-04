@@ -2379,35 +2379,57 @@ async function runAgentGraph() {
   panel.classList.remove('hidden');
   panel.innerHTML = '<div class="hint">Scout → Matcher → Writer ⇄ Critic …</div>';
   const cvText = (typeof profileToText === 'function' ? profileToText() : '') || state.cvText || '';
-  try {
-    const r = await fetch(`${baseUrl}/api/graph-run`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({
-        cvText,
-        profile: state.profile || {},
-        job: { title: app.title, company: app.company },
-        jobDescription: app.description || '',
-      }),
-    });
-    const d = await r.json();
-    if (!d || !d.available) {
-      panel.innerHTML = `<div class="hint">The agent graph needs an LLM key. ${esc((d && (d.reason || d.error)) || '')}</div>`;
-      return;
-    }
-    const steps = (d.trace || []).map(t => `<li><strong>${esc(t.node)}</strong> — ${esc(t.note)}</li>`).join('');
+  // Live trace: each node's step is appended as the SSE stream delivers it.
+  panel.innerHTML = '<div class="jw-graph-head">🔗 LangGraph · running…</div><ol class="jw-graph-trace"></ol>';
+  const ol = panel.querySelector('.jw-graph-trace');
+  const addStep = (t) => {
+    const li = document.createElement('li');
+    li.innerHTML = `<strong>${esc(t.node)}</strong> — ${esc(t.note)}`;
+    ol.appendChild(li);
+  };
+  const renderDone = (d) => {
     const pass = d.score >= d.qualityBar;
-    panel.innerHTML =
-      `<div class="jw-graph-head">🔗 LangGraph · <strong>${d.revisions}</strong> revision(s) · `
-      + `Critic <strong style="color:${pass ? 'var(--teal)' : 'var(--orange)'}">${d.score}/100</strong> (bar ${d.qualityBar})</div>`
-      + `<ol class="jw-graph-trace">${steps}</ol>`
-      + (d.feedback ? `<div class="hint" style="margin-top:6px"><strong>Last critique:</strong> ${esc(d.feedback)}</div>` : '');
+    panel.querySelector('.jw-graph-head').innerHTML =
+      `🔗 LangGraph · <strong>${d.revisions}</strong> revision(s) · `
+      + `Critic <strong style="color:${pass ? 'var(--teal)' : 'var(--orange)'}">${d.score}/100</strong> (bar ${d.qualityBar})`;
+    if (d.feedback) panel.insertAdjacentHTML('beforeend', `<div class="hint" style="margin-top:6px"><strong>Last critique:</strong> ${esc(d.feedback)}</div>`);
     const out = $('jw-cover-output');
     out.value = d.coverLetter || '';
     out.classList.remove('hidden');
     toast(`Agent graph done — ${d.revisions} revision(s), score ${d.score}/100.`, 'success');
+  };
+
+  try {
+    const r = await fetch(`${baseUrl}/api/graph-stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ cvText, profile: state.profile || {}, job: { title: app.title, company: app.company }, jobDescription: app.description || '' }),
+    });
+    const ct = r.headers.get('content-type') || '';
+    if (!ct.includes('text/event-stream') || !r.body) {
+      const d = await r.json().catch(() => null); // available:false (no key) or error
+      panel.innerHTML = `<div class="hint">The agent graph needs an LLM key. ${esc((d && (d.reason || d.error)) || '')}</div>`;
+      return;
+    }
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) >= 0) {
+        const line = buf.slice(0, idx); buf = buf.slice(idx + 2);
+        if (!line.startsWith('data:')) continue;
+        let ev; try { ev = JSON.parse(line.slice(5).trim()); } catch (_) { continue; }
+        if (ev.type === 'step') addStep(ev.step);
+        else if (ev.type === 'done') renderDone(ev.result);
+        else if (ev.type === 'error') panel.insertAdjacentHTML('beforeend', `<div class="hint">Error: ${esc(ev.error)}</div>`);
+      }
+    }
   } catch (e) {
-    panel.innerHTML = `<div class="hint">Graph failed: ${esc(e.message)}</div>`;
+    panel.insertAdjacentHTML('beforeend', `<div class="hint">Graph failed: ${esc(e.message)}</div>`);
   } finally {
     btn.disabled = false; btn.innerHTML = orig;
   }
