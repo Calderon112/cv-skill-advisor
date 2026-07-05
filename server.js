@@ -20,6 +20,7 @@ const SecurityLearning = require('./security-learning.js');
 const embeddings = require('./server/embeddings.js');
 const rag = require('./server/rag.js');
 const graph = require('./server/graph.js');
+const usage = require('./server/usage.js');
 
 
 // ── Password hashing (scrypt — Node.js built-in, no npm needed) ──────────
@@ -2403,6 +2404,13 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 200, { available: false, error: e.message, reply: '', sources: [] });
       }
     });
+    return;
+  }
+
+  // ── Observability: aggregate LLM/embedding token usage + estimated cost ───
+  if (parsedUrl.pathname === '/api/usage' && req.method === 'GET') {
+    if (!validateToken(getToken(req))) { sendJson(res, 401, { error: 'Authorization required' }); return; }
+    sendJson(res, 200, usage.snapshot());
     return;
   }
 

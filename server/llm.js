@@ -16,6 +16,7 @@
  * to deterministic templates.
  */
 const https = require('https');
+const usage = require('./usage.js');
 
 const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
@@ -110,6 +111,7 @@ async function chatAnthropic({ system, user, maxTokens, temperature }) {
   }, body);
   const text = (data.content || []).map((p) => p.text || '').join('').trim();
   if (!text) throw new Error('Empty response from Anthropic');
+  usage.record({ provider: 'anthropic', model: ANTHROPIC_MODEL, inputTokens: data.usage?.input_tokens, outputTokens: data.usage?.output_tokens, kind: 'chat' });
   return text;
 }
 
@@ -140,6 +142,7 @@ async function chatOpenAICompatible({ label, hostname, path, apiKey, model, extr
   }, body);
   const text = (((data.choices || [])[0] || {}).message || {}).content || '';
   if (!text.trim()) throw new Error(`Empty response from ${label || 'provider'}`);
+  usage.record({ provider: label || 'openai-compatible', model, inputTokens: data.usage?.prompt_tokens, outputTokens: data.usage?.completion_tokens, kind: 'chat' });
   return text.trim();
 }
 

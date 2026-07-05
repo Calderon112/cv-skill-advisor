@@ -996,22 +996,22 @@ function renderJobResults(jobs, sourceLabel) {
   // No keyword ranking on the cards. We only float jobs the Oracle has actually
   // assessed to the top (by their real AI score); everything else keeps the order
   // it was scraped in.
-  let ranked = jobs.map(job => ({
-    job,
-    detail: state.analysis ? scoreJobDetailed(job, state.analysis) : null,
-    sem: state.semanticSims ? state.semanticSims[jobKey(job)] : undefined,
-  }));
+  let ranked = jobs.map(job => {
+    const detail = state.analysis ? scoreJobDetailed(job, state.analysis) : null;
+    const sem = state.semanticSims ? state.semanticSims[jobKey(job)] : undefined;
+    return { job, detail, sem, hybrid: hybridRelevance(detail, sem) };
+  });
   ranked.sort((a, b) => {
     const aAi = a.detail && a.detail.breakdown && a.detail.breakdown.aiAssessed;
     const bAi = b.detail && b.detail.breakdown && b.detail.breakdown.aiAssessed;
     if (aAi && bAi) return (b.detail.score || 0) - (a.detail.score || 0);
     if (aAi) return -1;
     if (bAi) return 1;
-    // Neither AI-assessed → float the most semantically relevant jobs up (RAG),
-    // otherwise preserve scrape order.
-    const as = typeof a.sem === 'number' ? a.sem : -1;
-    const bs = typeof b.sem === 'number' ? b.sem : -1;
-    return bs - as;
+    // Neither AI-assessed → float up by HYBRID relevance (keyword + semantic);
+    // when embeddings are off, hybrid is undefined and scrape order is preserved.
+    const ah = typeof a.hybrid === 'number' ? a.hybrid : -1;
+    const bh = typeof b.hybrid === 'number' ? b.hybrid : -1;
+    return bh - ah;
   });
 
   $('job-count-badge').textContent = ranked.length;
@@ -1022,7 +1022,7 @@ function renderJobResults(jobs, sourceLabel) {
     return;
   }
 
-  grid.innerHTML = ranked.map(({ job, detail, sem }, i) => {
+  grid.innerHTML = ranked.map(({ job, detail, sem, hybrid }, i) => {
     const date    = job.publishedDate ? String(job.publishedDate).slice(0, 10) : null;
     const isNew   = date && (Date.now() - new Date(date).getTime()) < 7 * 86400000;
     const salary  = job.salary ? `${esc(job.salary)}` : '';
@@ -1037,10 +1037,11 @@ function renderJobResults(jobs, sourceLabel) {
       const pct   = Math.round(detail.score * 100);
       const color = pct >= 75 ? 'var(--teal)' : pct >= 40 ? 'var(--cyan)' : 'var(--text-dim)';
       scoreHtml = `<span class="chip" title="AI consultant's match for this job" style="color:${color};border-color:${color}33">${pct}% match <span style="font-size:9px;font-weight:800">AI</span></span>`;
-    } else if (typeof sem === 'number') {
-      // RAG semantic relevance (profile ↔ posting), shown until the Oracle assesses it.
-      const rp = Math.round(sem * 100);
-      scoreHtml = `<span class="chip" title="Semantic relevance to your profile (RAG embeddings)" style="color:var(--blue-neon);border-color:rgba(6,182,212,0.3)">🧠 ${rp}% relevant</span>`;
+    } else if (typeof hybrid === 'number') {
+      // Hybrid relevance = keyword (scorer.js) fused with semantic (RAG embeddings),
+      // shown until the Oracle assesses the job.
+      const rp = Math.round(hybrid * 100);
+      scoreHtml = `<span class="chip" title="Hybrid relevance: keyword score + semantic embeddings" style="color:var(--blue-neon);border-color:rgba(6,182,212,0.3)">🧠 ${rp}% relevant</span>`;
     }
 
     return `
@@ -1288,6 +1289,17 @@ function skillLabel(key) {
 const aiMatchByJob = {};
 function jobKey(job) {
   return `${normalize(job.title || '')}|${normalize(job.company || '')}`.trim();
+}
+
+// Hybrid relevance for a non-Oracle job: fuse the deterministic keyword score
+// (scorer.js) with the calibrated semantic similarity (RAG). Only defined when
+// embeddings are available (sem present), so the no-key flow is unchanged.
+const HYBRID_KW = Number(window.HYBRID_KW_WEIGHT) || 0.5; // keyword weight; semantic gets the rest
+function hybridRelevance(detail, sem) {
+  if (typeof sem !== 'number') return undefined;
+  const kw = detail && typeof detail.score === 'number' && !(detail.breakdown && detail.breakdown.aiAssessed)
+    ? detail.score : undefined;
+  return (typeof kw === 'number' && kw > 0) ? (HYBRID_KW * kw + (1 - HYBRID_KW) * sem) : sem;
 }
 
 function scoreJobDetailed(job, analysis) {

@@ -11,6 +11,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const usage = require('./usage.js');
 
 const GEMINI_EMBED_MODEL = process.env.GEMINI_EMBED_MODEL || 'gemini-embedding-001';
 const OPENAI_EMBED_MODEL = process.env.OPENAI_EMBED_MODEL || 'text-embedding-3-small';
@@ -98,6 +99,7 @@ async function embedBatch(provider, texts) {
       'content-length': Buffer.byteLength(body),
     },
   }, body);
+  usage.record({ provider, model: cfg.model, inputTokens: data.usage?.prompt_tokens, outputTokens: 0, kind: 'embedding' });
   return (data.data || []).sort((a, b) => a.index - b.index).map((d) => d.embedding || []);
 }
 
