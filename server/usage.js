@@ -7,6 +7,9 @@
  */
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
+
 const PRICES = {
   'gemini-2.5-flash':       { in: 0.30, out: 2.50 },
   'gemini-2.5-pro':         { in: 1.25, out: 10.0 },
@@ -17,6 +20,23 @@ const PRICES = {
 };
 
 const _totals = { calls: 0, inputTokens: 0, outputTokens: 0, byModel: {}, since: Date.now() };
+
+// Persist totals across restarts so cumulative cost is not lost on every reboot.
+const STATS_FILE = process.env.USAGE_STATS_FILE || path.join(__dirname, '..', '.usage-stats.json');
+(function loadStats() {
+  try {
+    const s = JSON.parse(fs.readFileSync(STATS_FILE, 'utf8'));
+    Object.assign(_totals, s, { byModel: s.byModel || {} });
+  } catch (_) { /* no stats yet */ }
+})();
+let _saveTimer = null;
+function scheduleSave() {
+  if (_saveTimer) return;
+  _saveTimer = setTimeout(() => {
+    _saveTimer = null;
+    try { fs.writeFileSync(STATS_FILE, JSON.stringify(_totals)); } catch (_) { /* best-effort */ }
+  }, 3000);
+}
 
 function priceFor(model) { return PRICES[model] || { in: 0, out: 0 }; }
 function costOf(inTok, outTok, model) {
@@ -33,6 +53,7 @@ function record({ provider = '?', model = '?', inputTokens = 0, outputTokens = 0
   _totals.outputTokens += out;
   const m = _totals.byModel[model] || (_totals.byModel[model] = { provider, kind, calls: 0, inputTokens: 0, outputTokens: 0 });
   m.calls++; m.inputTokens += inp; m.outputTokens += out;
+  scheduleSave();
   if (process.env.USAGE_LOG !== '0') {
     console.log(`[usage] ${kind} ${model}: +${inp} in / +${out} out  (≈$${costOf(inp, out, model).toFixed(5)})`);
   }

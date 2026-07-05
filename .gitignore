@@ -7,3 +7,6 @@ storage.json
 
 # RAG embedding cache (regenerated at runtime)
 .embeddings-cache.json
+
+# LLM usage stats (regenerated at runtime)
+.usage-stats.json

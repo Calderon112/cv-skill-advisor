@@ -497,12 +497,17 @@ function parseLinkedInPage(html, location) {
   return jobs;
 }
 
+// LinkedIn's guest endpoint blocks an IP after a handful of rapid requests, so we
+// cap its pagination low regardless of the global search depth (best-effort source).
+const LINKEDIN_MAX_PAGES = Number(process.env.LINKEDIN_MAX_PAGES) || 3;
+
 async function fetchLinkedInJobs(keyword, location, depth = DEFAULT_PAGE_DEPTH) {
   const out = [];
+  const pages = Math.min(depth, LINKEDIN_MAX_PAGES);
   try {
-    // LinkedIn's guest API returns ~25 cards per `start` offset. Page through
-    // `depth` offsets sequentially with polite delays (anti-bot, ToS-sensitive).
-    for (let page = 0; page < depth; page++) {
+    // LinkedIn's guest API returns ~25 cards per `start` offset. Page through a few
+    // offsets sequentially with polite delays (anti-bot, ToS-sensitive).
+    for (let page = 0; page < pages; page++) {
       const params = new URLSearchParams({
         keywords: keyword || '',
         location: location || 'Germany',

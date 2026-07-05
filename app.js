@@ -1287,14 +1287,20 @@ function skillLabel(key) {
 // deeply analysed a job, its score becomes the single source of truth shown
 // everywhere (card + workspace), so the same job never shows two numbers.
 const aiMatchByJob = {};
+// title|company alone collides when the same employer posts the same title in two
+// cities. Add location as a discriminant — it is present on both search results and
+// saved applications, so the Oracle score still carries over between them.
 function jobKey(job) {
-  return `${normalize(job.title || '')}|${normalize(job.company || '')}`.trim();
+  return `${normalize(job.title || '')}|${normalize(job.company || '')}|${normalize(job.location || '')}`.trim();
 }
 
 // Hybrid relevance for a non-Oracle job: fuse the deterministic keyword score
 // (scorer.js) with the calibrated semantic similarity (RAG). Only defined when
 // embeddings are available (sem present), so the no-key flow is unchanged.
-const HYBRID_KW = Number(window.HYBRID_KW_WEIGHT) || 0.5; // keyword weight; semantic gets the rest
+// Keyword weight in the hybrid score; semantic gets the rest. Leans on semantic
+// (0.6) because the keyword taxonomy is security-heavy and generalises poorly to
+// other domains, whereas embeddings capture meaning across any field.
+const HYBRID_KW = Number(window.HYBRID_KW_WEIGHT) || 0.4;
 function hybridRelevance(detail, sem) {
   if (typeof sem !== 'number') return undefined;
   const kw = detail && typeof detail.score === 'number' && !(detail.breakdown && detail.breakdown.aiAssessed)

@@ -56,9 +56,12 @@ function buildGraph(deps, llm, rag) {
   };
 
   const matcher = (s) => {
-    const matching = MatcherAgent.run({ analysis: s.analysis, jobs: s.jobs || [] }, null, deps);
+    // Score the provided job list, or the single target job when scoring one posting
+    // (so the trace never reads a confusing "0 jobs scored").
+    const toScore = (s.jobs && s.jobs.length) ? s.jobs : (s.job ? [s.job] : []);
+    const matching = MatcherAgent.run({ analysis: s.analysis, jobs: toScore }, null, deps);
     const job = (matching.matches[0] && matching.matches[0].job) || s.job || null;
-    return { matching, job, trace: [{ node: 'Matcher', note: `${matching.matches.length} jobs scored · ${matching.highCount} strong` }] };
+    return { matching, job, trace: [{ node: 'Matcher', note: `${matching.matches.length} job(s) scored · ${matching.highCount} strong` }] };
   };
 
   const writer = async (s) => {
