@@ -3511,7 +3511,9 @@ function mergeSecuritySkills() {
 // View state (domain, selected role, comparison set) lives in the URL, so a link
 // reopens exactly what the sender was looking at.
 
-const CP_ROW_HEIGHT = 88;
+// A three-line title ("Junior Application Security Engineer") plus its domain label
+// needs 96px. At 88 the nodes overlapped their neighbours.
+const CP_ROW_HEIGHT = 112;
 const CP_MAX_COMPARE = 3;
 const CP_LEVEL_KEYS = ['feeder', 'entry', 'mid', 'adv'];
 
@@ -4018,6 +4020,10 @@ function cpRenderDetail(role) {
       ${role.commonTitles?.length ? panel('Common job titles',
         'What employers actually write in their ads for this role.',
         `<ul class="cp-list">${role.commonTitles.map(t => li(t, false)).join('')}</ul>`) : ''}
+
+      ${role.skills?.length ? panel('Skills this role requires',
+        `${role.skills.filter(s => owned.has(s.toLowerCase())).length} of ${role.skills.length} already in your profile.`,
+        `<ul class="cp-list">${role.skills.map(t => li(t, true)).join('')}</ul>`) : ''}
 
       ${role.certs?.length ? panel('Top certifications',
         'Most often asked for at this step of the ladder.',

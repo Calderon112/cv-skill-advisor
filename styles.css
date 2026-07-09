@@ -2378,7 +2378,7 @@ ul.iv-list { list-style: disc; }
 .cp-chart.has-focus .cp-links path:not(.is-lit) { opacity: .09; }
 
 .cp-cols { position: relative; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 40px; min-width: 1120px; }
-.cp-col { display: grid; grid-template-rows: auto var(--cp-rows, repeat(4, 88px)); align-content: start; }
+.cp-col { display: grid; grid-template-rows: auto var(--cp-rows, repeat(4, 112px)); align-content: start; }
 
 .cp-col-head { padding-bottom: 12px; border-bottom: 2px solid var(--text-muted); margin-bottom: 22px; }
 .cp-col-title { font-size: 15.5px; font-weight: 600; color: var(--text); letter-spacing: -.01em; }
@@ -2465,7 +2465,9 @@ ul.iv-list { list-style: disc; }
 .cp-list li:last-child { border-bottom: 0; }
 .cp-list li::before { content: counter(cp); color: var(--text-muted); font-size: 11px; min-width: 12px; }
 .cp-list li.has { color: var(--teal); font-weight: 500; }
-.cp-list li.has::after { content: '✓ in your CV'; margin-left: auto; font-size: 10.5px; white-space: nowrap; }
+/* A skill the profile already proves. The arrow points at the claim, and the
+   wording says where it came from — not "you have this" but "your profile shows it". */
+.cp-list li.has::after { content: '→ present in your profile'; margin-left: auto; font-size: 10.5px; white-space: nowrap; letter-spacing: .01em; }
 
 .cp-figure { font-size: 38px; font-weight: 700; color: var(--cyan); letter-spacing: -.03em; line-height: 1; }
 .cp-figure-sub { font-size: 11.5px; color: var(--text-muted); margin-top: 6px; line-height: 1.5; }
@@ -2507,7 +2509,7 @@ ul.iv-list { list-style: disc; }
 .cp-req { margin-top: 16px; }
 .cp-jump { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
 .cp-jump .cp-step-link { border: 1px solid var(--border-hi); color: var(--cyan); cursor: pointer; font: inherit; font-size: 12px; }
-.cp-req .cp-list li.has::after { content: '✓ in your CV'; }
+
 
 .cp-notes { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--border); }
 .cp-notes-head { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 8px; }
