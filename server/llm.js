@@ -18,10 +18,14 @@
 const https = require('https');
 const usage = require('./usage.js');
 
-const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
-const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
-const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct:free';
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+// Resolved at call time, not at import time. server.js loads .env *after* it
+// requires this module, so a constant captured here freezes the default and
+// silently ignores ANTHROPIC_MODEL / OPENROUTER_MODEL / GEMINI_MODEL from .env.
+// The API keys already work this way — see KEY_ENV below.
+const ANTHROPIC_MODEL = () => process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
+const OPENAI_MODEL = () => process.env.OPENAI_MODEL || 'gpt-4o';
+const OPENROUTER_MODEL = () => process.env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct:free';
+const GEMINI_MODEL = () => process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
 // Which env var holds the API key for each provider.
 const KEY_ENV = {
@@ -92,7 +96,7 @@ function httpsJson(options, payload) {
 
 async function chatAnthropic({ system, user, maxTokens, temperature }) {
   const body = JSON.stringify({
-    model: ANTHROPIC_MODEL,
+    model: ANTHROPIC_MODEL(),
     max_tokens: maxTokens || 1500,
     temperature: temperature == null ? 0.5 : temperature,
     system,
@@ -111,7 +115,7 @@ async function chatAnthropic({ system, user, maxTokens, temperature }) {
   }, body);
   const text = (data.content || []).map((p) => p.text || '').join('').trim();
   if (!text) throw new Error('Empty response from Anthropic');
-  usage.record({ provider: 'anthropic', model: ANTHROPIC_MODEL, inputTokens: data.usage?.input_tokens, outputTokens: data.usage?.output_tokens, kind: 'chat' });
+  usage.record({ provider: 'anthropic', model: ANTHROPIC_MODEL(), inputTokens: data.usage?.input_tokens, outputTokens: data.usage?.output_tokens, kind: 'chat' });
   return text;
 }
 
@@ -157,19 +161,21 @@ function callProvider(name, args) {
       hostname: 'generativelanguage.googleapis.com',
       path: '/v1beta/openai/chat/completions',
       apiKey: process.env.GEMINI_API_KEY,
-      model: GEMINI_MODEL,
+      model: GEMINI_MODEL(),
     });
   }
 
   if (name === 'openrouter') {
     // Try several free models — any single one can be rate-limited upstream, so
     // we fall through the list and use the first that answers.
+    // Free slugs come and go: deepseek-r1:free was withdrawn, and llama-3.3-70b:free
+    // is refused on some accounts. Keep several and let the loop find one that answers.
     const models = [...new Set([
-      OPENROUTER_MODEL,
+      OPENROUTER_MODEL(),
+      'google/gemma-4-31b-it:free',
       'meta-llama/llama-3.3-70b-instruct:free',
+      'qwen/qwen3-coder:free',
       'deepseek/deepseek-chat-v3-0324:free',
-      'google/gemini-2.0-flash-exp:free',
-      'mistralai/mistral-small-3.1-24b-instruct:free',
     ])];
     return (async () => {
       let lastErr;
@@ -199,7 +205,7 @@ function callProvider(name, args) {
       hostname: 'api.openai.com',
       path: '/v1/chat/completions',
       apiKey: process.env.OPENAI_API_KEY,
-      model: OPENAI_MODEL,
+      model: OPENAI_MODEL(),
     });
   }
 
