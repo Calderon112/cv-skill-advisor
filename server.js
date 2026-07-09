@@ -10,6 +10,7 @@ try { pdfParse = require('pdf-parse'); } catch(_) { pdfParse = null; }
 
 // Extended security taxonomy (200+ skills) + external LLM + email modules.
 const { SECURITY_GROUPS, SECURITY_ROLES } = require('./security-skills.js');
+const skillMatcher = require('./skill-matcher.js');
 const llm    = require('./server/llm.js');
 const email  = require('./server/email.js');
 const agents = require('./server/agents.js');
@@ -65,7 +66,9 @@ if (process.env.ALLOW_INSECURE_TLS === '1') {
 
 const PORT = process.env.PORT || 3000;
 const publicDir = __dirname;
-const STORAGE_FILE = path.join(__dirname, 'storage.json');
+// Overridable so a container can keep state on a mounted volume, like
+// EMBED_CACHE_FILE and USAGE_STATS_FILE already do.
+const STORAGE_FILE = process.env.STORAGE_FILE || path.join(__dirname, 'storage.json');
 const USERS = [{ username: 'student', password: 'security', name: 'Student' }];
 
 let storage = { profiles: {}, tokens: {}, users: {}, applications: {} };
@@ -1331,33 +1334,32 @@ const roles = [
 ];
 
 // Merge the extended security taxonomy (200+ skills), de-duplicating by key so
-// the base Sprint-1 skills stay first and no skill is detected twice.
+// the base Sprint-1 skills stay first and no skill is detected twice. A duplicate
+// key still contributes its aliases to the surviving entry, otherwise the richer
+// taxonomy's synonyms would be silently dropped for the 15 base skills.
 (function mergeSecurityTaxonomy() {
-  const seen = new Set(skillGroups.flatMap(g => g.skills.map(s => s.key)));
+  const byKey = new Map(skillGroups.flatMap(g => g.skills).map(s => [s.key, s]));
   SECURITY_GROUPS.forEach(group => {
-    const skills = group.skills.filter(s => !seen.has(s.key));
-    skills.forEach(s => seen.add(s.key));
+    const skills = [];
+    group.skills.forEach(s => {
+      const existing = byKey.get(s.key);
+      if (existing) {
+        existing.aliases = [...new Set([...(existing.aliases || []), ...(s.aliases || [])])];
+      } else {
+        byKey.set(s.key, s);
+        skills.push(s);
+      }
+    });
     if (skills.length) skillGroups.push({ category: group.category, skills });
   });
   const roleNames = new Set(roles.map(r => r.name));
   SECURITY_ROLES.forEach(r => { if (!roleNames.has(r.name)) roles.push(r); });
 })();
 
-function normalize(text) {
-  return text.toLowerCase().replace(/[.,;:()\-\/]/g, ' ');
-}
+const normalize = skillMatcher.normalize;
 
 function findSkills(text) {
-  const normalized = normalize(text);
-  const found = [];
-  skillGroups.forEach(group => {
-    group.skills.forEach(skill => {
-      if (normalized.includes(skill.key)) {
-        found.push(skill);
-      }
-    });
-  });
-  return found;
+  return skillMatcher.findSkills(text, skillGroups);
 }
 
 // ── Server-side PDF text extraction (no external deps) ───────────────────
@@ -1788,7 +1790,9 @@ const server = http.createServer(async (req, res) => {
         const foundSkills = findSkills(text || '');
         const foundKeys = foundSkills.map(skill => skill.key);
         const allSkills = skillGroups.flatMap(group => group.skills);
-        const missingSkills = allSkills.filter(skill => !foundKeys.includes(skill.key));
+        const missingSkills = allSkills
+          .filter(skill => !foundKeys.includes(skill.key))
+          .map(skillMatcher.publicSkill);
         const roles = analyzeRoles(foundKeys);
         const recommendations = buildAgentDeps().recommend(roles);
         sendJson(res, 200, { foundSkills, missingSkills, roles, recommendations });

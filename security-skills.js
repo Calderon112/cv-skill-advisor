@@ -2,8 +2,12 @@
  * security-skills.js — Extended IT-Security skill taxonomy (200+ skills).
  *
  * UMD module: works both server-side (require) and in the browser (window.SECURITY_GROUPS).
- * Each skill is { key (lowercase, substring-matched), label (human readable) }.
- * Keys are chosen to be distinctive to limit false positives with naive matching.
+ * Each skill is { key (lowercase), label (human readable), aliases? (other exact surface
+ * forms: acronyms, German and French equivalents) }.
+ *
+ * Detection lives in skill-matcher.js, which matches on word boundaries: `nist` must not
+ * fire inside "administrateur". Aliases only ever hold exact synonyms — paraphrases such
+ * as "log correlation" for SIEM are the semantic layer's job (server/embeddings.js).
  */
 (function (root, factory) {
   const data = factory();
@@ -34,7 +38,7 @@
         { key: 'tcpdump', label: 'tcpdump' },
         { key: 'netflow', label: 'NetFlow analysis' },
         { key: 'proxy', label: 'Proxy / reverse proxy' },
-        { key: 'web application firewall', label: 'Web Application Firewall (WAF)' },
+        { key: 'web application firewall', label: 'Web Application Firewall (WAF)', aliases: ['waf'] },
         { key: 'ddos', label: 'DDoS mitigation' },
         { key: 'vlan', label: 'VLAN / network design' },
         { key: 'tcp/ip', label: 'TCP/IP networking' },
@@ -45,7 +49,7 @@
       skills: [
         { key: 'owasp', label: 'OWASP Top 10' },
         { key: 'sql injection', label: 'SQL Injection' },
-        { key: 'cross-site scripting', label: 'Cross-Site Scripting (XSS)' },
+        { key: 'cross-site scripting', label: 'Cross-Site Scripting (XSS)', aliases: ['xss'] },
         { key: 'csrf', label: 'CSRF' },
         { key: 'ssrf', label: 'SSRF' },
         { key: 'secure coding', label: 'Secure coding' },
@@ -71,7 +75,7 @@
     {
       category: 'Offensive Security / Pentesting',
       skills: [
-        { key: 'penetration testing', label: 'Penetration testing' },
+        { key: 'penetration testing', label: 'Penetration testing', aliases: ['pentest', 'pentests', 'pentesting', 'pen test', 'penetrationstest', 'penetrationstests', 'test d intrusion', 'tests d intrusion'] },
         { key: 'ethical hacking', label: 'Ethical hacking' },
         { key: 'red team', label: 'Red teaming' },
         { key: 'metasploit', label: 'Metasploit' },
@@ -103,7 +107,7 @@
       category: 'Defensive Security / Blue Team / SOC',
       skills: [
         { key: 'security operations center', label: 'SOC operations' },
-        { key: 'siem', label: 'SIEM' },
+        { key: 'siem', label: 'SIEM', aliases: ['security information and event management'] },
         { key: 'splunk', label: 'Splunk' },
         { key: 'elastic siem', label: 'Elastic SIEM / ELK' },
         { key: 'qradar', label: 'IBM QRadar' },
@@ -114,7 +118,10 @@
         { key: 'threat hunting', label: 'Threat hunting' },
         { key: 'threat intelligence', label: 'Threat intelligence' },
         { key: 'mitre att&ck', label: 'MITRE ATT&CK' },
-        { key: 'log analysis', label: 'Log analysis' },
+        // Log/event correlation is a form of log analysis, so it belongs here. It is
+        // NOT an alias of `siem`: correlating logs by hand does not prove SIEM tooling,
+        // and the gap analysis must keep reporting SIEM as missing.
+        { key: 'log analysis', label: 'Log analysis', aliases: ['log correlation', 'event correlation', 'log review', 'correlation de logs', 'correlation d evenements', 'analyse de journaux', 'log-korrelation', 'protokollanalyse', 'ereigniskorrelation'] },
         { key: 'incident response', label: 'Incident response' },
         { key: 'security monitoring', label: 'Security monitoring' },
         { key: 'intrusion analysis', label: 'Intrusion analysis' },
@@ -156,7 +163,7 @@
         { key: 'asymmetric encryption', label: 'Asymmetric encryption (RSA/ECC)' },
         { key: 'hashing', label: 'Hashing (SHA, bcrypt)' },
         { key: 'digital signatures', label: 'Digital signatures' },
-        { key: 'public key infrastructure', label: 'PKI' },
+        { key: 'public key infrastructure', label: 'PKI', aliases: ['pki'] },
         { key: 'certificate management', label: 'Certificate management' },
         { key: 'key management', label: 'Key management (KMS/HSM)' },
         { key: 'tls handshake', label: 'TLS handshake / protocols' },
@@ -168,15 +175,15 @@
     {
       category: 'Identity & Access Management',
       skills: [
-        { key: 'identity and access management', label: 'IAM' },
+        { key: 'identity and access management', label: 'IAM', aliases: ['iam'] },
         { key: 'active directory', label: 'Active Directory' },
         { key: 'azure ad', label: 'Azure AD / Entra ID' },
         { key: 'ldap', label: 'LDAP' },
-        { key: 'single sign-on', label: 'Single Sign-On (SSO)' },
+        { key: 'single sign-on', label: 'Single Sign-On (SSO)', aliases: ['sso'] },
         { key: 'saml', label: 'SAML' },
-        { key: 'multi-factor authentication', label: 'Multi-Factor Authentication (MFA)' },
-        { key: 'privileged access management', label: 'Privileged Access Management (PAM)' },
-        { key: 'role-based access control', label: 'RBAC' },
+        { key: 'multi-factor authentication', label: 'Multi-Factor Authentication (MFA)', aliases: ['mfa', '2fa', 'two-factor authentication', 'zwei-faktor-authentifizierung'] },
+        { key: 'privileged access management', label: 'Privileged Access Management (PAM)', aliases: ['pam'] },
+        { key: 'role-based access control', label: 'RBAC', aliases: ['rbac'] },
         { key: 'okta', label: 'Okta' },
         { key: 'keycloak', label: 'Keycloak' },
         { key: 'identity governance', label: 'Identity governance' },
@@ -185,13 +192,13 @@
     {
       category: 'GRC, Compliance & Frameworks',
       skills: [
-        { key: 'risk assessment', label: 'Risk assessment' },
+        { key: 'risk assessment', label: 'Risk assessment', aliases: ['risikoanalyse', 'risikobewertung', 'analyse de risques'] },
         { key: 'risk management', label: 'Risk management' },
-        { key: 'iso 27001', label: 'ISO/IEC 27001' },
+        { key: 'iso 27001', label: 'ISO/IEC 27001', aliases: ['iso27001', 'iso/iec 27001'] },
         { key: 'iso 27002', label: 'ISO/IEC 27002' },
         { key: 'nist', label: 'NIST frameworks' },
         { key: 'nist csf', label: 'NIST Cybersecurity Framework' },
-        { key: 'gdpr', label: 'GDPR / DSGVO' },
+        { key: 'gdpr', label: 'GDPR / DSGVO', aliases: ['dsgvo', 'rgpd', 'datenschutz-grundverordnung', 'general data protection regulation'] },
         { key: 'bsi grundschutz', label: 'BSI IT-Grundschutz' },
         { key: 'pci dss', label: 'PCI DSS' },
         { key: 'soc 2', label: 'SOC 2' },
@@ -210,7 +217,7 @@
     {
       category: 'DFIR & Forensics',
       skills: [
-        { key: 'digital forensics', label: 'Digital forensics' },
+        { key: 'digital forensics', label: 'Digital forensics', aliases: ['forensik', 'informatique legale'] },
         { key: 'memory forensics', label: 'Memory forensics' },
         { key: 'disk forensics', label: 'Disk forensics' },
         { key: 'volatility', label: 'Volatility' },

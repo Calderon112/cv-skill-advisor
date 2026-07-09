@@ -330,13 +330,7 @@ function toast(msg, type = 'info') {
 
 // ── Skill detection (multilingual) ────────────────────────────────────────
 function findSkillsLocal(text) {
-  const norm = normalize(text);
-  const found = [];
-  skillGroups.forEach(g => g.skills.forEach(s => {
-    const keys = [s.key, ...(s.aliases || [])];
-    if (keys.some(k => norm.includes(normalize(k)))) found.push(s);
-  }));
-  return found;
+  return SkillMatcher.findSkills(text, skillGroups);
 }
 
 function analyzeRolesLocal(foundKeys) {
@@ -3407,13 +3401,22 @@ if (_topAvatar) _topAvatar.addEventListener('click', () => navigate('profile'));
 
 // Merge the extended IT-Security taxonomy (200+ skills) loaded by security-skills.js,
 // de-duplicating by key so existing multi-domain skills stay and none is detected twice.
+// A duplicate key still contributes its aliases to the surviving entry.
 function mergeSecuritySkills() {
   const groups = (typeof window !== 'undefined' && window.SECURITY_GROUPS) || [];
   if (!groups.length) return;
-  const seen = new Set(skillGroups.flatMap(g => g.skills.map(s => s.key)));
+  const byKey = new Map(skillGroups.flatMap(g => g.skills).map(s => [s.key, s]));
   groups.forEach(group => {
-    const skills = group.skills.filter(s => !seen.has(s.key));
-    skills.forEach(s => seen.add(s.key));
+    const skills = [];
+    group.skills.forEach(s => {
+      const existing = byKey.get(s.key);
+      if (existing) {
+        existing.aliases = [...new Set([...(existing.aliases || []), ...(s.aliases || [])])];
+      } else {
+        byKey.set(s.key, s);
+        skills.push(s);
+      }
+    });
     if (skills.length) skillGroups.push({ category: group.category, skills });
   });
 }
