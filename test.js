@@ -13,6 +13,8 @@ const { buildReport } = require('./server/report.js');
 const SecurityLearning = require('./security-learning.js');
 const embeddings = require('./server/embeddings.js');
 const graph = require('./server/graph.js');
+const skillMatcher = require('./skill-matcher.js');
+const { SECURITY_GROUPS } = require('./security-skills.js');
 
 // ── Colour helpers ────────────────────────────────────────────────────────
 const c = {
@@ -102,20 +104,9 @@ const roles = [
   { name: 'Cybersecurity Consultant', required: ['risk assessment', 'vulnerability analysis', 'communication', 'problem solving'] },
 ];
 
-function normalize(text) {
-  return text.toLowerCase().replace(/[.,;:()\-\/]/g, ' ');
-}
-
-function findSkills(text) {
-  const normalized = normalize(text);
-  const found = [];
-  skillGroups.forEach(group => {
-    group.skills.forEach(skill => {
-      if (normalized.includes(skill.key)) found.push(skill);
-    });
-  });
-  return found;
-}
+// Exercise the real matcher rather than a copy of it.
+const normalize = skillMatcher.normalize;
+const findSkills = (text) => skillMatcher.findSkills(text, skillGroups);
 
 function analyzeRoles(foundKeys) {
   return roles
@@ -225,6 +216,40 @@ test('detects multiple skills', () => {
 test('returns empty array for text with no skills', () => {
   const found = findSkills('I love cooking pasta and hiking on weekends');
   assertEqual(found.length, 0, 'no skills found');
+});
+
+// ── 2b. Matching over the full security taxonomy ──────────────────────────
+const secKeys = (text) => skillMatcher.findSkills(text, SECURITY_GROUPS).map(s => s.key);
+
+test('respects word boundaries (no substring false positives)', () => {
+  // "admiNISTrateur" must not detect the NIST framework.
+  const keys = secKeys('Administrateur systeme Linux, administration reseau');
+  assert(!keys.includes('nist'), 'nist not detected inside "administrateur"');
+});
+
+test('detects keys whose punctuation normalize() strips', () => {
+  const keys = secKeys('Experience in Cross-Site Scripting, TCP/IP and Single Sign-On');
+  assertIncludes(keys, 'cross-site scripting', 'xss key reachable');
+  assertIncludes(keys, 'tcp/ip',               'tcp/ip key reachable');
+  assertIncludes(keys, 'single sign-on',       'sso key reachable');
+});
+
+test('detects German and French surface forms via aliases', () => {
+  assertIncludes(secKeys('Erfahrung mit DSGVO'),        'gdpr', 'DSGVO → gdpr');
+  assertIncludes(secKeys('Conformite au RGPD'),         'gdpr', 'RGPD → gdpr');
+  assertIncludes(secKeys('Penetrationstests bei Bosch'),'penetration testing', 'Penetrationstests → pentest');
+  assertIncludes(secKeys('J ai mene des pentests'),     'penetration testing', 'pentests → pentest');
+});
+
+test('log correlation counts as log analysis, never as SIEM', () => {
+  const keys = secKeys('J ai fait de la correlation de logs pendant mon stage');
+  assertIncludes(keys, 'log analysis', 'correlation de logs → log analysis');
+  assert(!keys.includes('siem'), 'siem stays a gap: correlating logs is not SIEM tooling');
+});
+
+test('detects acronyms via aliases', () => {
+  assertIncludes(secKeys('Deployed MFA and SSO with Keycloak'), 'multi-factor authentication', 'MFA');
+  assertIncludes(secKeys('Hardened the WAF and reviewed XSS'),  'web application firewall',    'WAF');
 });
 
 test('is case-insensitive', () => {
@@ -802,6 +827,13 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
     const throwLlm = { isAvailable: () => true, chat: async () => { throw new Error('boom'); } };
     const r = await graph.runGraph({ cvText: 'siem', profile: {}, job: { title: 'X' }, jobDescription: 'x' }, gDeps, throwLlm, noRag);
     assert(r.trace.some(t => /error/i.test(t.note)), 'error captured in the trace, pipeline still returns');
+  });
+
+  await atest('graph: a Critic that could not run reports no score, it does not invent one', async () => {
+    const throwLlm = { isAvailable: () => true, chat: async () => { throw new Error('boom'); } };
+    const r = await graph.runGraph({ cvText: 'siem', profile: {}, job: { title: 'X' }, jobDescription: 'x' }, gDeps, throwLlm, noRag);
+    assertEqual(r.scored, false, 'the run is marked unscored');
+    assertEqual(r.score, null, 'no grade is handed to the caller');
   });
 
   const total = passed + failed + skipped;
