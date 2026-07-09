@@ -8,6 +8,7 @@ node_modules
 storage.json
 .embeddings-cache.json
 .usage-stats.json
+.career-paths.json
 *.log
 
 # Not needed at runtime.

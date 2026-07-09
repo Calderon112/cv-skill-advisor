@@ -38,6 +38,7 @@ COPY . .
 ENV STORAGE_FILE=/app/data/storage.json \
     EMBED_CACHE_FILE=/app/data/.embeddings-cache.json \
     USAGE_STATS_FILE=/app/data/.usage-stats.json \
+    CAREER_CACHE_FILE=/app/data/.career-paths.json \
     NODE_ENV=production \
     PORT=3000
 

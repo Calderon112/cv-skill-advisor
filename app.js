@@ -481,6 +481,7 @@ const PAGE_TITLES = {
   letters:           'Cover Letters',
   interviews:        'Interviews',
   profile:           'Professional Profile',
+  career:            'Career Pathway',
 };
 
 function navigate(page) {
@@ -499,6 +500,7 @@ function navigate(page) {
   if (page === 'resumes')         syncWriterCv();
   if (page === 'profile')         renderProfileForm();
   if (page === 'getting-started') refreshGettingStarted();
+  if (page === 'career')          initCareerPath();
 
   // scroll main content to top on page change
   const main = document.querySelector('.main-content');
@@ -3460,3 +3462,255 @@ function mergeSecuritySkills() {
     loadApplications();
   }
 })();
+
+
+
+// ── Career Pathway ────────────────────────────────────────────────────────
+// Four columns of role nodes sharing one row grid, so neighbours line up and
+// the connecting curves stay near-horizontal. Every transition is drawn at once;
+// clicking a role lights its outgoing path and dims the rest.
+//
+// The pathway is written server-side by the model and cached there. This page
+// draws it, ticks the skills the CV already proves, and asks Bundesagentur how
+// many of those positions are open in Germany right now.
+
+const CP_ROW_HEIGHT = 88;
+
+let _cpWired = false;
+let _cpData = null;
+let _cpSelected = null;
+
+async function initCareerPath() {
+  const sel = $('cp-domain');
+  if (!sel) return;
+
+  if (!_cpWired) {
+    _cpWired = true;
+    try {
+      const d = await (await fetch(`${baseUrl}/api/career-domains`)).json();
+      const addGroup = (label, kind) => {
+        const items = (d.domains || []).filter(x => x.kind === kind);
+        if (!items.length) return;
+        const g = document.createElement('optgroup');
+        g.label = label;
+        items.forEach(x => {
+          const o = document.createElement('option');
+          o.value = x.key; o.textContent = x.label;
+          g.appendChild(o);
+        });
+        sel.appendChild(g);
+      };
+      addGroup('Security specialisations', 'security');
+      addGroup('Pathways into security', 'pathway');
+    } catch (_) {
+      cpStatus('Could not reach the server. Is it running?');
+      return;
+    }
+    sel.addEventListener('click', e => e.stopPropagation());   // the card carries [data-page]
+    sel.addEventListener('change', () => loadCareerPath(sel.value));
+    $('cp-refresh')?.addEventListener('click', () => loadCareerPath(sel.value, true));
+    window.addEventListener('resize', () => cpDrawLinks());
+  }
+
+  if (!_cpData) loadCareerPath(sel.value);
+}
+
+function cpStatus(msg) {
+  const el = $('cp-status');
+  el.textContent = msg || '';
+  el.classList.toggle('hidden', !msg);
+}
+
+async function loadCareerPath(domain, refresh = false) {
+  if (!domain) return;
+  const btn = $('cp-refresh');
+  _cpData = null; _cpSelected = null;
+  $('cp-cols').innerHTML = '';
+  $('cp-links').innerHTML = '';
+  $('cp-chart').classList.remove('has-selection');
+  $('cp-detail').classList.add('hidden');
+  $('cp-summary').classList.add('hidden');
+  $('cp-source').classList.add('hidden');
+  cpStatus(refresh ? 'Asking the model to write this pathway — about 15 seconds.' : 'Loading pathway…');
+  if (btn) btn.disabled = true;
+
+  try {
+    const url = `${baseUrl}/api/career-path?domain=${encodeURIComponent(domain)}${refresh ? '&refresh=1' : ''}`;
+    const r = await fetch(url);
+    const p = await r.json();
+    if (!r.ok) throw new Error(p.error || `HTTP ${r.status}`);
+    cpStatus('');
+    _cpData = p;
+    renderCareerChart(p);
+  } catch (err) {
+    cpStatus(`Could not load the pathway: ${err.message}`);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+/** Skill labels and keys detected in the user's CV, lowercased. */
+function cpOwnedSkills() {
+  const set = new Set();
+  (state.analysis?.foundSkills || []).forEach(s => {
+    if (s.key)   set.add(String(s.key).toLowerCase());
+    if (s.label) set.add(String(s.label).toLowerCase());
+  });
+  return set;
+}
+
+/** The chart's four columns: feeder roles, then one per seniority level. */
+function cpColumns(p) {
+  return [
+    { title: 'Feeder roles', years: 'where people come from', roles: p.feeder || [] },
+    ...(p.levels || []).map(l => ({ title: l.name, years: l.years, roles: l.roles || [] })),
+  ];
+}
+
+function cpAllRoles() {
+  return [...(_cpData?.feeder || []), ...(_cpData?.levels || []).flatMap(l => l.roles || [])];
+}
+
+function cpFindRole(title) {
+  return cpAllRoles().find(r => r.title === title) || null;
+}
+
+/** Feeder roles carry only a title and a sentence — nothing a detail panel can show. */
+function cpIsFeeder(title) {
+  return (_cpData?.feeder || []).some(r => r.title === title);
+}
+
+function renderCareerChart(p) {
+  const badge = $('cp-source');
+  badge.textContent = p.source === 'llm' ? `Written by ${p.model || 'the model'}` : 'Outline — model unavailable';
+  badge.classList.toggle('is-template', p.source !== 'llm');
+  badge.classList.remove('hidden');
+
+  const summary = $('cp-summary');
+  if (p.summary) { summary.textContent = p.summary; summary.classList.remove('hidden'); }
+
+  const cols = cpColumns(p);
+  const rows = Math.max(...cols.map(c => c.roles.length), 1);
+
+  $('cp-cols').innerHTML = cols.map(col => `
+    <div class="cp-col" style="--cp-rows: repeat(${rows}, ${CP_ROW_HEIGHT}px)">
+      <div class="cp-col-head">
+        <div class="cp-col-title">${esc(col.title)}</div>
+        <div class="cp-col-years">${esc(col.years || '')}</div>
+      </div>
+      ${col.roles.map(r => `
+        <button type="button" class="cp-node" data-title="${esc(r.title)}"
+                ${r.why ? `title="${esc(r.why)}"` : ''}>
+          <div class="cp-node-title">${esc(r.title)}</div>
+          ${r.titleDe ? `<div class="cp-node-sub">${esc(r.titleDe)}</div>` : ''}
+        </button>`).join('')}
+    </div>`).join('');
+
+  $('cp-cols').querySelectorAll('.cp-node').forEach(btn =>
+    btn.addEventListener('click', () => cpSelect(btn.dataset.title)));
+
+  cpDrawLinks();
+}
+
+function cpSelect(title) {
+  _cpSelected = _cpSelected === title ? null : title;   // click again to clear
+  const role = _cpSelected ? cpFindRole(_cpSelected) : null;
+  const next = new Set(role?.next || []);
+
+  const cols = $('cp-cols');
+  cols.classList.toggle('has-selection', Boolean(_cpSelected));
+  $('cp-chart').classList.toggle('has-selection', Boolean(_cpSelected));
+  cols.querySelectorAll('.cp-node').forEach(n => {
+    n.classList.toggle('is-active', n.dataset.title === _cpSelected);
+    n.classList.toggle('is-next', next.has(n.dataset.title));
+  });
+
+  cpDrawLinks();
+  if (role && !cpIsFeeder(role.title)) cpRenderDetail(role);
+  else $('cp-detail').classList.add('hidden');
+}
+
+/** One bezier per declared transition. The selected role's edges are lit. */
+function cpDrawLinks() {
+  const svg = $('cp-links');
+  const cols = $('cp-cols');
+  if (!svg || !cols || !_cpData) return;
+
+  const nodeOf = (t) => cols.querySelector(`.cp-node[data-title="${CSS.escape(t)}"]`);
+  const origin = cols.getBoundingClientRect();
+
+  const paths = cpAllRoles().flatMap(role => (role.next || []).map(target => {
+    const a = nodeOf(role.title);
+    const b = nodeOf(target);
+    if (!a || !b) return '';
+    const ra = a.getBoundingClientRect();
+    const rb = b.getBoundingClientRect();
+    const x1 = ra.right - origin.left;
+    const y1 = ra.top - origin.top + ra.height / 2;
+    const x2 = rb.left - origin.left - 7;
+    const y2 = rb.top - origin.top + rb.height / 2;
+    const dx = Math.max(28, (x2 - x1) * 0.5);
+    const lit = role.title === _cpSelected ? ' class="is-lit"' : '';
+    const marker = lit ? ' marker-end="url(#cp-arrow-lit)"' : ' marker-end="url(#cp-arrow)"';
+    return `<path${lit}${marker} d="M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}"/>`;
+  })).join('');
+
+  const marker = (id, fill) => `<marker id="${id}" viewBox="0 0 8 8" refX="6" refY="4"
+      markerWidth="5" markerHeight="5" orient="auto">
+      <path d="M 0 0 L 8 4 L 0 8 z" fill="${fill}" stroke="none"/></marker>`;
+
+  svg.innerHTML = `<defs>${marker('cp-arrow', 'var(--text-muted)')}${marker('cp-arrow-lit', 'var(--cyan)')}</defs>${paths}`;
+}
+
+function cpRenderDetail(role) {
+  const owned = cpOwnedSkills();
+  const li = (t, mark) => `<li class="${mark && owned.has(String(t).toLowerCase()) ? 'has' : ''}">${esc(t)}</li>`;
+  const panel = (title, note, body) => `
+    <div class="cp-panel">
+      <h4>${esc(title)}</h4>
+      ${note ? `<div class="cp-panel-note">${esc(note)}</div>` : ''}
+      ${body}
+    </div>`;
+
+  const el = $('cp-detail');
+  el.innerHTML = `
+    <div class="cp-detail-head">
+      <div class="cp-detail-title">${esc(role.title)}</div>
+      <div class="cp-detail-sub">${esc(role.titleDe || role.why || _cpData.label || '')}</div>
+    </div>
+    <div class="cp-grid">
+      ${role.commonTitles?.length ? panel('Common job titles',
+        'What employers actually write in their ads for this role.',
+        `<ul class="cp-list">${role.commonTitles.map(t => li(t, false)).join('')}</ul>`) : ''}
+
+      ${role.skills?.length ? panel('Top skills',
+        'Most requested in listings. A tick marks one detected in your CV.',
+        `<ul class="cp-list">${role.skills.map(t => li(t, true)).join('')}</ul>`) : ''}
+
+      ${role.certs?.length ? panel('Top certifications',
+        'Most often asked for at this step of the ladder.',
+        `<ul class="cp-list">${role.certs.map(t => li(t, true)).join('')}</ul>`) : ''}
+
+      ${panel('Open positions', 'Live count from Bundesagentur für Arbeit, all of Germany.',
+        `<div class="cp-figure" id="cp-count">…</div>
+         <div class="cp-figure-sub">listings matching this title</div>
+         ${role.salary ? `<div class="cp-stat"><div class="cp-salary">${esc(role.salary)}</div>
+           <div class="cp-figure-sub">gross per year, typical range</div></div>` : ''}
+         ${role.education ? `<div class="cp-stat"><div class="cp-figure-sub">Usual education<br>${esc(role.education)}</div></div>` : ''}`)}
+    </div>`;
+  el.classList.remove('hidden');
+  cpLoadCount(role.title);
+}
+
+async function cpLoadCount(title) {
+  const el = $('cp-count');
+  if (!el) return;
+  try {
+    const r = await fetch(`${baseUrl}/api/job-count?keyword=${encodeURIComponent(title)}`);
+    const d = await r.json();
+    if (!el.isConnected) return;                    // the user moved on while we waited
+    el.textContent = d.count == null ? '—' : d.count.toLocaleString('de-DE');
+  } catch (_) {
+    if (el.isConnected) el.textContent = '—';
+  }
+}

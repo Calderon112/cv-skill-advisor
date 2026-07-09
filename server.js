@@ -11,6 +11,7 @@ try { pdfParse = require('pdf-parse'); } catch(_) { pdfParse = null; }
 // Extended security taxonomy (200+ skills) + external LLM + email modules.
 const { SECURITY_GROUPS, SECURITY_ROLES } = require('./security-skills.js');
 const skillMatcher = require('./skill-matcher.js');
+const careerPath = require('./server/career-path.js');
 const llm    = require('./server/llm.js');
 const email  = require('./server/email.js');
 const agents = require('./server/agents.js');
@@ -2570,6 +2571,41 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 500, { error: 'Scrape-all failed', detail: err.message });
       }
     });
+    return;
+  }
+
+  // How many positions are actually open in Germany for a role title. One page
+  // is enough: Bundesagentur reports the full match count in `maxErgebnisse`.
+  if (parsedUrl.pathname === '/api/job-count' && req.method === 'GET') {
+    const keyword = (parsedUrl.searchParams.get('keyword') || '').trim();
+    if (!keyword) { sendJson(res, 400, { error: 'keyword required' }); return; }
+    const sp = new URLSearchParams({ region: 'germany', sector: 'all', keyword, location: 'Germany' });
+    fetchBundesJobs(sp, 1)
+      .then(r => sendJson(res, 200, { keyword, count: r?.total ?? 0, source: 'Bundesagentur für Arbeit' }))
+      .catch(() => sendJson(res, 200, { keyword, count: null }));
+    return;
+  }
+
+  // ── Career pathways (CyberSeek-style, per domain) ───────────────────────
+  // Public: the answer depends only on the domain, never on the visitor.
+  if (parsedUrl.pathname === '/api/career-domains' && req.method === 'GET') {
+    sendJson(res, 200, { domains: careerPath.listDomains(), llm: llm.isAvailable() });
+    return;
+  }
+
+  if (parsedUrl.pathname === '/api/career-path' && req.method === 'GET') {
+    const domain = parsedUrl.searchParams.get('domain') || '';
+    if (!careerPath.isDomain(domain)) { sendJson(res, 400, { error: 'Unknown domain' }); return; }
+    const refresh = parsedUrl.searchParams.get('refresh') === '1';
+    // Only a regeneration costs tokens; cached reads are free, so rate-limit the
+    // expensive path and let the cache serve everyone else.
+    if (refresh && rateLimited(req, 'career', 5, 60000)) {
+      sendJson(res, 429, { error: 'Rate limit — pathway generation is expensive; wait a moment.' });
+      return;
+    }
+    careerPath.pathwayFor(domain, { refresh })
+      .then(p => sendJson(res, 200, p))
+      .catch(err => sendJson(res, 500, { error: 'Pathway generation failed', detail: err.message }));
     return;
   }
 

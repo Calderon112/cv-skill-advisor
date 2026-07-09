@@ -180,6 +180,9 @@
         <button class="nav-btn" data-page="search">
           <span class="nav-label">Job Search</span>
         </button>
+        <button class="nav-btn" data-page="career">
+          <span class="nav-label">Career Pathway</span>
+        </button>
         <button class="nav-btn" data-page="jobs">
           <span class="nav-label">Jobs</span>
         </button>
@@ -383,6 +386,40 @@
           <div id="market-report" class="card hidden" style="margin-bottom:16px"></div>
           <div id="job-results" class="jobs-grid"></div>
         </div>
+      </section>
+
+      <!-- ═══ Career Path ═══ -->
+      <section class="page" id="page-career">
+        <div class="page-intro">
+          <h2>Career Pathway</h2>
+          <p>How a career unfolds in each security domain on the German market — the roles, what
+             they pay, the skills and certifications each step asks for. Skills you already have,
+             detected from your CV, are highlighted.</p>
+        </div>
+
+        <div class="card cp-controls">
+          <div class="form-group" style="flex:1;min-width:260px">
+            <label for="cp-domain">Domain</label>
+            <select id="cp-domain" class="field"></select>
+          </div>
+          <div class="cp-controls-actions">
+            <span id="cp-source" class="cp-badge hidden"></span>
+            <button id="cp-refresh" class="btn btn-ghost btn-sm" title="Ask the model to write this pathway again">Regenerate</button>
+          </div>
+        </div>
+
+        <div id="cp-status" class="cp-status hidden"></div>
+        <div id="cp-summary" class="cp-summary hidden"></div>
+
+        <div class="card cp-chart-card">
+          <div class="cp-chart-hint">Click a role to trace where it leads and see what it asks for.</div>
+          <div id="cp-chart" class="cp-chart">
+            <svg id="cp-links" class="cp-links" aria-hidden="true"></svg>
+            <div id="cp-cols" class="cp-cols"></div>
+          </div>
+        </div>
+
+        <div id="cp-detail" class="cp-detail hidden"></div>
       </section>
 
       <!-- ═══ Resumes ═══ -->
