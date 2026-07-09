@@ -59,7 +59,7 @@ Skill detection is still a substring match — you own that on slide 13.
 
 ## Slide 3 — Who it serves
 
-- **The student with no security experience.** Sees the seventeen job families that exist, the six
+- **The student with no security experience.** Sees the seventeen job families that exist, the seven
   jobs that hire beginners, and the exact skills between them and the first one.
 - **The career changer already in IT.** A sysadmin learns that four doors open from where they
   stand, and which two skills sit behind each.
@@ -119,7 +119,7 @@ every number that follows.
 **Screenshots.** `03-chart.png` — Career Pathway with *SOC Analyst (Tier 1)* selected, path lit.
 `04-plan.png` — the learning plan, ticked skills and numbered steps with Lab / Course / Video links.
 
-> Fifty-seven security jobs on one chart. Six feeder roles that hire beginners with no security
+> Fifty-eight security jobs on one chart. Seven feeder roles that hire beginners with no security
 > experience. Seventeen entry-level positions, seventeen mid, seventeen senior.
 >
 > Two things a static chart cannot do. The skills my CV already proves are **ticked in green**.
@@ -310,6 +310,6 @@ today.
 
 Verified against the running system while writing: semantic ranking 51 / 33 / 0 / 0 % on a profile
 that never writes "SIEM"; hybrid relevance = 40 % keyword + 60 % semantic; deterministic score
-weights skills 45 · role 20 · location 10 · remote 10 · seniority 10 · salary 5; 57 chart nodes and
-63 transitions; 65 knowledge chunks; 81 passing tests; four LLM providers and no Ollama.
+weights skills 45 · role 20 · location 10 · remote 10 · seniority 10 · salary 5; 58 chart nodes and
+64 transitions; 65 knowledge chunks; 81 passing tests; four LLM providers and no Ollama.
 Scrape counts and job counts move between runs — read them off the screen.

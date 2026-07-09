@@ -26,7 +26,7 @@ that cost us the most time, and I built one feature for each.
 | A cover letter for *every single* application | **Writer ⇄ Critic loop** — drafts it, grades it, rewrites it below 80/100 |
 | You are rejected and never told *what was missing* | **The Oracle** — reads one posting against your profile and returns a match percentage, your strengths, your gaps and the certifications to aim for |
 | Knowing what to improve is not knowing *how* | **Learning plan** — one step per missing skill, with a lab, a course and a video |
-| You don't know where you stand, nor how to get where you want | **Career Pathway** — 57 security jobs, the six that hire beginners, and the path between them |
+| You don't know where you stand, nor how to get where you want | **Career Pathway** — 58 security jobs, the seven that hire beginners, and the path between them |
 | You get the interview and freeze | **Interview prep** — questions built from the skills the target role actually requires |
 
 Underneath all six sits one idea.
@@ -107,7 +107,7 @@ every number that follows.
 **Stage.** Open **Career Pathway**. Runs without a model — safe ground.
 Screenshots: `04-chart.png`, `05-plan.png`.
 
-> Fifty-seven security jobs on one chart. Six feeder roles that hire beginners with no security
+> Fifty-eight security jobs on one chart. Seven feeder roles that hire beginners with no security
 > experience. Seventeen entry-level positions, seventeen mid, seventeen senior.
 >
 > Click *Software Developer*: six junior roles light up. Click *SOC Analyst Tier 1*: the path traces
@@ -244,5 +244,5 @@ openings that are real today.
 
 Verified while writing: semantic ranking 51 / 33 / 0 / 0 % on a profile that never writes "SIEM";
 hybrid relevance = 40 % keyword + 60 % semantic; deterministic weights skills 45 · role 20 ·
-location 10 · remote 10 · seniority 10 · salary 5; 57 chart nodes and 63 transitions; 65 knowledge
+location 10 · remote 10 · seniority 10 · salary 5; 58 chart nodes and 64 transitions; 65 knowledge
 chunks; 81 passing tests; four LLM providers and no Ollama.

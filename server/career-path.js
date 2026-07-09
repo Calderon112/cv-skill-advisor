@@ -51,18 +51,24 @@ const DOMAINS = {
   // start from, and each says which specialisations it actually opens. The chart
   // shows all six for every domain, and only draws an edge from the ones that lead
   // there — a beginner should see every door, not just the ones behind them.
-  'it-support': { label: 'IT Support & Helpdesk',              title: 'IT Support Specialist',       category: 'Operating Systems & Infrastructure',   kind: 'pathway', leadsTo: 'Blue Team / SOC & Detection',              leadsToKeys: ['soc', 'netsec', 'iam', 'vulnmgmt'],
+  'it-support': { label: 'IT Support & Helpdesk',              title: 'IT Support Specialist',       category: 'Operating Systems & Infrastructure',   kind: 'pathway', leadsTo: 'Blue Team / SOC & Detection',              leadsToKeys: ['soc', 'netsec', 'iam', 'vulnmgmt', 'dfir'],
     why: 'You handle real incidents from day one, learn how users break things, and see the whole estate — the exact instincts a SOC looks for.' },
-  sysadmin:     { label: 'System Administration',              title: 'System Administrator',        category: 'Operating Systems & Infrastructure',   kind: 'pathway', leadsTo: 'Network Security, Cloud Security',         leadsToKeys: ['soc', 'netsec', 'cloud', 'iam', 'crypto', 'vulnmgmt', 'secarch'],
-    why: 'You already run Windows and Linux, Active Directory and patching. Defending a system starts with knowing how it is built.' },
+  sysadmin:     { label: 'System Administration',              title: 'System Administrator',        category: 'Operating Systems & Infrastructure',   kind: 'pathway', leadsTo: 'Network Security, Cloud Security',         leadsToKeys: ['soc', 'netsec', 'cloud', 'iam', 'crypto', 'vulnmgmt', 'secarch', 'dfir'],
+    why: 'You already run Windows and Linux, Active Directory and patching. Defending a system starts with knowing how it is built — and forensics begins where administration ends.' },
   network:      { label: 'Networking & Infrastructure',        title: 'Network Administrator',       category: 'Network Security',                     kind: 'pathway', leadsTo: 'Network Security',                        leadsToKeys: ['netsec', 'soc', 'otsec', 'secarch'],
     why: 'Routing, segmentation and firewalls are your daily work. Most attacks travel over a network somebody designed.' },
   devops:       { label: 'DevOps & Cloud',                     title: 'DevOps Engineer',             category: 'Cloud Security',                       kind: 'pathway', leadsTo: 'Cloud Security, DevSecOps',               leadsToKeys: ['cloud', 'devsecops', 'appsec'],
     why: 'You own pipelines, IAM policies and infrastructure as code — the three places cloud breaches actually happen.' },
   software:     { label: 'Software Development',               title: 'Software Developer',          category: 'Application & Web Security',           kind: 'pathway', leadsTo: 'Application Security, DevSecOps',         leadsToKeys: ['appsec', 'devsecops', 'malware', 'pentest', 'mobile', 'vulnmgmt'],
     why: 'You can read code, so you can find the flaw in it — and reverse the binary an attacker left behind.' },
-  data:         { label: 'Data & Analytics',                   title: 'Data Analyst',                category: 'Defensive Security / Blue Team / SOC', kind: 'pathway', leadsTo: 'Detection Engineering, Threat Intelligence', leadsToKeys: ['soc', 'dfir', 'grc', 'threatintel', 'privacy'],
-    why: 'Detection is a data problem: baselines, outliers, correlation. You already know how to make a dataset confess.' },
+  // A data analyst is not a forensic examiner and not an auditor. Detection and
+  // threat intelligence are analysis problems; DFIR, GRC and privacy are not, and
+  // wiring them here made this role a dumping ground for every domain that lacked
+  // a feeder.
+  data:         { label: 'Data & Analytics',                   title: 'Data Analyst',                category: 'Defensive Security / Blue Team / SOC', kind: 'pathway', leadsTo: 'Detection Engineering, Threat Intelligence', leadsToKeys: ['soc', 'threatintel'],
+    why: 'Detection and threat intelligence are data problems: baselines, outliers, correlation, pattern hunting. You already know how to make a dataset confess.' },
+  risk:         { label: 'Audit, Risk & Compliance',           title: 'IT Auditor',                  category: 'GRC, Compliance & Frameworks',         kind: 'pathway', leadsTo: 'GRC, Data Protection & Privacy',           leadsToKeys: ['grc', 'privacy'],
+    why: 'You already read controls, evidence and regulation. Security governance is auditing with a threat model attached — and in Germany, data protection is a legal discipline before it is a technical one.' },
 };
 
 const isDomain = (d) => Object.prototype.hasOwnProperty.call(DOMAINS, d);
