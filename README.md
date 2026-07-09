@@ -7,25 +7,28 @@
 
 ## 🚀 Quick Start
 
+### With Docker
+
 ```bash
-# 1. Clone & install
-git clone https://github.com/YOUR_USERNAME/cv-skill-advisor.git
+git clone https://github.com/Calderon112/cv-skill-advisor.git
 cd cv-skill-advisor
-npm install
-npm install pdf-parse        # required for PDF reading
-
-# 2. Configure (optional — defaults work without any key)
-cp .env.example .env
-# Edit .env to add optional API keys
-
-# 3. Run
-node server.js
-
-# 4. Open in browser
-http://localhost:3000
+cp .env.example .env          # required, may stay empty
+docker compose up --build
 ```
 
-**Default login** → `student` / `security`
+### With Node.js 20+
+
+```bash
+git clone https://github.com/Calderon112/cv-skill-advisor.git
+cd cv-skill-advisor
+npm install
+cp .env.example .env          # optional — defaults work without any key
+npm start
+```
+
+Then open <http://localhost:3000>. **Default login** → `student` / `security`
+
+Full setup, API keys, data locations and troubleshooting: **[INSTALL.md](INSTALL.md)**.
 
 ---
 
@@ -84,7 +87,7 @@ The agents are explicitly separated and orchestrated — see [ARCHITECTURE.md](A
 - Multi-provider LLM client (`server/llm.js`): **Anthropic, Google Gemini (free), OpenRouter (free), OpenAI** — automatic fallback + retry/backoff. Without any key, every AI feature degrades to a deterministic template.
 
 ### Quality
-- **70 unit tests** (`node tests/test.js`) — pure functions, multi-agent contracts, fuzzy dedup, re-ranking, market report. No external framework.
+- **75 unit tests** (`npm test`) — pure functions, multi-agent contracts, fuzzy dedup, re-ranking, market report, RAG and LangGraph. No external framework.
 
 ---
 
@@ -125,10 +128,10 @@ The agents are explicitly separated and orchestrated — see [ARCHITECTURE.md](A
 ## 🧪 Running Tests
 
 ```bash
-node tests/test.js
+npm test                            # or: docker compose exec cybercareer npm test
 ```
 
-**42 unit tests** covering:
+**75 unit tests** covering:
 - `normalize()` — text preprocessing
 - `findSkills()` — skill detection from CV text
 - `analyzeRoles()` — role matching & scoring
@@ -137,6 +140,8 @@ node tests/test.js
 - `stripHtml()` — HTML sanitization
 - `kwTokens()` / `matchesKeyword()` — job keyword matching
 - `jobMatchesProfile()` — CV-to-job matching
+- Fuzzy cross-source dedup, outcome-based re-ranking, market report
+- RAG (cosine, calibrated relevance) and the LangGraph Writer⇄Critic loop
 - Edge cases & robustness
 
 ---

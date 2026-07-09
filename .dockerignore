@@ -1,0 +1,19 @@
+.git
+.github
+node_modules
+
+# Secrets and local state — never copy these into an image.
+.env
+.env.local
+storage.json
+.embeddings-cache.json
+.usage-stats.json
+*.log
+
+# Not needed at runtime.
+*.pdf
+*.pptx
+*.png
+agent-skills/
+SPRINT2.md
+PATCH-pdf-fix.js

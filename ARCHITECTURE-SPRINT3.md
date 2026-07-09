@@ -128,7 +128,7 @@ flowchart LR
 | RAG | embeddings + cosinus maison | Pas de vector DB pour cette échelle |
 | LLM | multi-fournisseurs (Anthropic/Gemini/OpenRouter/OpenAI) + fallback | Résilience, free-tier capable |
 | Scoring | pondéré, déterministe (`scorer.js`) | Transparent et explicable |
-| Tests | runner maison, `node test.js` | **75/75** (dont RAG + LangGraph) |
+| Tests | runner maison, `npm test` | **75/75** (dont RAG + LangGraph) |
 
 ---
 

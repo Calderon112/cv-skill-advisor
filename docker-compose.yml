@@ -1,0 +1,29 @@
+# CyberCareer — one-command local deployment.
+#
+#   cp .env.example .env      # required: the file is read at startup (may stay empty)
+#   docker compose up --build
+#   open http://localhost:3000
+#
+# Every API key is optional. Without one, the AI features fall back to
+# deterministic templates and keyword matching instead of failing.
+
+services:
+  cybercareer:
+    build: .
+    image: cybercareer:3.0.0
+    container_name: cybercareer
+    ports:
+      - "${PORT:-3000}:3000"
+    env_file:
+      - .env
+    environment:
+      # Always bind to the container's own port; the host port is mapped above.
+      PORT: 3000
+    volumes:
+      # User database, RAG embedding cache and LLM usage counters survive a
+      # rebuild. Remove with: docker compose down -v
+      - cybercareer-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  cybercareer-data:

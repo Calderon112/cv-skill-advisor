@@ -1,4 +1,17 @@
 {
+  "name": "cybercareer",
+  "version": "3.0.0",
+  "description": "AI-powered IT-Security career advisor: CV analysis, skill-gap detection, semantic job matching (RAG) and document generation.",
+  "license": "MIT",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "devDependencies": {
     "playwright": "^1.57.0"
   },
