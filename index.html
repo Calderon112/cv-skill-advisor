@@ -311,34 +311,30 @@
             <div class="form-group">
               <label>Domain</label>
               <select id="sector-select" class="field">
-                <option value="all">All domains</option>
-                <optgroup label="Technology">
-                  <option value="cybersecurity">Cybersecurity</option>
+                <option value="cybersecurity" selected>All cybersecurity</option>
+                <optgroup label="Security specialisations">
+                  <option value="soc">Blue Team / SOC &amp; Detection</option>
+                  <option value="pentest">Offensive Security / Pentesting</option>
+                  <option value="dfir">Incident Response &amp; Forensics (DFIR)</option>
+                  <option value="malware">Malware Analysis &amp; Reverse Engineering</option>
+                  <option value="appsec">Application &amp; Web Security</option>
+                  <option value="netsec">Network Security</option>
+                  <option value="cloud">Cloud Security</option>
+                  <option value="devsecops">DevSecOps</option>
+                  <option value="iam">Identity &amp; Access Management</option>
+                  <option value="grc">GRC, Compliance &amp; Audit</option>
+                  <option value="crypto">Cryptography &amp; PKI</option>
+                  <option value="otsec">OT / ICS / IoT Security</option>
+                </optgroup>
+                <optgroup label="Pathways into security">
+                  <option value="it-support">IT Support &amp; Helpdesk</option>
+                  <option value="sysadmin">System Administration (Linux/Windows)</option>
+                  <option value="network">Networking &amp; Infrastructure</option>
+                  <option value="devops">DevOps &amp; Cloud</option>
                   <option value="software">Software Development</option>
                   <option value="data">Data &amp; Analytics</option>
-                  <option value="devops">DevOps &amp; Cloud</option>
-                  <option value="ai">AI &amp; Machine Learning</option>
-                  <option value="network">Networking &amp; Infrastructure</option>
-                  <option value="it-support">IT Support &amp; Systems</option>
                 </optgroup>
-                <optgroup label="Healthcare">
-                  <option value="healthcare">Healthcare &amp; Nursing</option>
-                </optgroup>
-                <optgroup label="Business">
-                  <option value="finance">Finance &amp; Accounting</option>
-                  <option value="marketing">Marketing &amp; Communication</option>
-                  <option value="sales">Sales &amp; Business Dev</option>
-                  <option value="hr">HR &amp; Recruiting</option>
-                  <option value="project">Project Management</option>
-                  <option value="consulting">Consulting &amp; Strategy</option>
-                </optgroup>
-                <optgroup label="Other Fields">
-                  <option value="healthcare">Healthcare &amp; Medicine</option>
-                  <option value="law">Law &amp; Compliance</option>
-                  <option value="engineering">Engineering</option>
-                  <option value="design">Design &amp; UX</option>
-                  <option value="education">Education &amp; Research</option>
-                </optgroup>
+                <option value="all">All domains (no filter)</option>
               </select>
             </div>
             <div class="form-group">

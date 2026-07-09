@@ -963,26 +963,34 @@ function extractBundesJobFields(job, searchParams) {
   };
 }
 
-// Domain → fallback keyword when user has not typed a specific job title
+// Domain → fallback keyword when user has not typed a specific job title.
+// The security specialisations mirror the sub-domains of security-skills.js; the
+// pathway domains are the roles people commonly move into security from.
 const DOMAIN_KEYWORDS = {
   cybersecurity: 'cybersecurity IT security',
-  software:      'software developer programmer',
-  data:          'data analyst data scientist',
-  devops:        'DevOps cloud engineer',
-  ai:            'machine learning AI engineer',
+
+  // Security specialisations
+  soc:           'SOC analyst security operations SIEM',
+  pentest:       'penetration tester ethical hacker red team',
+  dfir:          'incident response digital forensics',
+  malware:       'malware analyst reverse engineering',
+  appsec:        'application security secure coding',
+  netsec:        'network security engineer firewall',
+  cloud:         'cloud security engineer',
+  devsecops:     'DevSecOps security engineer',
+  iam:           'identity and access management engineer',
+  grc:           'information security governance risk compliance ISO 27001',
+  crypto:        'cryptography PKI engineer',
+  otsec:         'OT security ICS SCADA IoT security',
+
+  // Pathways into security
+  'it-support':  'IT support helpdesk service desk',
+  sysadmin:      'system administrator Linux Windows administrator',
   network:       'network administrator infrastructure',
-  'it-support':  'IT support system administrator',
-  finance:       'finance accounting controller',
-  marketing:     'marketing communications',
-  sales:         'sales account manager',
-  hr:            'human resources recruiter',
-  project:       'project manager',
-  consulting:    'consultant strategy',
-  healthcare:    'healthcare nurse doctor medical',
-  law:           'lawyer legal compliance',
-  engineering:   'engineer mechanical electrical',
-  design:        'designer UX UI',
-  education:     'teacher researcher education',
+  devops:        'DevOps cloud engineer',
+  software:      'software developer programmer',
+  data:          'data analyst data engineer',
+
   all:           ''
 };
 
@@ -1071,12 +1079,28 @@ function buildSearchKeyword(searchParams) {
 // than the keyword-token pre-filter the scrapers apply.
 const DOMAIN_MATCH_TERMS = {
   cybersecurity: ['security','cyber','soc ','siem','pentest','penetration','infosec','ciso','iso 27001','iso27001','threat','incident','vulnerab','firewall','malware','forensic','sicherheit','informationssicherheit','it-security','blue team','red team','grc','nist','mitre','ethical hack'],
+
+  // ── Security specialisations ──
+  soc:           ['soc ','security operations','siem','splunk','qradar','sentinel','blue team','threat hunting','detection engineer','security analyst','security monitoring','log analysis','mitre','sicherheitsanalyst','alert triage','edr','xdr','soar'],
+  pentest:       ['penetration test','pentest','ethical hack','red team','offensive security','oscp','burp','metasploit','exploit','vulnerability assessment','bug bounty','penetrationstest','sicherheitsanalyse','purple team'],
+  dfir:          ['incident response','digital forensic','dfir','forensic','incident handler','csirt','cert ','threat intelligence','memory forensic','malware triage','forensik','incident responder'],
+  malware:       ['malware analy','reverse engineer','reverse-engineer','ghidra','ida pro','x64dbg','sandboxing','shellcode','ransomware analy','static analysis','dynamic analysis','threat research'],
+  appsec:        ['application security','appsec','secure coding','owasp','sast','dast','software security','product security','secure development','threat modeling','api security','anwendungssicherheit'],
+  netsec:        ['network security','firewall','intrusion detection','intrusion prevention','vpn','zero trust','netzwerksicherheit','fortinet','palo alto','checkpoint','network segmentation','ddos'],
+  cloud:         ['cloud security','aws security','azure security','gcp security','kubernetes security','container security','cspm','cloud sicherheit','cloud native security','secrets management'],
+  devsecops:     ['devsecops','security engineer','ci/cd security','pipeline security','shift left','sast','sca','supply chain security','platform security','infrastructure as code'],
+  iam:           ['identity and access','iam ','identity management','active directory','azure ad','entra','okta','keycloak','sso','single sign-on','privileged access','pam ','identitäts'],
+  grc:           ['grc','governance','compliance','risk management','risk assessment','iso 27001','iso27001','isms','auditor','audit','bsi grundschutz','tisax','nis2','datenschutz','dsgvo','informationssicherheitsbeauftragter','risikomanagement'],
+  crypto:        ['cryptography','kryptographie','pki','public key infrastructure','certificate management','hsm','key management','encryption','verschlüsselung','openssl','post-quantum'],
+  otsec:         ['ot security','ics security','scada','iot security','industrial control','embedded security','automotive security','produktionssicherheit','modbus','anlagensicherheit'],
+
+  // ── Pathways into security ──
+  'it-support':  ['it support','helpdesk','help desk','service desk','1st level','2nd level','support technician','it-support','anwendersupport','fachinformatiker'],
+  sysadmin:      ['system administrator','systemadministrator','linux administrator','windows administrator','sysadmin','it administrator','server administration','active directory','patch management','systembetreuer'],
+  network:       ['network','netzwerk','infrastructure','infrastruktur','cisco','administrator','systemadministrator','it administrator','lan','wan','routing'],
+  devops:        ['devops','sre','site reliability','kubernetes','docker','cloud engineer','aws','azure','terraform','ci/cd','platform engineer','gcp'],
   software:      ['developer','software','programmer','engineer','backend','frontend','full stack','fullstack','entwickler','java','python','javascript','typescript','react','node','.net','golang'],
   data:          ['data analyst','data scientist','data engineer','analytics','business intelligence','power bi','sql','machine learning','datenanalyst','data warehouse','etl'],
-  devops:        ['devops','sre','site reliability','kubernetes','docker','cloud engineer','aws','azure','terraform','ci/cd','platform engineer','gcp'],
-  ai:            ['machine learning','deep learning','ai engineer','ml engineer','data scientist','nlp','computer vision','künstliche intelligenz','llm','tensorflow','pytorch'],
-  network:       ['network','netzwerk','infrastructure','infrastruktur','cisco','administrator','systemadministrator','it administrator','lan','wan','routing'],
-  'it-support':  ['it support','helpdesk','help desk','service desk','system administrator','systemadministrator','1st level','2nd level','support technician','it-support','anwendersupport'],
 };
 
 // Keep a job only if it is on-topic for the selected domain. `all` keeps
