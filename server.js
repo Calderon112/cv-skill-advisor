@@ -323,6 +323,12 @@ async function fetchJoobleJobs(keyword, location, radius, depth = DEFAULT_PAGE_D
 
 // ── Adzuna — free aggregator API (de/ch/us). Surfaces StepStone/Indeed-listed
 // jobs legitimately, without scraping. Needs free ADZUNA_APP_ID + ADZUNA_APP_KEY.
+// Values the UI uses to mean "anywhere in the country", which are not places.
+const COUNTRY_WIDE_LOCATIONS = new Set([
+  'germany', 'deutschland', 'switzerland', 'schweiz', 'suisse',
+  'united states', 'usa', 'us',
+]);
+
 async function fetchAdzunaJobs(keyword, location, region, depth = DEFAULT_PAGE_DEPTH) {
   if (!ADZUNA_APP_ID || !ADZUNA_APP_KEY) {
     return { run: { note: 'Adzuna credentials not configured.' }, items: [] };
@@ -334,8 +340,20 @@ async function fetchAdzunaJobs(keyword, location, region, depth = DEFAULT_PAGE_D
     results_per_page: '50',
     'content-type': 'application/json'
   });
-  if (keyword)  params.set('what', keyword);
-  if (location) params.set('where', location);
+
+  // `what` is an AND across words, unlike Bundesagentur which widens with each
+  // term. A multi-word domain fallback ("SOC analyst security operations SIEM")
+  // therefore matches nothing; send those as `what_or` and let jobMatchesSector
+  // do the narrowing. A short, user-typed title stays an AND search.
+  if (keyword) {
+    const words = keyword.trim().split(/\s+/);
+    params.set(words.length > 2 ? 'what_or' : 'what', keyword.trim());
+  }
+  // The country already lives in the URL path (/jobs/de/). Passing it again as
+  // `where` yields zero results — Adzuna expects a place inside the country.
+  if (location && !COUNTRY_WIDE_LOCATIONS.has(location.trim().toLowerCase())) {
+    params.set('where', location);
+  }
 
   try {
     // Adzuna caps results_per_page at 50, so fetch `depth` pages in parallel
@@ -1104,12 +1122,18 @@ const DOMAIN_MATCH_TERMS = {
 };
 
 // Keep a job only if it is on-topic for the selected domain. `all` keeps
-// everything; unknown sectors fall back to the domain search keywords.
+// everything; an unknown sector keeps everything rather than silently emptying
+// the results.
+//
+// Relevance is judged on the job's own text only. `job.sector` and `job.board`
+// must stay out of it: Bundesagentur echoes the requested sector back onto every
+// result, and other normalizers default it to 'security', so reading that field
+// made every job from those sources match its own query.
 function jobMatchesSector(job, sector) {
   if (!sector || sector === 'all') return true;
   const terms = DOMAIN_MATCH_TERMS[sector] || kwTokens(DOMAIN_KEYWORDS[sector] || '');
   if (!terms.length) return true;
-  const hay = `${job.title || ''} ${job.description || ''} ${job.sector || ''} ${job.board || ''}`.toLowerCase();
+  const hay = `${job.title || ''} ${job.description || ''}`.toLowerCase();
   return terms.some(t => hay.includes(t));
 }
 

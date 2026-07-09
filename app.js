@@ -308,6 +308,11 @@ const $   = id => document.getElementById(id);
 const esc = s  => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const normalize = t => t.toLowerCase().replace(/[.,;:()\-\/]/g, ' ');
 
+// Pages fetched per job board. Deeper searches return more offers but the boards
+// rate-limit us: at 20 pages Arbeitnow starts refusing the second search of a
+// session. 10 keeps the extra coverage without losing a source.
+const SCRAPE_PAGE_DEPTH = 10;
+
 function authHeaders() {
   return state.token ? { Authorization: `Bearer ${state.token}` } : {};
 }
@@ -893,8 +898,7 @@ async function searchJobs() {
     url.searchParams.set('distance', distance);
     if (keyword)  url.searchParams.set('keyword',  keyword);
     if (location) url.searchParams.set('location', location);
-    const pages = Number($('depth-select')?.value) || 5;
-    url.searchParams.set('pages', String(pages));
+    url.searchParams.set('pages', String(SCRAPE_PAGE_DEPTH));
 
     const r    = await fetch(url, { headers: authHeaders() });
     if (!r.ok) throw new Error(`Server error ${r.status}`);
@@ -1132,7 +1136,7 @@ async function scrapeAllPlatforms() {
   const distance = $('distance-select').value;
   const location = $('search-location-input').value.trim();
   const keyword  = ($('job-keyword-input')?.value || '').trim();
-  const pages    = Number($('depth-select')?.value) || 5;
+  const pages    = SCRAPE_PAGE_DEPTH;
   const progress = $('scrape-all-progress');
   const breakdown= $('platform-breakdown');
 
