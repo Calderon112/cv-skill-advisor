@@ -31,6 +31,10 @@ const GraphState = Annotation.Root({
   draft:          Annotation(),
   score:          Annotation(),
   feedback:       Annotation(),
+  // False once the Critic has failed. Its fallback hands back the passing score so
+  // the loop terminates, and without this flag the UI would report a grade nobody
+  // computed. Sticky: one failed judgement taints the run.
+  scored:         Annotation({ reducer: (a, b) => a !== false && b !== false, default: () => true }),
   revisions:      Annotation({ reducer: (_, b) => b, default: () => 0 }),
   // trace accumulates across nodes so the UI can show the execution path.
   trace:          Annotation({ reducer: (a, b) => a.concat(b), default: () => [] }),
@@ -136,7 +140,9 @@ function buildGraph(deps, llm, rag) {
     .addNode('scout',   wrap('Scout', scout, { analysis: EMPTY_ANALYSIS }))
     .addNode('matcher', wrap('Matcher', matcher, (s) => ({ matching: { matches: [], highCount: 0 }, job: s.job })))
     .addNode('writer',  wrap('Writer', writer, (s) => ({ draft: s.draft || '(letter generation failed)', revisions: s.revisions + 1 })))
-    .addNode('critic',  wrap('Critic', critic, { score: QUALITY_BAR, feedback: '' })) // exit the loop on Critic failure
+    // A failed Critic hands back the passing score so the loop terminates, but marks
+    // the run unscored: the letter was never judged, and nothing may pretend it was.
+    .addNode('critic',  wrap('Critic', critic, { score: QUALITY_BAR, feedback: '', scored: false }))
     .addEdge(START, 'scout')
     .addEdge('scout', 'matcher')
     .addConditionalEdges('matcher', afterMatch, { writer: 'writer', [END]: END })
@@ -158,9 +164,13 @@ function initialState(input) {
 }
 
 function formatResult(s) {
+  const scored = s.scored !== false;
   return {
     coverLetter: s.draft || '',
-    score: s.score ?? null,
+    // `score` stays for the loop's own bookkeeping; `scored` says whether it means
+    // anything. A caller that ignores the flag would report a fabricated grade.
+    score: scored ? (s.score ?? null) : null,
+    scored,
     feedback: s.feedback || '',
     revisions: s.revisions || 0,
     qualityBar: QUALITY_BAR,
