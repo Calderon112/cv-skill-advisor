@@ -1189,7 +1189,7 @@ async function scrapeAllPlatforms() {
         `).join('') + `
           <div class="pb-chip">
             <div class="pb-chip-count" style="color:var(--orange)">${state.jobs.length}</div>
-            <div class="pb-chip-name">Total (deduped)</div>
+            <div class="pb-chip-name">In this domain</div>
           </div>
         `;
       breakdown.classList.remove('hidden');
@@ -1829,6 +1829,14 @@ function renderFunnel() {
   el.classList.remove('hidden');
 }
 
+// When the application entered the tracker. Cards created before `createdAt`
+// existed fall back to their first history entry, then to 0 (bottom of column).
+function addedAt(app) {
+  const raw = app.createdAt || app.history?.[0]?.at;
+  const t = raw ? Date.parse(raw) : NaN;
+  return Number.isNaN(t) ? 0 : t;
+}
+
 function renderKanban() {
   dedupeApps();
   setupKanbanDnD();
@@ -1841,7 +1849,12 @@ function renderKanban() {
     const count = $(`cnt-${status}`);
     if (!col) return;
 
-    const apps = state.apps.filter(a => a.status === status);
+    // Newest arrival on top, so a freshly added card lands at the head of its
+    // column. Sort is stable, so cards saved in the same millisecond keep their
+    // insertion order.
+    const apps = state.apps
+      .filter(a => a.status === status)
+      .sort((a, b) => addedAt(b) - addedAt(a));
     if (count) count.textContent = apps.length;
 
     col.innerHTML = apps.map(app => {
