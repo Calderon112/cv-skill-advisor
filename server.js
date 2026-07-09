@@ -1462,6 +1462,72 @@ function buildRoadmapSteps(missingSkills) {
 }
 
 /**
+ * Interview preparation without an LLM.
+ *
+ * The old fallback printed six generic HR questions under the heading
+ * "Role-specific (Data Analyst)". They were not role-specific at all — the
+ * template never read the target role. Now the technical questions are derived
+ * from the skills the role actually requires, and the caller is told they came
+ * from the taxonomy rather than from a model.
+ */
+function buildTemplateInterview(role, skills) {
+  const target = String(role || '').trim();
+  const lower = target.toLowerCase();
+
+  // Prefer the taxonomy's own definition of the role; fall back to the candidate's
+  // detected skills, which is still better than a canned list.
+  const known = roles.find(r => lower && (r.name.toLowerCase().includes(lower) || lower.includes(r.name.toLowerCase())));
+  const byKey = new Map(skillGroups.flatMap(g => g.skills).map(s => [s.key, s.label]));
+
+  // "Show me how you would use Communication in your first week" is not a technical
+  // question. Soft skills belong in the behavioural block, not this one. They live
+  // in two groups: the Sprint-1 "Career skills" and the taxonomy's own soft-skill set.
+  const SOFT = new Set(skillGroups
+    .filter(g => /soft skills|career skills/i.test(g.category))
+    .flatMap(g => g.skills.map(s => s.label.toLowerCase())));
+  const technical = (list) => list.filter(s => !SOFT.has(String(s).toLowerCase()));
+
+  const source = technical(known
+    ? known.required.map(k => byKey.get(k) || k)
+    : (Array.isArray(skills) ? skills : [])).slice(0, 5);
+
+  const PHRASINGS = [
+    (s) => `Walk me through a time you used ${s} in practice. What did you actually do?`,
+    (s) => `How would you explain ${s} to a colleague who has never used it?`,
+    (s) => `What goes wrong most often with ${s}, and how do you catch it?`,
+    (s) => `Show me how you would use ${s} on your first week in this role.`,
+    (s) => `Which part of ${s} do you not know yet, and how would you learn it?`,
+  ];
+  const roleSpecific = source.map((s, i) => PHRASINGS[i % PHRASINGS.length](s));
+
+  const common = [
+    'Tell me about yourself and your background.',
+    target ? `Why are you interested in the ${target} position?` : 'Why are you interested in this position?',
+    'What are your greatest strengths, and one weakness you are working on?',
+    'Describe a challenge you faced and how you handled it.',
+    'Where do you see yourself in five years?',
+    'Why should we hire you over other candidates?',
+  ];
+
+  const tips = [
+    'Use the STAR method: Situation, Task, Action, Result.',
+    'Research the company beforehand and mention something specific about it.',
+    'Prepare two or three questions to ask the interviewer.',
+    source.length ? `Be ready to give a concrete example for each of: ${source.join(', ')}.` : 'Bring one concrete example per skill on your CV.',
+    'Send a short thank-you message within 24 hours.',
+  ];
+
+  return {
+    common,
+    roleSpecific,
+    tips,
+    // Honest provenance: the caller must not label these as tailored by a model.
+    derivedFrom: known ? `the required skills of ${known.name}` : (source.length ? 'the skills detected in your CV' : 'nothing — no role and no skills were given'),
+    roleMatched: Boolean(known),
+  };
+}
+
+/**
  * A study plan without an LLM. Each missing skill is looked up in the learning
  * taxonomy, which names how to practise it and where. Ordered as given, since the
  * caller already lists skills by importance for the role.
@@ -2088,7 +2154,11 @@ const server = http.createServer(async (req, res) => {
     req.on('end', async () => {
       try {
         const { role, skills, domain } = JSON.parse(body || '{}');
-        if (!llm.isAvailable()) { sendJson(res, 200, { ok: false, source: 'template' }); return; }
+        if (!llm.isAvailable()) {
+          const data = buildTemplateInterview(role, skills);
+          sendJson(res, 200, { ok: false, source: 'template', data });
+          return;
+        }
         const schema = '{ "common": ["..."], "roleSpecific": ["..."], "tips": ["..."] }';
         const system = 'You are an experienced technical interviewer and career coach. Produce realistic '
           + 'interview preparation. Respond with ONLY a JSON object matching the schema — no markdown, no commentary. '
@@ -2102,10 +2172,17 @@ const server = http.createServer(async (req, res) => {
           + `Return the JSON.`;
         const raw = await llm.chat({ system, user, maxTokens: 2500, temperature: 0.5 });
         const data = parseJsonObject(raw);
-        if (!data) { sendJson(res, 200, { ok: false, source: 'template' }); return; }
+        if (!data) { sendJson(res, 200, { ok: false, source: 'template', data: buildTemplateInterview(role, skills) }); return; }
         sendJson(res, 200, { ok: true, source: 'ai', provider: llm.provider(), data });
       } catch (error) {
-        sendJson(res, 200, { ok: false, source: 'template', error: String(error.message || error) });
+        // The model is unreachable, not the taxonomy. Answer with questions drawn
+        // from the role's own skills rather than nothing.
+        let data = null;
+        try {
+          const { role, skills } = JSON.parse(body || '{}');
+          data = buildTemplateInterview(role, skills);
+        } catch (_) { /* body already failed to parse */ }
+        sendJson(res, 200, { ok: false, source: 'template', data, error: String(error.message || error) });
       }
     });
     return;

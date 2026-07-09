@@ -3364,17 +3364,38 @@ function generateInterview(role) {
   return { role: role || state.profile?.title || domain || 'your target role', common, roleQs, tips };
 }
 
-function renderInterview(role, common, roleSpecific, tips, usedAI) {
+/**
+ * `derivedFrom` is the honest label. The old version headed the second block
+ * "Role-specific (Data Analyst)" even when the questions were a canned HR list
+ * that had never seen the role — the same lie as a Critic score nobody computed.
+ */
+function renderInterview(role, common, roleSpecific, tips, usedAI, derivedFrom) {
   const section = arr => (arr || []).map(q => `<li>${esc(q)}</li>`).join('');
+  const heading = usedAI
+    ? `Role-specific (${esc(role)})`
+    : 'Technical questions';
+  const note = usedAI
+    ? ''
+    : `<div class="hint" style="margin-bottom:8px">No model was reachable — these are built from
+        ${esc(derivedFrom || 'the built-in taxonomy')}.</div>`;
+
+  // With neither a known role nor a parsed CV there is nothing technical to ask.
+  // An empty numbered list under a confident heading is worse than no block.
+  const technicalBlock = (roleSpecific || []).length
+    ? `<div class="iv-block"><h3 class="col-label">${heading}</h3>${note}<ol class="iv-list">${section(roleSpecific)}</ol></div>`
+    : `<div class="iv-block"><h3 class="col-label">${heading}</h3>
+         <div class="hint">Upload your CV or name a role this app knows, and the technical questions
+         will be built from the skills it actually requires.</div></div>`;
+
   $('interview-content').innerHTML = `
     <div class="iv-block"><h3 class="col-label">Common questions</h3><ol class="iv-list">${section(common)}</ol></div>
-    <div class="iv-block"><h3 class="col-label">Role-specific (${esc(role)})</h3><ol class="iv-list">${section(roleSpecific)}</ol></div>
+    ${technicalBlock}
     <div class="iv-block"><h3 class="col-label">Tips</h3><ul class="iv-list">${section(tips)}</ul></div>`;
   $('interview-output').classList.remove('hidden');
   state.docsCount++;
   refreshGettingStarted();
   updateStats();
-  toast(usedAI ? 'AI interview prep generated!' : 'Interview prep generated (template).', 'success');
+  toast(usedAI ? 'AI interview prep generated!' : 'Interview prep built from your skills (no model).', usedAI ? 'success' : 'info');
 }
 
 const _interviewBtn = $('generate-interview-btn');
@@ -3383,20 +3404,22 @@ if (_interviewBtn) _interviewBtn.addEventListener('click', async () => {
   const btn = _interviewBtn; const orig = btn.innerHTML;
   btn.disabled = true; btn.innerHTML = 'Generating…';
 
-  // Try the AI endpoint first; fall back to the local template generator.
+  // The server answers either way: the model when it is reachable, otherwise
+  // questions derived from the role's own required skills.
   let done = false;
   try {
     const skills = (state.profile?.skills || state.analysis?.foundSkills || []).map(s => s.label || s).slice(0, 10);
     const r = await api.post('/api/generate-interview', { role, skills, domain: state.analysis?.domain || '' });
-    if (r && r.ok && r.source === 'ai' && r.data) {
-      renderInterview(role || 'your target role', r.data.common, r.data.roleSpecific, r.data.tips, true);
+    if (r && r.data) {
+      renderInterview(role || 'your target role', r.data.common, r.data.roleSpecific, r.data.tips,
+        r.ok && r.source === 'ai', r.data.derivedFrom);
       done = true;
     }
-  } catch (_) { /* fall back */ }
+  } catch (_) { /* the server is unreachable — fall back locally */ }
 
   if (!done) {
     const d = generateInterview(role);
-    renderInterview(d.role, d.common, d.roleQs, d.tips, false);
+    renderInterview(d.role, d.common, d.roleQs, d.tips, false, 'the built-in question bank');
   }
   btn.disabled = false; btn.innerHTML = orig;
 });
