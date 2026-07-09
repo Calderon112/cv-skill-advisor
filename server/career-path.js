@@ -40,18 +40,35 @@ const DOMAINS = {
   grc:          { label: 'GRC, Compliance & Audit',            title: 'Information Security Officer', category: 'GRC, Compliance & Frameworks',        kind: 'security' },
   crypto:       { label: 'Cryptography & PKI',                 title: 'PKI Engineer',                category: 'Cryptography & PKI',                   kind: 'security' },
   otsec:        { label: 'OT / ICS / IoT Security',            title: 'OT Security Engineer',        category: 'OT / IoT / Mobile Security',           kind: 'security' },
+  threatintel:  { label: 'Threat Intelligence',                title: 'Threat Intelligence Analyst', category: 'Defensive Security / Blue Team / SOC', kind: 'security' },
+  vulnmgmt:     { label: 'Vulnerability Management',           title: 'Vulnerability Analyst',       category: 'Offensive Security / Pentesting',      kind: 'security' },
+  secarch:      { label: 'Security Architecture',              title: 'Security Architect',          category: 'Network Security',                     kind: 'security' },
+  privacy:      { label: 'Data Protection & Privacy',          title: 'Data Protection Officer',     category: 'GRC, Compliance & Frameworks',         kind: 'security' },
+  mobile:       { label: 'Mobile & Embedded Security',         title: 'Mobile Security Engineer',    category: 'OT / IoT / Mobile Security',           kind: 'security' },
 
   // ── Pathways into security ──
-  'it-support': { label: 'IT Support & Helpdesk',              title: 'IT Support Specialist',       category: 'Operating Systems & Infrastructure',   kind: 'pathway', leadsTo: 'Blue Team / SOC & Detection' },
-  sysadmin:     { label: 'System Administration',              title: 'System Administrator',        category: 'Operating Systems & Infrastructure',   kind: 'pathway', leadsTo: 'Network Security, Cloud Security' },
-  network:      { label: 'Networking & Infrastructure',        title: 'Network Administrator',       category: 'Network Security',                     kind: 'pathway', leadsTo: 'Network Security' },
-  devops:       { label: 'DevOps & Cloud',                     title: 'DevOps Engineer',             category: 'Cloud Security',                       kind: 'pathway', leadsTo: 'Cloud Security, DevSecOps' },
-  software:     { label: 'Software Development',               title: 'Software Developer',          category: 'Application & Web Security',           kind: 'pathway', leadsTo: 'Application Security, DevSecOps' },
-  data:         { label: 'Data & Analytics',                   title: 'Data Analyst',                category: 'Defensive Security / Blue Team / SOC', kind: 'pathway', leadsTo: 'Detection Engineering, Threat Intelligence' },
+  // `leadsToKeys` wires the chart: these are the six categories a beginner can
+  // start from, and each says which specialisations it actually opens. The chart
+  // shows all six for every domain, and only draws an edge from the ones that lead
+  // there — a beginner should see every door, not just the ones behind them.
+  'it-support': { label: 'IT Support & Helpdesk',              title: 'IT Support Specialist',       category: 'Operating Systems & Infrastructure',   kind: 'pathway', leadsTo: 'Blue Team / SOC & Detection',              leadsToKeys: ['soc', 'netsec', 'iam', 'vulnmgmt'],
+    why: 'You handle real incidents from day one, learn how users break things, and see the whole estate — the exact instincts a SOC looks for.' },
+  sysadmin:     { label: 'System Administration',              title: 'System Administrator',        category: 'Operating Systems & Infrastructure',   kind: 'pathway', leadsTo: 'Network Security, Cloud Security',         leadsToKeys: ['soc', 'netsec', 'cloud', 'iam', 'crypto', 'vulnmgmt', 'secarch'],
+    why: 'You already run Windows and Linux, Active Directory and patching. Defending a system starts with knowing how it is built.' },
+  network:      { label: 'Networking & Infrastructure',        title: 'Network Administrator',       category: 'Network Security',                     kind: 'pathway', leadsTo: 'Network Security',                        leadsToKeys: ['netsec', 'soc', 'otsec', 'secarch'],
+    why: 'Routing, segmentation and firewalls are your daily work. Most attacks travel over a network somebody designed.' },
+  devops:       { label: 'DevOps & Cloud',                     title: 'DevOps Engineer',             category: 'Cloud Security',                       kind: 'pathway', leadsTo: 'Cloud Security, DevSecOps',               leadsToKeys: ['cloud', 'devsecops', 'appsec'],
+    why: 'You own pipelines, IAM policies and infrastructure as code — the three places cloud breaches actually happen.' },
+  software:     { label: 'Software Development',               title: 'Software Developer',          category: 'Application & Web Security',           kind: 'pathway', leadsTo: 'Application Security, DevSecOps',         leadsToKeys: ['appsec', 'devsecops', 'malware', 'pentest', 'mobile', 'vulnmgmt'],
+    why: 'You can read code, so you can find the flaw in it — and reverse the binary an attacker left behind.' },
+  data:         { label: 'Data & Analytics',                   title: 'Data Analyst',                category: 'Defensive Security / Blue Team / SOC', kind: 'pathway', leadsTo: 'Detection Engineering, Threat Intelligence', leadsToKeys: ['soc', 'dfir', 'grc', 'threatintel', 'privacy'],
+    why: 'Detection is a data problem: baselines, outliers, correlation. You already know how to make a dataset confess.' },
 };
 
 const isDomain = (d) => Object.prototype.hasOwnProperty.call(DOMAINS, d);
-const listDomains = () => Object.entries(DOMAINS).map(([key, d]) => ({ key, label: d.label, kind: d.kind }));
+const listDomains = () => Object.entries(DOMAINS).map(([key, d]) => ({
+  key, label: d.label, kind: d.kind, title: d.title, leadsToKeys: d.leadsToKeys || null, why: d.why || null,
+}));
 
 function skillsOf(category) {
   const g = SECURITY_GROUPS.find((x) => x.category === category);
@@ -263,4 +280,88 @@ async function pathwayFor(domain, { refresh = false } = {}) {
   return { ...payload, cached: false };
 }
 
-module.exports = { DOMAINS, isDomain, listDomains, pathwayFor };
+/**
+ * Every domain at a glance: what leads into it and what the first role is.
+ * Never calls the model — an overview of eighteen domains would fire eighteen
+ * generations. Cached pathways are used as they are; the rest fall back to the
+ * deterministic outline, which is enough to name the roles.
+ */
+function overview() {
+  return Object.entries(DOMAINS).map(([key, d]) => {
+    const cached = _cache[cacheKey(key)];
+    const p = cached || templatePathway(key);
+    return {
+      key,
+      label: d.label,
+      kind: d.kind,
+      title: d.title,
+      summary: p.summary || '',
+      feeder: (p.feeder || []).map(f => f.title),
+      entry: (p.levels?.[0]?.roles || []).map(r => r.title),
+      advanced: (p.levels?.[p.levels.length - 1]?.roles || []).map(r => r.title),
+      // A way in leads to a security domain, not to a senior version of itself.
+      leadsTo: d.leadsTo || null,
+      source: cached ? 'llm' : 'template',
+    };
+  });
+}
+
+/**
+ * One chart for the whole field, the way CyberSeek does it: the six beginner
+ * categories, then every security job laid out by seniority, each wired to the
+ * next rung of its own specialisation.
+ *
+ * Assembled from the per-domain pathways rather than asked of the model: it must
+ * exist even when every quota is spent. One role per level per domain keeps the
+ * chart readable — seventeen domains times two roles would be a wall.
+ */
+function graph() {
+  const security = Object.entries(DOMAINS).filter(([, d]) => d.kind === 'security');
+  const pathways = Object.entries(DOMAINS).filter(([, d]) => d.kind === 'pathway');
+
+  const levels = [
+    { name: 'Entry-level', years: '0–2 yrs', roles: [] },
+    { name: 'Mid-level', years: '2–5 yrs', roles: [] },
+    { name: 'Advanced', years: '5+ yrs', roles: [] },
+  ];
+  const entryOf = {};   // domain key → the title a feeder should point at
+
+  const seen = new Set();
+  security.forEach(([key, d]) => {
+    const p = _cache[cacheKey(key)] || templatePathway(key);
+    (p.levels || []).slice(0, 3).forEach((lvl, i) => {
+      const role = (lvl.roles || [])[0];
+      if (!role || seen.has(role.title)) return;
+      seen.add(role.title);
+      if (i === 0) entryOf[key] = role.title;
+
+      // Wire this role to the first role of the next level of the same domain.
+      const following = (p.levels || [])[i + 1]?.roles?.[0]?.title;
+      levels[i].roles.push({
+        ...role,
+        domain: key,
+        domainLabel: d.label,
+        next: following && !seen.has(following) ? [following] : (following ? [following] : []),
+      });
+    });
+  });
+
+  const feeder = pathways.map(([, d]) => ({
+    title: d.title,
+    why: d.why || d.label,
+    next: (d.leadsToKeys || []).map(k => entryOf[k]).filter(Boolean),
+  }));
+
+  return {
+    domain: 'all',
+    kind: 'all',
+    label: 'IT Security',
+    summary: 'Every security job on one chart: where people come from, the first roles that hire '
+      + 'them, and what those roles grow into. Click a job to trace its path and see what it asks for.',
+    source: security.every(([k]) => _cache[cacheKey(k)]) ? 'llm' : 'mixed',
+    feeder,
+    levels,
+  };
+}
+
+module.exports = { DOMAINS, isDomain, listDomains, pathwayFor, overview, graph };

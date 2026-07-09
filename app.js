@@ -2419,15 +2419,23 @@ async function runAgentGraph() {
     ol.appendChild(li);
   };
   const renderDone = (d) => {
-    const pass = d.score >= d.qualityBar;
+    // The Critic hands the loop a passing score when it cannot run, so the graph
+    // terminates. That score is bookkeeping, not a judgement — never show it as one.
+    const scored = d.scored !== false && d.score != null;
+    const pass = scored && d.score >= d.qualityBar;
+    const verdict = scored
+      ? `Critic <strong style="color:${pass ? 'var(--teal)' : 'var(--orange)'}">${d.score}/100</strong> (bar ${d.qualityBar})`
+      : `Critic <strong style="color:var(--orange)">not evaluated</strong> — the judge could not run`;
+
     panel.querySelector('.jw-graph-head').innerHTML =
-      `🔗 LangGraph · <strong>${d.revisions}</strong> revision(s) · `
-      + `Critic <strong style="color:${pass ? 'var(--teal)' : 'var(--orange)'}">${d.score}/100</strong> (bar ${d.qualityBar})`;
+      `🔗 LangGraph · <strong>${d.revisions}</strong> revision(s) · ${verdict}`;
     if (d.feedback) panel.insertAdjacentHTML('beforeend', `<div class="hint" style="margin-top:6px"><strong>Last critique:</strong> ${esc(d.feedback)}</div>`);
     const out = $('jw-cover-output');
     out.value = d.coverLetter || '';
     out.classList.remove('hidden');
-    toast(`Agent graph done — ${d.revisions} revision(s), score ${d.score}/100.`, 'success');
+    toast(scored
+      ? `Agent graph done — ${d.revisions} revision(s), score ${d.score}/100.`
+      : `Agent graph done — ${d.revisions} revision(s), letter not evaluated.`, scored ? 'success' : 'info');
   };
 
   try {
@@ -3465,54 +3473,65 @@ function mergeSecuritySkills() {
 
 
 
+
 // ── Career Pathway ────────────────────────────────────────────────────────
-// Four columns of role nodes sharing one row grid, so neighbours line up and
-// the connecting curves stay near-horizontal. Every transition is drawn at once;
-// clicking a role lights its outgoing path and dims the rest.
+// Four columns of role nodes on a shared row grid, so neighbours line up and the
+// curves between them stay near-horizontal. Every transition is drawn once;
+// hovering previews a role's next steps, selecting one traces the whole path
+// from the feeder roles up to it.
 //
-// The pathway is written server-side by the model and cached there. This page
-// draws it, ticks the skills the CV already proves, and asks Bundesagentur how
-// many of those positions are open in Germany right now.
+// The pathway itself is written server-side by the model and cached there. This
+// page draws it, ticks the skills the CV already proves, asks Bundesagentur how
+// many of those positions are open, and can hand the selected role to the Writer
+// agent to turn the remaining gaps into a study plan.
+//
+// View state (domain, selected role, comparison set) lives in the URL, so a link
+// reopens exactly what the sender was looking at.
 
 const CP_ROW_HEIGHT = 88;
+const CP_MAX_COMPARE = 3;
+const CP_LEVEL_KEYS = ['feeder', 'entry', 'mid', 'adv'];
 
 let _cpWired = false;
 let _cpData = null;
 let _cpSelected = null;
+let _cpHover = null;
+let _cpCompare = [];
+let _cpSuggestIndex = -1;
+let _cpPathways = [];   // the six beginner categories, from /api/career-domains
+let _cpDomains = [];    // every domain, so a ?domain= in the URL can be validated
+
+// ── Boot ────────────────────────────────────────────────────────────────────
 
 async function initCareerPath() {
-  const sel = $('cp-domain');
-  if (!sel) return;
+  if (!$('cp-cols')) return;
 
   if (!_cpWired) {
     _cpWired = true;
-    try {
-      const d = await (await fetch(`${baseUrl}/api/career-domains`)).json();
-      const addGroup = (label, kind) => {
-        const items = (d.domains || []).filter(x => x.kind === kind);
-        if (!items.length) return;
-        const g = document.createElement('optgroup');
-        g.label = label;
-        items.forEach(x => {
-          const o = document.createElement('option');
-          o.value = x.key; o.textContent = x.label;
-          g.appendChild(o);
-        });
-        sel.appendChild(g);
-      };
-      addGroup('Security specialisations', 'security');
-      addGroup('Pathways into security', 'pathway');
-    } catch (_) {
-      cpStatus('Could not reach the server. Is it running?');
-      return;
-    }
-    sel.addEventListener('click', e => e.stopPropagation());   // the card carries [data-page]
-    sel.addEventListener('change', () => loadCareerPath(sel.value));
-    $('cp-refresh')?.addEventListener('click', () => loadCareerPath(sel.value, true));
+    $('cp-compare-clear')?.addEventListener('click', () => { _cpCompare = []; cpRenderCompare(); cpSyncUrl(); });
     window.addEventListener('resize', () => cpDrawLinks());
+    window.addEventListener('popstate', () => cpApplyUrl());
+    cpWireKeyboard();
   }
 
-  if (!_cpData) loadCareerPath(sel.value);
+  if (!_cpData) cpApplyUrl();
+}
+
+/** Read ?role / ?compare and restore that exact view of the chart. */
+function cpApplyUrl() {
+  const q = new URLSearchParams(location.search);
+  _cpCompare = (q.get('compare') || '').split('|').filter(Boolean).slice(0, CP_MAX_COMPARE);
+  loadCareerGraph(q.get('role') || null);
+}
+
+/** Push the current view into the URL without reloading the page. */
+function cpSyncUrl(push = false) {
+  const q = new URLSearchParams(location.search);
+  q.delete('domain');
+  if (_cpSelected) q.set('role', _cpSelected); else q.delete('role');
+  if (_cpCompare.length) q.set('compare', _cpCompare.join('|')); else q.delete('compare');
+  const url = `${location.pathname}?${q}`;
+  if (push) history.pushState(null, '', url); else history.replaceState(null, '', url);
 }
 
 function cpStatus(msg) {
@@ -3521,33 +3540,38 @@ function cpStatus(msg) {
   el.classList.toggle('hidden', !msg);
 }
 
-async function loadCareerPath(domain, refresh = false) {
-  if (!domain) return;
-  const btn = $('cp-refresh');
-  _cpData = null; _cpSelected = null;
+/**
+ * One chart for the whole field. There is no domain to pick: every security job
+ * is on it, and the specialisation a role belongs to is written under its name.
+ */
+async function loadCareerGraph(selectRole = null) {
+  _cpData = null; _cpSelected = null; _cpHover = null;
   $('cp-cols').innerHTML = '';
   $('cp-links').innerHTML = '';
-  $('cp-chart').classList.remove('has-selection');
+  $('cp-chart').classList.remove('has-focus');
   $('cp-detail').classList.add('hidden');
+  $('cp-compare').classList.add('hidden');
   $('cp-summary').classList.add('hidden');
   $('cp-source').classList.add('hidden');
-  cpStatus(refresh ? 'Asking the model to write this pathway — about 15 seconds.' : 'Loading pathway…');
-  if (btn) btn.disabled = true;
+  cpStatus('Loading the career chart…');
 
   try {
-    const url = `${baseUrl}/api/career-path?domain=${encodeURIComponent(domain)}${refresh ? '&refresh=1' : ''}`;
-    const r = await fetch(url);
+    const r = await fetch(`${baseUrl}/api/career-graph`);
     const p = await r.json();
     if (!r.ok) throw new Error(p.error || `HTTP ${r.status}`);
     cpStatus('');
     _cpData = p;
     renderCareerChart(p);
+    _cpCompare = _cpCompare.filter(t => cpFindRole(t));
+    cpRenderCompare();
+    if (selectRole && cpFindRole(selectRole)) cpSelect(selectRole);
+    else cpSyncUrl();
   } catch (err) {
-    cpStatus(`Could not load the pathway: ${err.message}`);
-  } finally {
-    if (btn) btn.disabled = false;
+    cpStatus(`Could not load the chart: ${err.message}`);
   }
 }
+
+// ── Model helpers ───────────────────────────────────────────────────────────
 
 /** Skill labels and keys detected in the user's CV, lowercased. */
 function cpOwnedSkills() {
@@ -3559,32 +3583,97 @@ function cpOwnedSkills() {
   return set;
 }
 
-/** The chart's four columns: feeder roles, then one per seniority level. */
+// The chart used to open on the feeder roles, which already assume an IT job.
+// A student has none, so the graph began where they are not. This node is the
+// beginning of the path, built client-side rather than asked of the model — the
+// answer would be the same for every domain.
+const CP_START_TITLE = 'You — student or career changer';
+
+/**
+ * The feeder column. For a security specialisation it is the six beginner
+ * categories, always all six — a newcomer should see every door, not only the
+ * three the model happened to name. Only the ones that actually open onto this
+ * domain get an edge; the rest stand there, unlit, as options for another path.
+ *
+ * A pathway domain keeps the model's own feeders: the jobs before IT support are
+ * not the six categories, they are trainee roles.
+ */
+function cpFeederRoles(p) {
+  if (p.kind !== 'security' || !_cpPathways.length) return p.feeder || [];
+  const entry = (p.levels?.[0]?.roles || []).map(r => r.title);
+  const labelOf = (key) => _cpDomains.find(x => x.key === key)?.label || key;
+
+  return _cpPathways.map(d => {
+    const opens = (d.leadsToKeys || []).includes(p.domain);
+    return {
+      title: d.title,
+      why: d.why || d.label,
+      // A door that does not open here still says where it does open, otherwise it
+      // stands in the chart with no edge and no explanation.
+      sub: opens ? null : `leads to ${(d.leadsToKeys || []).slice(0, 2).map(labelOf).join(', ')}`,
+      next: opens ? entry : [],
+      opens,
+      elsewhere: (d.leadsToKeys || []).map(k => ({ key: k, label: labelOf(k) })),
+    };
+  });
+}
+
+function cpStartNode(p) {
+  return {
+    title: CP_START_TITLE,
+    why: 'No professional experience yet. Everything below is reachable from here.',
+    next: cpFeederRoles(p).map(f => f.title),
+  };
+}
+
 function cpColumns(p) {
   return [
-    { title: 'Feeder roles', years: 'where people come from', roles: p.feeder || [] },
-    ...(p.levels || []).map(l => ({ title: l.name, years: l.years, roles: l.roles || [] })),
+    { title: 'Start here', years: 'no experience required', level: 'start', roles: [cpStartNode(p)] },
+    { title: 'Feeder roles', years: 'the jobs that lead in', level: 'feeder', roles: cpFeederRoles(p) },
+    ...(p.levels || []).map((l, i) => ({ title: l.name, years: l.years, level: CP_LEVEL_KEYS[i + 1] || 'adv', roles: l.roles || [] })),
   ];
 }
 
 function cpAllRoles() {
-  return [...(_cpData?.feeder || []), ...(_cpData?.levels || []).flatMap(l => l.roles || [])];
+  if (!_cpData) return [];
+  return [cpStartNode(_cpData), ...cpFeederRoles(_cpData), ...(_cpData.levels || []).flatMap(l => l.roles || [])];
+}
+function cpFindRole(title) { return cpAllRoles().find(r => r.title === title) || null; }
+function cpIsStart(title) { return title === CP_START_TITLE; }
+function cpIsFeeder(title) { return _cpData ? cpFeederRoles(_cpData).some(r => r.title === title) : false; }
+
+/** The first entry-level role: what a beginner is actually aiming at. */
+function cpFirstEntryRole() {
+  return _cpData?.levels?.[0]?.roles?.[0] || null;
+}
+function cpEdges() { return cpAllRoles().flatMap(r => (r.next || []).map(n => [r.title, n])); }
+
+/** Every role that can reach `title`, walking the edges backwards. */
+function cpAncestors(title) {
+  const back = new Map();
+  cpEdges().forEach(([u, v]) => { if (!back.has(v)) back.set(v, []); back.get(v).push(u); });
+  const seen = new Set();
+  const queue = [title];
+  while (queue.length) {
+    for (const u of back.get(queue.shift()) || []) {
+      if (seen.has(u)) continue;
+      seen.add(u); queue.push(u);
+    }
+  }
+  return seen;
 }
 
-function cpFindRole(title) {
-  return cpAllRoles().find(r => r.title === title) || null;
-}
-
-/** Feeder roles carry only a title and a sentence — nothing a detail panel can show. */
-function cpIsFeeder(title) {
-  return (_cpData?.feeder || []).some(r => r.title === title);
-}
+// ── Chart ───────────────────────────────────────────────────────────────────
 
 function renderCareerChart(p) {
+  // Only speak up when the content is *not* what it appears to be. A pathway the
+  // model wrote needs no label; the deterministic outline does, so nobody mistakes
+  // a mechanical ladder for an analysis.
   const badge = $('cp-source');
-  badge.textContent = p.source === 'llm' ? `Written by ${p.model || 'the model'}` : 'Outline — model unavailable';
-  badge.classList.toggle('is-template', p.source !== 'llm');
-  badge.classList.remove('hidden');
+  const isOutline = p.source !== 'llm';
+  badge.textContent = isOutline ? 'Some ladders are outlines' : '';
+  badge.classList.toggle('is-template', isOutline);
+  badge.classList.toggle('hidden', !isOutline);
 
   const summary = $('cp-summary');
   if (p.summary) { summary.textContent = p.summary; summary.classList.remove('hidden'); }
@@ -3593,80 +3682,298 @@ function renderCareerChart(p) {
   const rows = Math.max(...cols.map(c => c.roles.length), 1);
 
   $('cp-cols').innerHTML = cols.map(col => `
-    <div class="cp-col" style="--cp-rows: repeat(${rows}, ${CP_ROW_HEIGHT}px)">
+    <div class="cp-col" data-level="${col.level}" style="--cp-rows: repeat(${rows}, ${CP_ROW_HEIGHT}px)">
       <div class="cp-col-head">
         <div class="cp-col-title">${esc(col.title)}</div>
         <div class="cp-col-years">${esc(col.years || '')}</div>
       </div>
       ${col.roles.map(r => `
-        <button type="button" class="cp-node" data-title="${esc(r.title)}"
+        <button type="button" class="cp-node${cpIsFeeder(r.title) || cpIsStart(r.title) ? '' : ' has-add'}" role="treeitem" aria-selected="false"
+                data-title="${esc(r.title)}" data-level="${col.level}"
+                aria-label="${esc(r.title)}, ${esc(col.title)}${r.salary ? ', ' + esc(r.salary) : ''}"
                 ${r.why ? `title="${esc(r.why)}"` : ''}>
-          <div class="cp-node-title">${esc(r.title)}</div>
-          ${r.titleDe ? `<div class="cp-node-sub">${esc(r.titleDe)}</div>` : ''}
+          <i class="cp-dot lvl-${col.level}" aria-hidden="true"></i>
+          <span class="cp-node-body">
+            <span class="cp-node-title">${esc(r.title)}</span>
+            ${r.domainLabel || r.titleDe || r.sub ? `<span class="cp-node-sub">${esc(r.domainLabel || r.titleDe || r.sub)}</span>` : ''}
+          </span>
+          ${cpIsFeeder(r.title) ? '' : `<span class="cp-node-add" role="button" tabindex="0"
+              data-add="${esc(r.title)}" aria-label="Add ${esc(r.title)} to comparison">+ compare</span>`}
         </button>`).join('')}
     </div>`).join('');
 
-  $('cp-cols').querySelectorAll('.cp-node').forEach(btn =>
-    btn.addEventListener('click', () => cpSelect(btn.dataset.title)));
-
-  cpDrawLinks();
-}
-
-function cpSelect(title) {
-  _cpSelected = _cpSelected === title ? null : title;   // click again to clear
-  const role = _cpSelected ? cpFindRole(_cpSelected) : null;
-  const next = new Set(role?.next || []);
-
-  const cols = $('cp-cols');
-  cols.classList.toggle('has-selection', Boolean(_cpSelected));
-  $('cp-chart').classList.toggle('has-selection', Boolean(_cpSelected));
-  cols.querySelectorAll('.cp-node').forEach(n => {
-    n.classList.toggle('is-active', n.dataset.title === _cpSelected);
-    n.classList.toggle('is-next', next.has(n.dataset.title));
+  const cols_ = $('cp-cols');
+  cols_.querySelectorAll('.cp-node').forEach(btn => {
+    btn.addEventListener('click', e => {
+      if (e.target.closest('[data-add]')) return;
+      cpSelect(btn.dataset.title, true);
+    });
+    btn.addEventListener('mouseenter', () => { if (!_cpSelected) { _cpHover = btn.dataset.title; cpPaint(); } });
+    btn.addEventListener('mouseleave', () => { if (!_cpSelected) { _cpHover = null; cpPaint(); } });
+  });
+  cols_.querySelectorAll('[data-add]').forEach(el => {
+    const add = () => cpToggleCompare(el.dataset.add);
+    el.addEventListener('click', e => { e.stopPropagation(); add(); });
+    el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); add(); } });
   });
 
-  cpDrawLinks();
-  if (role && !cpIsFeeder(role.title)) cpRenderDetail(role);
-  else $('cp-detail').classList.add('hidden');
+  cpPaint();
 }
 
-/** One bezier per declared transition. The selected role's edges are lit. */
+function cpSelect(title, push = false) {
+  _cpSelected = _cpSelected === title ? null : title;   // click again to clear
+  _cpHover = null;
+  cpPaint();
+  const role = _cpSelected ? cpFindRole(_cpSelected) : null;
+  if (!role) $('cp-detail').classList.add('hidden');
+  else if (cpIsStart(role.title)) cpRenderStart(role);
+  else if (cpIsFeeder(role.title)) cpRenderFeeder(role);
+  else cpRenderDetail(role);
+  cpSyncUrl(push);
+}
+
+/** Which nodes stay lit: the focus, everything that leads to it, and its next steps. */
+function cpTraced() {
+  const focus = _cpSelected || _cpHover;
+  if (!focus) return null;
+  const role = cpFindRole(focus);
+  const set = new Set([focus, ...(role?.next || [])]);
+  if (_cpSelected) cpAncestors(focus).forEach(t => set.add(t));   // path-tracing, on click only
+  return { focus, set };
+}
+
+function cpPaint() {
+  const cols = $('cp-cols');
+  const traced = cpTraced();
+  // Dimming only makes sense when something is lit. A node with no path of its own
+  // would otherwise darken the whole chart and look like a crash.
+  const dim = Boolean(traced) && traced.set.size > 1;
+  cols.classList.toggle('has-focus', dim);
+  $('cp-chart').classList.toggle('has-focus', dim);
+  cols.querySelectorAll('.cp-node').forEach(n => {
+    const t = n.dataset.title;
+    n.classList.toggle('is-active', traced?.focus === t);
+    n.classList.toggle('is-next', Boolean(traced) && traced.focus !== t && traced.set.has(t));
+    n.classList.toggle('is-compared', _cpCompare.includes(t));
+    n.setAttribute('aria-selected', String(traced?.focus === t));
+  });
+  cpDrawLinks();
+}
+
+/** One bezier per declared transition. Edges inside the traced set are lit. */
 function cpDrawLinks() {
   const svg = $('cp-links');
   const cols = $('cp-cols');
   if (!svg || !cols || !_cpData) return;
 
+  const traced = cpTraced();
   const nodeOf = (t) => cols.querySelector(`.cp-node[data-title="${CSS.escape(t)}"]`);
   const origin = cols.getBoundingClientRect();
 
-  const paths = cpAllRoles().flatMap(role => (role.next || []).map(target => {
-    const a = nodeOf(role.title);
-    const b = nodeOf(target);
+  const paths = cpEdges().map(([u, v]) => {
+    const a = nodeOf(u), b = nodeOf(v);
     if (!a || !b) return '';
-    const ra = a.getBoundingClientRect();
-    const rb = b.getBoundingClientRect();
+    const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
     const x1 = ra.right - origin.left;
     const y1 = ra.top - origin.top + ra.height / 2;
     const x2 = rb.left - origin.left - 7;
     const y2 = rb.top - origin.top + rb.height / 2;
     const dx = Math.max(28, (x2 - x1) * 0.5);
-    const lit = role.title === _cpSelected ? ' class="is-lit"' : '';
-    const marker = lit ? ' marker-end="url(#cp-arrow-lit)"' : ' marker-end="url(#cp-arrow)"';
-    return `<path${lit}${marker} d="M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}"/>`;
-  })).join('');
+    const lit = traced && traced.set.has(u) && traced.set.has(v);
+    return `<path${lit ? ' class="is-lit"' : ''} marker-end="url(#cp-arrow${lit ? '-lit' : ''})"
+      d="M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}"/>`;
+  }).join('');
 
   const marker = (id, fill) => `<marker id="${id}" viewBox="0 0 8 8" refX="6" refY="4"
       markerWidth="5" markerHeight="5" orient="auto">
       <path d="M 0 0 L 8 4 L 0 8 z" fill="${fill}" stroke="none"/></marker>`;
-
   svg.innerHTML = `<defs>${marker('cp-arrow', 'var(--text-muted)')}${marker('cp-arrow-lit', 'var(--cyan)')}</defs>${paths}`;
+}
+
+// ── Keyboard: arrows walk the grid, Enter selects ────────────────────────────
+
+function cpWireKeyboard() {
+  $('cp-cols').addEventListener('keydown', (e) => {
+    if (!['ArrowRight', 'ArrowLeft', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
+    const node = e.target.closest('.cp-node');
+    if (!node) return;
+    e.preventDefault();
+
+    const cols = [...$('cp-cols').querySelectorAll('.cp-col')];
+    const col = node.closest('.cp-col');
+    const ci = cols.indexOf(col);
+    const nodes = [...col.querySelectorAll('.cp-node')];
+    const ri = nodes.indexOf(node);
+
+    let target = null;
+    if (e.key === 'ArrowUp')    target = nodes[ri - 1];
+    if (e.key === 'ArrowDown')  target = nodes[ri + 1];
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      const dest = cols[ci + (e.key === 'ArrowRight' ? 1 : -1)];
+      if (dest) {
+        const list = [...dest.querySelectorAll('.cp-node')];
+        target = list[Math.min(ri, list.length - 1)];
+      }
+    }
+    target?.focus();
+  });
+}
+
+// ── Compare ─────────────────────────────────────────────────────────────────
+
+function cpToggleCompare(title) {
+  if (_cpCompare.includes(title)) _cpCompare = _cpCompare.filter(t => t !== title);
+  else if (_cpCompare.length >= CP_MAX_COMPARE) return toast(`Compare up to ${CP_MAX_COMPARE} roles at a time.`, 'info');
+  else _cpCompare.push(title);
+  cpRenderCompare();
+  cpPaint();
+  cpSyncUrl();
+}
+
+function cpRenderCompare() {
+  const bar = $('cp-compare-bar');
+  const box = $('cp-compare');
+  bar.classList.toggle('hidden', _cpCompare.length === 0);
+  box.classList.toggle('hidden', _cpCompare.length < 2);
+
+  $('cp-compare-chips').innerHTML = _cpCompare.map(t =>
+    `<span class="cp-chip">${esc(t)}<button type="button" data-drop="${esc(t)}" aria-label="Remove ${esc(t)}">×</button></span>`).join('');
+  $('cp-compare-chips').querySelectorAll('[data-drop]').forEach(b =>
+    b.addEventListener('click', () => cpToggleCompare(b.dataset.drop)));
+
+  if (_cpCompare.length < 2) return;
+
+  const roles = _cpCompare.map(cpFindRole).filter(Boolean);
+  const owned = cpOwnedSkills();
+  const skills = [...new Set(roles.flatMap(r => r.skills || []))].sort();
+
+  box.innerHTML = `
+    <table class="cp-matrix">
+      <caption class="cp-panel-note">A skill required by only some of these roles is a gap you would
+        have to close when moving between them. Skills already in your CV are ticked.</caption>
+      <thead>
+        <tr><th scope="col">Skill</th>${roles.map(r => `<th scope="col">${esc(r.title)}</th>`).join('')}</tr>
+      </thead>
+      <tbody>
+        ${skills.map(s => {
+          const marks = roles.map(r => (r.skills || []).includes(s));
+          const shared = marks.every(Boolean);
+          const inCv = owned.has(s.toLowerCase());
+          return `<tr class="${shared ? '' : 'is-gap'}">
+            <th scope="row">${esc(s)}${inCv ? ' <span class="cp-mark yes">✓</span>' : ''}</th>
+            ${marks.map(m => `<td class="${m ? '' : 'cp-gap'}"><span class="cp-mark ${m ? 'yes' : 'no'}">${m ? 'required' : '—'}</span></td>`).join('')}
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
+}
+
+// ── Detail panel ────────────────────────────────────────────────────────────
+
+function cpPanel(title, note, body, cls = '') {
+  return `<div class="cp-panel ${cls}">
+      <h4>${esc(title)}</h4>
+      ${note ? `<div class="cp-panel-note">${esc(note)}</div>` : ''}
+      ${body}
+    </div>`;
+}
+
+/**
+ * The beginner's panel. Someone with no experience does not need a salary band
+ * for a Security Architect — they need to know which job to apply for first and
+ * what to learn before they do.
+ */
+function cpRenderStart(role) {
+  const target = cpFirstEntryRole();
+  const feeders = cpFeederRoles(_cpData);
+  const el = $('cp-detail');
+
+  el.innerHTML = `
+    <div class="cp-detail-head">
+      <div>
+        <div class="cp-detail-title">Starting from zero</div>
+        <div class="cp-detail-sub">No experience is required to begin in ${esc(_cpData.label)}.</div>
+      </div>
+      ${target ? `<div class="cp-controls-actions">
+        <button class="btn btn-primary btn-sm" id="cp-plan-btn">Plan my way to ${esc(target.title)}</button>
+      </div>` : ''}
+    </div>
+    <div class="cp-grid">
+      ${cpPanel('Your first job', 'These roles hire without security experience and teach you the ground you will stand on.',
+        `<ul class="cp-list">${feeders.map(f => `<li>${esc(f.title)}</li>`).join('')}</ul>`)}
+
+      ${feeders.length ? cpPanel('Why they lead in', '',
+        `<div class="cp-plan-text">${feeders.map(f => `${esc(f.title)} — ${esc(f.why || '')}`).join('\n\n')}</div>`) : ''}
+
+      ${target ? cpPanel(`Then aim for ${target.title}`,
+        'The first security role of this pathway. These are the skills it asks for.',
+        `<ul class="cp-list">${(target.skills || []).map(s =>
+          `<li class="${cpOwnedSkills().has(String(s).toLowerCase()) ? 'has' : ''}">${esc(s)}</li>`).join('')}</ul>
+         ${target.certs?.length ? `<div class="cp-stat"><div class="cp-figure-sub">Usual first certification<br>${esc(target.certs[0])}</div></div>` : ''}`) : ''}
+
+      ${cpPanel('Open positions', 'Live count from Bundesagentur für Arbeit, all of Germany.',
+        `<div class="cp-figure" id="cp-count">…</div>
+         <div class="cp-figure-sub">${feeders[0] ? `listings for ${esc(feeders[0].title)}` : 'listings'}</div>
+         <div class="cp-stat"><div class="cp-figure-sub">A feeder role is easier to land than a security role, and it is
+           the fastest way to get paid while you learn.</div></div>`)}
+
+      <div id="cp-plan" class="hidden"></div>
+    </div>`;
+  el.classList.remove('hidden');
+
+  if (target) $('cp-plan-btn').addEventListener('click', () => cpBuildPlan(target));
+  if (feeders[0]) cpLoadCount(feeders[0].title);
+}
+
+/**
+ * A feeder role: not a security job, so no salary band or certification ladder.
+ *
+ * A feeder that does not open onto the domain on screen used to dim the whole
+ * chart and then offer a plan towards a role it does not lead to. It now says so,
+ * and sends the reader to the domains it actually opens.
+ */
+function cpRenderFeeder(role) {
+  const next = (role.next || []).map(cpFindRole).filter(Boolean);
+  const opens = next.length > 0;
+  const target = opens ? next[0] : null;
+  const el = $('cp-detail');
+
+  el.innerHTML = `
+    <div class="cp-detail-head">
+      <div>
+        <div class="cp-detail-title">${esc(role.title)}</div>
+        <div class="cp-detail-sub">${opens
+          ? `A way into ${esc(_cpData.label)}, not a security role itself.`
+          : `This job does not lead into ${esc(_cpData.label)}.`}</div>
+      </div>
+      ${target ? `<div class="cp-controls-actions">
+        <button class="btn btn-primary btn-sm" id="cp-plan-btn">Plan my move to ${esc(target.title)}</button>
+      </div>` : ''}
+    </div>
+    <div class="cp-grid">
+      ${role.why ? cpPanel('Why it leads into security', '', `<div class="cp-plan-text">${esc(role.why)}</div>`) : ''}
+
+      ${opens ? cpPanel('It leads to', 'The security roles this job opens up.',
+        `<ul class="cp-list">${next.map(r => `<li>${esc(r.title)}${r.domainLabel
+          ? ` <span class="cp-figure-sub" style="display:inline">— ${esc(r.domainLabel)}</span>` : ''}</li>`).join('')}</ul>`) : ''}
+
+      ${cpPanel('Open positions', 'Live count from Bundesagentur für Arbeit, all of Germany.',
+        `<div class="cp-figure" id="cp-count">…</div>
+         <div class="cp-figure-sub">listings matching this title</div>`)}
+
+      <div id="cp-plan" class="hidden"></div>
+    </div>`;
+  el.classList.remove('hidden');
+
+  if (target) $('cp-plan-btn').addEventListener('click', () => cpBuildPlan(target));
+  cpLoadCount(role.title);
 }
 
 function cpRenderDetail(role) {
   const owned = cpOwnedSkills();
   const li = (t, mark) => `<li class="${mark && owned.has(String(t).toLowerCase()) ? 'has' : ''}">${esc(t)}</li>`;
-  const panel = (title, note, body) => `
-    <div class="cp-panel">
+  const panel = (title, note, body, cls = '') => `
+    <div class="cp-panel ${cls}">
       <h4>${esc(title)}</h4>
       ${note ? `<div class="cp-panel-note">${esc(note)}</div>` : ''}
       ${body}
@@ -3675,17 +3982,19 @@ function cpRenderDetail(role) {
   const el = $('cp-detail');
   el.innerHTML = `
     <div class="cp-detail-head">
-      <div class="cp-detail-title">${esc(role.title)}</div>
-      <div class="cp-detail-sub">${esc(role.titleDe || role.why || _cpData.label || '')}</div>
+      <div>
+        <div class="cp-detail-title">${esc(role.title)}</div>
+        <div class="cp-detail-sub">${esc(role.domainLabel || role.titleDe || '')}</div>
+      </div>
+      <div class="cp-controls-actions">
+        <button class="btn btn-ghost btn-sm" id="cp-add-compare">${_cpCompare.includes(role.title) ? 'Remove from comparison' : 'Add to comparison'}</button>
+        <button class="btn btn-primary btn-sm" id="cp-plan-btn">Build my learning plan</button>
+      </div>
     </div>
     <div class="cp-grid">
       ${role.commonTitles?.length ? panel('Common job titles',
         'What employers actually write in their ads for this role.',
         `<ul class="cp-list">${role.commonTitles.map(t => li(t, false)).join('')}</ul>`) : ''}
-
-      ${role.skills?.length ? panel('Top skills',
-        'Most requested in listings. A tick marks one detected in your CV.',
-        `<ul class="cp-list">${role.skills.map(t => li(t, true)).join('')}</ul>`) : ''}
 
       ${role.certs?.length ? panel('Top certifications',
         'Most often asked for at this step of the ladder.',
@@ -3697,8 +4006,13 @@ function cpRenderDetail(role) {
          ${role.salary ? `<div class="cp-stat"><div class="cp-salary">${esc(role.salary)}</div>
            <div class="cp-figure-sub">gross per year, typical range</div></div>` : ''}
          ${role.education ? `<div class="cp-stat"><div class="cp-figure-sub">Usual education<br>${esc(role.education)}</div></div>` : ''}`)}
+
+      <div id="cp-plan" class="hidden"></div>
     </div>`;
   el.classList.remove('hidden');
+
+  $('cp-add-compare').addEventListener('click', () => { cpToggleCompare(role.title); cpRenderDetail(role); });
+  $('cp-plan-btn').addEventListener('click', () => cpBuildPlan(role));
   cpLoadCount(role.title);
 }
 
@@ -3706,11 +4020,90 @@ async function cpLoadCount(title) {
   const el = $('cp-count');
   if (!el) return;
   try {
-    const r = await fetch(`${baseUrl}/api/job-count?keyword=${encodeURIComponent(title)}`);
-    const d = await r.json();
+    const d = await (await fetch(`${baseUrl}/api/job-count?keyword=${encodeURIComponent(title)}`)).json();
     if (!el.isConnected) return;                    // the user moved on while we waited
     el.textContent = d.count == null ? '—' : d.count.toLocaleString('de-DE');
   } catch (_) {
     if (el.isConnected) el.textContent = '—';
+  }
+}
+
+// ── Learning plan: the gaps of this role, handed to the Writer agent ─────────
+
+async function cpBuildPlan(role) {
+  const owned = cpOwnedSkills();
+  const have = (role.skills || []).filter(s => owned.has(s.toLowerCase()));
+  const missing = (role.skills || []).filter(s => !owned.has(s.toLowerCase()));
+  const box = $('cp-plan');
+  const btn = $('cp-plan-btn');
+
+  box.className = 'cp-panel cp-plan';
+  box.innerHTML = `<h4>Learning plan — ${esc(role.title)}</h4>
+    <div class="cp-panel-note">Writing a roadmap for the ${missing.length} skill(s) you are missing…</div>`;
+  box.classList.remove('hidden');
+  btn.disabled = true;
+
+  try {
+    const r = await fetch(`${baseUrl}/api/generate-roadmap`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ targetRole: role.title, foundSkills: have, missingSkills: missing }),
+    });
+    const d = await r.json();
+    // The workflow always comes back — it is built from the taxonomy. The model
+    // only adds the mentor's commentary, so a rate limit costs the notes, not the plan.
+    const steps = d.steps || [];
+    const text = d.text || '';
+
+    const stepHtml = steps.map(s => `
+      <li class="cp-step">
+        <div class="cp-step-num" aria-hidden="true">${s.step}</div>
+        <div class="cp-step-body">
+          <div class="cp-step-skill">${esc(s.skill)}<span class="cp-step-hours">≈ ${s.hours} h</span></div>
+          <div class="cp-step-how">${esc(s.how)}</div>
+          <div class="cp-step-res">${esc(s.resource)}</div>
+          <div class="cp-step-links">
+            ${(s.links || []).map(l => `<a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer"
+                 class="cp-step-link">${esc(l.label)} ↗</a>`).join('')}
+          </div>
+        </div>
+      </li>`).join('');
+
+    // The full requirement list lives here, not on the role card: what matters is
+    // not "this role uses SIEM" but "you have four of these six, learn the other two".
+    const all = role.skills || [];
+    const req = all.map(s => `<li class="${owned.has(s.toLowerCase()) ? 'has' : ''}">${esc(s)}</li>`).join('');
+
+    box.innerHTML = `<h4>Learning plan — ${esc(role.title)}</h4>
+      <div class="cp-panel-note">${have.length} of ${all.length} skill(s) already in your CV
+        · about ${d.weeks || '?'} weeks at 6 h a week
+        · ${d.ok ? `mentor notes by the Writer agent (${esc(d.provider || 'model')})` : 'no model reachable — the steps below still stand'}</div>
+
+      ${all.length ? `<div class="cp-req">
+        <div class="cp-notes-head">Skills and tools this role requires</div>
+        <ul class="cp-list">${req}</ul>
+      </div>` : ''}
+
+      ${steps.length ? `<div class="cp-notes-head" style="margin-top:22px">What to learn, in order</div>
+        <ol class="cp-steps">${stepHtml}</ol>`
+        : `<div class="cp-plan-text">You already cover every skill this role asks for.</div>`}
+
+      ${d.notes ? `<div class="cp-notes">
+        <div class="cp-notes-head">Mentor's notes</div>
+        <div class="cp-plan-text">${esc(d.notes)}</div>
+      </div>` : ''}
+
+      <div class="cp-plan-actions">
+        <button class="btn btn-ghost btn-sm" id="cp-plan-pdf">Export plan as PDF</button>
+      </div>`;
+
+    const pdfText = [text, d.notes ? `\n\nMentor's notes\n\n${d.notes}` : ''].join('');
+    $('cp-plan-pdf').addEventListener('click', () =>
+      downloadTextAsPDF(pdfText, `learning-plan-${role.title.replace(/\W+/g, '-').toLowerCase()}.pdf`,
+        `Learning plan — ${role.title}`));
+  } catch (err) {
+    box.innerHTML = `<h4>Learning plan</h4><div class="cp-panel-note">Could not build the plan: ${esc(err.message)}</div>`;
+  } finally {
+    btn.disabled = false;
   }
 }

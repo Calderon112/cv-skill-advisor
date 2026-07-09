@@ -1411,6 +1411,93 @@ function findSkills(text) {
   return skillMatcher.findSkills(text, skillGroups);
 }
 
+/**
+ * Where to actually go for a skill. The learning taxonomy names a resource in
+ * prose ("TryHackMe SOC Level 1", "MS Learn"), so we turn that into deep links.
+ * These are search URLs, not hand-picked pages: a curated link rots, a search for
+ * the skill does not. The UI labels them as searches.
+ */
+function roadmapLinks(skillLabel, resourceText) {
+  const q = encodeURIComponent(skillLabel);
+  // The skill's own name decides first: the taxonomy's resource for "Microsoft
+  // Sentinel" happens to mention MITRE, which would send the learner to the wrong
+  // vendor. Fall back to the resource text when the name says nothing.
+  const r = `${skillLabel} ${resourceText || ''}`.toLowerCase();
+
+  let lab = { label: 'Hands-on lab', url: `https://tryhackme.com/search?searchTerm=${q}` };
+  if (/hack ?the ?box|htb/.test(r)) lab = { label: 'Hands-on lab', url: `https://app.hackthebox.com/search?query=${q}` };
+  else if (/owasp|juice shop/.test(r)) lab = { label: 'Hands-on lab', url: `https://owasp.org/search/?searchQuery=${q}` };
+
+  let course = { label: 'Course', url: `https://www.coursera.org/search?query=${q}` };
+  if (/ms learn|microsoft|sentinel|azure/.test(r)) course = { label: 'Course', url: `https://learn.microsoft.com/en-us/search/?terms=${q}` };
+  else if (/splunk/.test(r)) course = { label: 'Course', url: 'https://www.splunk.com/en_us/training/free-courses/overview.html' };
+  else if (/sans/.test(r)) course = { label: 'Course', url: `https://www.sans.org/search/?q=${q}` };
+  else if (/mitre|att&ck/.test(r)) course = { label: 'Course', url: 'https://attack.mitre.org/resources/training/' };
+
+  return [lab, course, { label: 'Video', url: `https://www.youtube.com/results?search_query=${q}+tutorial` }];
+}
+
+/**
+ * The plan as a sequence of steps rather than prose: one step per missing skill,
+ * in the order the caller gave them, which is already the role's priority order.
+ * Rendered as a workflow by the client and exported as text to PDF.
+ */
+function buildRoadmapSteps(missingSkills) {
+  const miss = Array.isArray(missingSkills) ? missingSkills : [];
+  const skillByLabel = new Map(
+    skillGroups.flatMap(g => g.skills.map(s => [s.label.toLowerCase(), { ...s, category: g.category }]))
+  );
+  return miss.map((label, i) => {
+    const skill = skillByLabel.get(String(label).toLowerCase()) || { key: label, label };
+    const r = SecurityLearning.learningFor(skill);
+    return {
+      step: i + 1,
+      skill: label,
+      how: r.how,
+      resource: r.resource,
+      hours: 15,                       // a fortnight of evenings, per skill
+      links: roadmapLinks(label, r.resource),
+    };
+  });
+}
+
+/**
+ * A study plan without an LLM. Each missing skill is looked up in the learning
+ * taxonomy, which names how to practise it and where. Ordered as given, since the
+ * caller already lists skills by importance for the role.
+ */
+function buildTemplateRoadmap(targetRole, foundSkills, missingSkills) {
+  const have = Array.isArray(foundSkills) ? foundSkills : [];
+  const miss = Array.isArray(missingSkills) ? missingSkills : [];
+  const skillByLabel = new Map(
+    skillGroups.flatMap(g => g.skills.map(s => [s.label.toLowerCase(), { ...s, category: g.category }]))
+  );
+
+  // No title line: the caller already heads the panel and the PDF with the role.
+  const lines = [];
+  lines.push(have.length
+    ? `Already covered by your CV: ${have.join(', ')}.`
+    : 'No matching skill was detected in your CV yet.');
+  lines.push('');
+
+  if (!miss.length) {
+    lines.push('You already cover every skill this role asks for. Aim for the next level up.');
+    return lines.join('\n');
+  }
+
+  lines.push(`${miss.length} skill(s) to acquire, in order of priority:`, '');
+  miss.forEach((label, i) => {
+    const skill = skillByLabel.get(String(label).toLowerCase()) || { key: label, label };
+    const r = SecurityLearning.learningFor(skill);
+    lines.push(`${i + 1}. ${label}`);
+    lines.push(`   How:  ${r.how}`);
+    lines.push(`   With: ${r.resource}`);
+    lines.push('');
+  });
+  lines.push(`At about 6 hours a week, expect roughly ${Math.max(4, miss.length * 3)} weeks.`);
+  return lines.join('\n');
+}
+
 // ── Server-side PDF text extraction (no external deps) ───────────────────
 function decodePdfStr(s) {
   return s
@@ -2029,24 +2116,42 @@ const server = http.createServer(async (req, res) => {
     let body = '';
     req.on('data', chunk => { body += chunk; });
     req.on('end', async () => {
+      // The workflow — one step per missing skill, with links to a lab, a course
+      // and a video — always comes from the taxonomy, so it exists whether or not
+      // a model answers. The model only adds a mentor's commentary on top.
+      let payload;
       try {
-        const { missingSkills, targetRole, foundSkills } = JSON.parse(body || '{}');
-        if (!llm.isAvailable()) { sendJson(res, 200, { ok: false, source: 'template' }); return; }
+        payload = JSON.parse(body || '{}');
+      } catch (_) {
+        sendJson(res, 400, { error: 'Invalid request payload' });
+        return;
+      }
+      const { missingSkills, targetRole, foundSkills } = payload;
+      const steps = buildRoadmapSteps(missingSkills);
+      const weeks = Math.max(4, Math.ceil(steps.reduce((h, s) => h + s.hours, 0) / 6));
+      const text = buildTemplateRoadmap(targetRole, foundSkills, missingSkills);
+
+      if (!llm.isAvailable()) {
+        sendJson(res, 200, { ok: false, source: 'template', steps, weeks, text });
+        return;
+      }
+
+      try {
         const miss = Array.isArray(missingSkills) ? missingSkills.join(', ') : (missingSkills || '');
         const have = Array.isArray(foundSkills) ? foundSkills.join(', ') : (foundSkills || '');
-        const system = 'You are a senior IT-Security mentor. Produce a concrete, realistic learning roadmap '
-          + 'to close skill gaps for a target role. Be specific: order skills by priority, suggest free '
-          + 'resources (TryHackMe, HackTheBox, official docs), hands-on labs, and a rough time estimate per item. '
-          + 'Keep it actionable and under ~400 words.';
+        const system = 'You are a senior IT-Security mentor. The learner already has a step-by-step plan; '
+          + 'your job is the commentary around it. Say in what order to attack the gaps and why, warn about the '
+          + 'usual traps, and describe one portfolio project that proves all of it at once. '
+          + 'Do not repeat the list of skills. Under 250 words, plain prose.';
         const user = `Target role: ${targetRole || 'IT Security professional'}\n`
           + `Skills already present: ${have || '(none detected)'}\n`
-          + `Missing skills to acquire: ${miss || '(none)'}\n\n`
-          + `Return a prioritized roadmap as a numbered list, each item: skill — why it matters — how to learn it — est. time.`;
-        // Generous budget so reasoning-heavy models don't truncate the roadmap.
-        const text = await llm.chat({ system, user, maxTokens: 4000, temperature: 0.5 });
-        sendJson(res, 200, { ok: true, source: 'ai', provider: llm.provider(), text });
+          + `Skills to acquire, in the order the plan lists them: ${miss || '(none)'}`;
+        const notes = await llm.chat({ system, user, maxTokens: 2000, temperature: 0.5 });
+        sendJson(res, 200, { ok: true, source: 'ai', provider: llm.provider(), steps, weeks, notes, text });
       } catch (error) {
-        sendJson(res, 200, { ok: false, source: 'template', error: String(error.message || error) });
+        // Every provider is rate-limited or down. The workflow still stands; only
+        // the mentor's commentary is missing.
+        sendJson(res, 200, { ok: false, source: 'template', steps, weeks, text, error: String(error.message || error) });
       }
     });
     return;
@@ -2590,6 +2695,18 @@ const server = http.createServer(async (req, res) => {
   // Public: the answer depends only on the domain, never on the visitor.
   if (parsedUrl.pathname === '/api/career-domains' && req.method === 'GET') {
     sendJson(res, 200, { domains: careerPath.listDomains(), llm: llm.isAvailable() });
+    return;
+  }
+
+  // All domains at once, with what leads into each. Reads the cache only.
+  if (parsedUrl.pathname === '/api/career-overview' && req.method === 'GET') {
+    sendJson(res, 200, { domains: careerPath.overview() });
+    return;
+  }
+
+  // Every security job on a single chart. Cache-only, so it always answers.
+  if (parsedUrl.pathname === '/api/career-graph' && req.method === 'GET') {
+    sendJson(res, 200, careerPath.graph());
     return;
   }
 

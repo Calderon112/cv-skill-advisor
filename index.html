@@ -397,27 +397,36 @@
              detected from your CV, are highlighted.</p>
         </div>
 
-        <div class="card cp-controls">
-          <div class="form-group" style="flex:1;min-width:260px">
-            <label for="cp-domain">Domain</label>
-            <select id="cp-domain" class="field"></select>
-          </div>
-          <div class="cp-controls-actions">
-            <span id="cp-source" class="cp-badge hidden"></span>
-            <button id="cp-refresh" class="btn btn-ghost btn-sm" title="Ask the model to write this pathway again">Regenerate</button>
-          </div>
-        </div>
-
-        <div id="cp-status" class="cp-status hidden"></div>
-        <div id="cp-summary" class="cp-summary hidden"></div>
+        <div id="cp-status" class="cp-status hidden" role="status" aria-live="polite"></div>
+        <p id="cp-summary" class="cp-summary hidden"></p>
 
         <div class="card cp-chart-card">
-          <div class="cp-chart-hint">Click a role to trace where it leads and see what it asks for.</div>
+          <div class="cp-chart-bar">
+            <p class="cp-chart-hint">
+              Click a role to trace where it leads. Hover to preview its next steps.
+              Use the arrow keys to move between roles.
+            </p>
+            <div class="cp-legend" id="cp-legend">
+              <span id="cp-source" class="cp-badge hidden"></span>
+              <span class="cp-legend-item"><i class="cp-dot lvl-start"></i>Start</span>
+              <span class="cp-legend-item"><i class="cp-dot lvl-feeder"></i>Feeder</span>
+              <span class="cp-legend-item"><i class="cp-dot lvl-entry"></i>Entry</span>
+              <span class="cp-legend-item"><i class="cp-dot lvl-mid"></i>Mid</span>
+              <span class="cp-legend-item"><i class="cp-dot lvl-adv"></i>Advanced</span>
+            </div>
+          </div>
           <div id="cp-chart" class="cp-chart">
             <svg id="cp-links" class="cp-links" aria-hidden="true"></svg>
-            <div id="cp-cols" class="cp-cols"></div>
+            <div id="cp-cols" class="cp-cols" role="tree" aria-label="Career pathway roles"></div>
           </div>
         </div>
+
+        <div id="cp-compare-bar" class="cp-compare-bar hidden">
+          <span class="cp-compare-label">Comparing</span>
+          <div id="cp-compare-chips" class="cp-compare-chips"></div>
+          <button id="cp-compare-clear" class="btn btn-ghost btn-sm">Clear</button>
+        </div>
+        <div id="cp-compare" class="cp-compare hidden"></div>
 
         <div id="cp-detail" class="cp-detail hidden"></div>
       </section>
