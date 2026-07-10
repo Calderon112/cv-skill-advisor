@@ -1966,6 +1966,8 @@ $('save-app-btn').addEventListener('click', async () => {
 
 // ── Job Workspace: per saved job → match % → gaps → Oracle → cover letter ────
 let jwCurrentApp = null;
+// The last cover letter written by the agent graph, and the job it belongs to.
+let jwGraphLetter = null;
 let jwReturnApp = null;   // job to re-open after the user updates their profile
 
 // "AI consultant" mark for the Oracle — a robot advisor reading a dashboard,
@@ -2298,10 +2300,17 @@ async function generateJobDocs() {
   const langChoice = $('jw-lang')?.value || 'auto';
   const opts = { ...readWriterOptions('cover-opt'), language: langChoice };
 
+  // A letter the agent graph already wrote for *this* job went through the
+  // Writer⇄Critic loop. Regenerating it with a single call would trade a graded
+  // letter for one nobody has read, so reuse it and only build the CV.
+  const fromGraph = jwGraphLetter && jwGraphLetter.appId === app.id && jwGraphLetter.text;
+
   const [cover, cv] = await Promise.all([
-    genDoc('/api/generate-cover',
-      { jobTitle: app.title, company: app.company, name, skills, cvText, jobDescription: app.description || '', options: opts },
-      () => (typeof buildCoverLetter === 'function' ? buildCoverLetter({ jobTitle: app.title, company: app.company, name, skills }) : '')),
+    fromGraph
+      ? Promise.resolve({ text: jwGraphLetter.text, ai: true })
+      : genDoc('/api/generate-cover',
+        { jobTitle: app.title, company: app.company, name, skills, cvText, jobDescription: app.description || '', options: opts },
+        () => (typeof buildCoverLetter === 'function' ? buildCoverLetter({ jobTitle: app.title, company: app.company, name, skills }) : '')),
     genDoc('/api/generate-cv',
       { cvText, targetRole: app.title, foundSkills: (state.analysis?.foundSkills || []).map(s => s.label), options: opts },
       () => (typeof buildImprovedCV === 'function' ? buildImprovedCV(cvText, app.title, state.analysis) : cvText)),
@@ -2321,7 +2330,9 @@ async function generateJobDocs() {
   renderKanban();
 
   btn.disabled = false; btn.innerHTML = orig;
-  toast((cover.ai || cv.ai) ? 'CV & cover letter generated & saved (AI)!' : 'CV & cover letter generated & saved.', 'success');
+  toast(fromGraph
+    ? `CV generated. Cover letter kept from the agent graph${jwGraphLetter.scored ? ` (${jwGraphLetter.score}/100)` : ''}.`
+    : ((cover.ai || cv.ai) ? 'CV & cover letter generated & saved (AI)!' : 'CV & cover letter generated & saved.'), 'success');
 }
 
 function renderJobDocs(app, docs) {
@@ -2433,6 +2444,14 @@ async function runAgentGraph() {
     const out = $('jw-cover-output');
     out.value = d.coverLetter || '';
     out.classList.remove('hidden');
+
+    // Keep the graph's letter, tied to the job it was written for. "Generate
+    // documents" used to call /api/generate-cover again and throw this one away —
+    // replacing a letter the Critic had graded with one nobody had read.
+    jwGraphLetter = d.coverLetter
+      ? { appId: jwCurrentApp?.id, text: d.coverLetter, score: d.score, scored }
+      : null;
+
     toast(scored
       ? `Agent graph done — ${d.revisions} revision(s), score ${d.score}/100.`
       : `Agent graph done — ${d.revisions} revision(s), letter not evaluated.`, scored ? 'success' : 'info');
