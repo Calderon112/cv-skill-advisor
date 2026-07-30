@@ -204,6 +204,9 @@
         <button class="nav-btn" data-page="account">
           <span class="nav-label">My Account</span>
         </button>
+        <button class="nav-btn" data-page="feedback">
+          <span class="nav-label">Feedback</span>
+        </button>
         <button class="nav-btn hidden" data-page="admin" id="nav-admin">
           <span class="nav-label">Admin</span>
         </button>
@@ -935,6 +938,74 @@
             <p class="danger-note">Deleting your account removes your login, your saved jobs and your stored profile from the server.</p>
             <button class="btn btn-ghost btn-sm" id="ac-delete">Delete my account</button>
           </div>
+        </div>
+      </section>
+
+      <!-- ═══ Feedback (anonymous) ═══ -->
+      <section class="page" id="page-feedback">
+        <div class="page-intro">
+          <div>
+            <h1>Feedback</h1>
+            <p>Anonymous. Nothing is recorded about who you are — not your account, not
+               your address. Say what you actually think.So feel free to share your thoughts!</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><h2>How is it going?</h2></div>
+
+          <div class="form-group">
+            <label>How useful was CareerAI for you?</label>
+            <div class="fb-rating" id="fb-rating" role="radiogroup" aria-label="Rating out of 5">
+              <button type="button" class="fb-star" data-rating="1" role="radio" aria-checked="false" aria-label="1 out of 5">1</button>
+              <button type="button" class="fb-star" data-rating="2" role="radio" aria-checked="false" aria-label="2 out of 5">2</button>
+              <button type="button" class="fb-star" data-rating="3" role="radio" aria-checked="false" aria-label="3 out of 5">3</button>
+              <button type="button" class="fb-star" data-rating="4" role="radio" aria-checked="false" aria-label="4 out of 5">4</button>
+              <button type="button" class="fb-star" data-rating="5" role="radio" aria-checked="false" aria-label="5 out of 5">5</button>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="fb-area">Which part? (optional)</label>
+            <select id="fb-area" class="field">
+              <option value="">Anything / not sure</option>
+              <option value="profile">CV import &amp; profile</option>
+              <option value="search">Job search</option>
+              <option value="career">Career pathway</option>
+              <option value="letters">Cover letters</option>
+              <option value="interviews">Interview prep</option>
+              <option value="jobs">Application tracker</option>
+              <option value="signin">Signing in</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="fb-liked">What worked well?</label>
+            <textarea id="fb-liked" class="field" rows="3" maxlength="2000"
+              placeholder="What actually helped you?"></textarea>
+          </div>
+
+          <div class="form-group">
+            <label for="fb-improve">What should change?</label>
+            <textarea id="fb-improve" class="field" rows="3" maxlength="2000"
+              placeholder="What was missing, confusing, or wrong?"></textarea>
+          </div>
+
+          <div class="form-actions">
+            <button id="fb-submit" class="btn btn-primary">Send anonymously</button>
+            <span class="form-msg" id="fb-msg"></span>
+          </div>
+          <p class="hint">Please leave out names, addresses and anything else that would
+             identify you — this form does not need it and cannot protect it.</p>
+        </div>
+
+        <!-- Only rendered for an admin; the server refuses this data to anyone else. -->
+        <div id="fb-admin" class="card hidden">
+          <div class="card-header">
+            <h2>What people said</h2>
+            <span class="hint" id="fb-admin-summary"></span>
+          </div>
+          <div id="fb-admin-list"></div>
         </div>
       </section>
 

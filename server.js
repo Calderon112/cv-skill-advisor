@@ -141,18 +141,36 @@ function acquireStorageLock() {
   }
 }
 
+// Set once loadStorage() has actually read the file. Nothing may write before that.
+let storageLoaded = false;
+
 function loadStorage() {
   try {
     storageService.migrateLegacy(STORAGE_FILE);
     const db = storageService.load(STORAGE_FILE);
     storage = db.data;
+    storageLoaded = true;
   } catch (error) {
+    // Deliberately NOT setting storageLoaded here. A failed read followed by a write
+    // of the empty fallback is precisely how the file gets destroyed; better to run
+    // with an empty in-memory store and persist nothing than to overwrite what could
+    // not be parsed.
     console.error('Failed to load storage:', error);
     storage = { profiles: {}, tokens: {}, users: {}, applications: {}, emailTokens: {} };
   }
 }
 
 function saveStorage() {
+  // The guard that was missing, and it cost a database.
+  //
+  // With STORAGE_BACKEND=postgres the JSON file is not the store, so loadStorage() is
+  // skipped and `storage` stays at its empty initial value. Any code path that still
+  // called saveStorage() — and several do, they are shared with the JSON backend —
+  // wrote that empty object over storage.json, silently destroying 14 accounts and 113
+  // sessions. It was recovered from a dangling Docker volume; there was no other copy.
+  //
+  // Writing state that was never read is never correct, whatever the backend. Refuse.
+  if (!storageLoaded) return;
   try {
     storageService.save(STORAGE_FILE, storage);
   } catch (error) {
@@ -2682,6 +2700,60 @@ const server = http.createServer(async (req, res) => {
         } catch (_) { /* provider unreachable — local sign-out already happened */ }
       }
       sendJson(res, 200, { ok: true, url });
+    })();
+    return;
+  }
+
+  // ── Feedback ──────────────────────────────────────────────────────────────
+  //
+  // Public on purpose: the people whose opinion is worth having are the ones who did
+  // not sign up. Requiring an account would filter the sample down to the users who
+  // already liked it enough to register.
+  //
+  // Nothing identifying is recorded — no session, no username, no IP. The request may
+  // well carry an Authorization header; it is simply never read here.
+  if (parsedUrl.pathname === '/api/feedback' && req.method === 'POST') {
+    (async () => {
+      const body = await readJsonBody(req);
+      if (!body) { sendJson(res, 400, { error: 'Invalid request payload' }); return; }
+
+      const clean = (v, max) => String(v || '').trim().slice(0, max);
+      const liked = clean(body.liked, 2000);
+      const improve = clean(body.improve, 2000);
+      const area = clean(body.area, 60);
+      const rating = Number.isFinite(Number(body.rating))
+        ? Math.min(5, Math.max(1, Math.round(Number(body.rating)))) : null;
+
+      // A rating alone says little; some prose is the point of asking.
+      if (!liked && !improve) {
+        sendJson(res, 400, { error: 'Tell us at least one thing — what worked, or what did not.' });
+        return;
+      }
+
+      await repo.feedback.add({ rating, liked, improve, area, at: Date.now() });
+      sendJson(res, 200, { ok: true });
+    })();
+    return;
+  }
+
+  // Reading it is admin-only: it is unmoderated free text from anyone on the internet.
+  if (parsedUrl.pathname === '/api/admin/feedback' && req.method === 'GET') {
+    (async () => {
+      const username = await authenticate(getToken(req));
+      if (!username) { sendJson(res, 401, { error: 'Login required' }); return; }
+      if (normalizeUser(await getUser(username)).role !== 'admin') {
+        sendJson(res, 403, { error: 'Admin only.' });
+        return;
+      }
+      const entries = await repo.feedback.list(200);
+      const rated = entries.filter(e => e.rating);
+      sendJson(res, 200, {
+        entries,
+        total: await repo.feedback.count(),
+        averageRating: rated.length
+          ? Math.round((rated.reduce((n, e) => n + e.rating, 0) / rated.length) * 10) / 10
+          : null,
+      });
     })();
     return;
   }

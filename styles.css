@@ -3339,3 +3339,30 @@ option   { color: var(--text); background: var(--bg-card); }
 /* The column the visitor was sent to, so the jump is not silent. */
 .cp-col.is-focused .cp-col-head { border-bottom-color: var(--cyan); }
 .cp-col.is-focused .cp-col-title { color: var(--cyan); }
+
+/* ── Feedback ─────────────────────────────────────────────────────────────── */
+.fb-rating { display: flex; gap: 8px; }
+.fb-star {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.fb-star:hover { border-color: var(--border-hi); color: var(--text); }
+.fb-star.is-on {
+  background: var(--cyan-dim);
+  border-color: var(--cyan);
+  color: var(--cyan);
+}
+
+.fb-entry { display: block; }
+.fb-liked, .fb-improve { margin: 6px 0; font-size: 13px; color: var(--text); }
+/* Free text from strangers: wrap it rather than let a 2000-character word without a
+ * space stretch the page sideways. */
+.fb-liked, .fb-improve { overflow-wrap: anywhere; }

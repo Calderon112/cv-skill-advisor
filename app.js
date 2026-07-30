@@ -704,6 +704,7 @@ const PAGE_TITLES = {
   profile:           'Professional Profile',
   career:            'Career Pathway',
   account:           'My Account',
+  feedback:          'Feedback',
   admin:             'Admin',
 };
 
@@ -725,6 +726,7 @@ function navigate(page) {
   if (page === 'getting-started') refreshGettingStarted();
   if (page === 'career')          initCareerPath();
   if (page === 'account')         loadAccount();
+  if (page === 'feedback')        loadFeedbackAdmin();
   if (page === 'admin')           loadAdmin();
 
   // scroll main content to top on page change
@@ -4883,5 +4885,98 @@ async function cpBuildPlan(role) {
     box.innerHTML = `<h4>Learning plan</h4><div class="cp-panel-note">Could not build the plan: ${esc(err.message)}</div>`;
   } finally {
     btn.disabled = false;
+  }
+}
+
+// ── Feedback (anonymous) ───────────────────────────────────────────────────
+//
+// The submit path deliberately does NOT send authHeaders(). Not sending the token is
+// the guarantee: even a future change to the server could not start recording who
+// wrote what, because the identity never crosses the wire.
+let _fbRating = null;
+
+document.querySelectorAll('#fb-rating .fb-star').forEach(btn => {
+  btn.addEventListener('click', () => {
+    _fbRating = Number(btn.dataset.rating);
+    document.querySelectorAll('#fb-rating .fb-star').forEach(b => {
+      const on = Number(b.dataset.rating) <= _fbRating;
+      b.classList.toggle('is-on', on);
+      b.setAttribute('aria-checked', String(Number(b.dataset.rating) === _fbRating));
+    });
+  });
+});
+
+$('fb-submit')?.addEventListener('click', async () => {
+  const liked = $('fb-liked').value.trim();
+  const improve = $('fb-improve').value.trim();
+  const msg = $('fb-msg');
+  msg.className = 'form-msg';
+
+  if (!liked && !improve) {
+    msg.textContent = 'Write at least one line — a score on its own says little.';
+    return;
+  }
+
+  const btn = $('fb-submit');
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Sending…';
+  try {
+    // Plain fetch, no auth header: see above.
+    const r = await fetch(`${baseUrl}/api/feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rating: _fbRating, liked, improve, area: $('fb-area').value }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+
+    msg.className = 'form-msg ok';
+    msg.textContent = 'Sent. Thank you — it is read.';
+    $('fb-liked').value = '';
+    $('fb-improve').value = '';
+    $('fb-area').value = '';
+    _fbRating = null;
+    document.querySelectorAll('#fb-rating .fb-star').forEach(b => {
+      b.classList.remove('is-on');
+      b.setAttribute('aria-checked', 'false');
+    });
+  } catch (e) {
+    msg.textContent = e.message || 'Could not send.';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+});
+
+// Shown only to an admin. The server is the real gate — this just avoids rendering an
+// empty panel, and a 401/403 is the normal answer for everyone else.
+async function loadFeedbackAdmin() {
+  const box = $('fb-admin');
+  if (!box || !state.token) return;
+  try {
+    const d = await api.get('/api/admin/feedback');
+    const summary = $('fb-admin-summary');
+    if (summary) {
+      summary.textContent = d.total
+        ? `${d.total} response${d.total > 1 ? 's' : ''}${d.averageRating ? ` · average ${d.averageRating}/5` : ''}`
+        : 'nothing yet';
+    }
+    $('fb-admin-list').innerHTML = d.entries.length
+      ? d.entries.map(e => `
+        <div class="ac-row fb-entry">
+          <div>
+            ${e.rating ? `<span class="pill">${e.rating}/5</span> ` : ''}
+            ${e.area ? `<span class="hint">${esc(e.area)}</span>` : ''}
+            ${e.liked ? `<div class="fb-liked"><strong>Worked:</strong> ${esc(e.liked)}</div>` : ''}
+            ${e.improve ? `<div class="fb-improve"><strong>Change:</strong> ${esc(e.improve)}</div>` : ''}
+            <div class="hint">${new Date(e.at).toLocaleString('en-GB')}</div>
+          </div>
+        </div>`).join('')
+      : '<p class="hint">No feedback yet.</p>';
+    box.classList.remove('hidden');
+  } catch (_) {
+    // Not an admin, or signed out: leave the panel hidden.
+    box.classList.add('hidden');
   }
 }

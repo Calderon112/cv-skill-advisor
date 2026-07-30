@@ -57,6 +57,20 @@ CREATE TABLE IF NOT EXISTS email_tokens (
   data        JSONB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS email_tokens_username_idx ON email_tokens (username);
+
+-- Anonymous by construction. No username column, no foreign key to users, no IP:
+-- there is nothing to join against, so the anonymity cannot be quietly undone later
+-- by adding one. Deleting an account therefore does not delete their feedback,
+-- because nothing records that it was theirs.
+CREATE TABLE IF NOT EXISTS feedback (
+  id          BIGSERIAL PRIMARY KEY,
+  rating      SMALLINT,
+  liked       TEXT NOT NULL DEFAULT '',
+  improve     TEXT NOT NULL DEFAULT '',
+  area        TEXT NOT NULL DEFAULT '',
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS feedback_created_idx ON feedback (created_at DESC);
 `;
 
 /**
@@ -264,13 +278,38 @@ function createPostgresRepo({ connectionString, ssl = false }) {
     },
   };
 
+  // ── Feedback ──────────────────────────────────────────────────────────────
+  const feedback = {
+    async add(entry) {
+      const { rows } = await pool.query(
+        `INSERT INTO feedback (rating, liked, improve, area, created_at)
+         VALUES ($1,$2,$3,$4, to_timestamp($5/1000.0)) RETURNING id, created_at`,
+        [entry.rating ?? null, entry.liked || '', entry.improve || '', entry.area || '', entry.at || Date.now()],
+      );
+      return { ...entry, id: rows[0].id };
+    },
+    async list(limit = 200) {
+      const { rows } = await pool.query(
+        `SELECT id, rating, liked, improve, area,
+                (extract(epoch from created_at) * 1000)::bigint AS at
+         FROM feedback ORDER BY created_at DESC LIMIT $1`, [limit]);
+      return rows.map(r => ({ ...r, at: Number(r.at) }));
+    },
+    async count() {
+      const { rows } = await pool.query('SELECT count(*) AS n FROM feedback');
+      return Number(rows[0].n);
+    },
+  };
+
   async function deleteAccount(username) {
+    // Feedback is untouched on purpose: nothing records who wrote it, so there is
+    // nothing to delete. That is the cost of real anonymity, and it is the point.
     await users.delete(username);   // cascades to every child table
   }
 
   async function close() { await pool.end(); }
 
-  return { init, close, sessions, users, applications, profiles, emailTokens, deleteAccount, _pool: pool };
+  return { init, close, sessions, users, applications, profiles, emailTokens, feedback, deleteAccount, _pool: pool };
 }
 
 module.exports = { createPostgresRepo, SCHEMA };

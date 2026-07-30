@@ -33,6 +33,7 @@ function createRepo({ getStore, persist }) {
     s.applications ||= {};
     s.profiles ||= {};
     s.emailTokens ||= {};
+    s.feedback ||= [];
     return s;
   };
 
@@ -160,6 +161,26 @@ function createRepo({ getStore, persist }) {
     },
   };
 
+  // ── Feedback ──────────────────────────────────────────────────────────────
+  //
+  // Deliberately NOT keyed by user, and never written with one. There is no username
+  // column, no session token, no IP: the anonymity is a property of the shape, so it
+  // cannot be undone later by someone adding a join. The only fields are what was
+  // actually said and when.
+  const feedback = {
+    add(entry) {
+      const list = (store().feedback ||= []);
+      list.push(entry);
+      persist();
+      return entry;
+    },
+    /** Newest first — the last thing someone said matters most. */
+    list(limit = 200) {
+      return [...(store().feedback || [])].reverse().slice(0, limit);
+    },
+    count() { return (store().feedback || []).length; },
+  };
+
   /** Everything belonging to one account, for account deletion. */
   function deleteAccount(username) {
     users.delete(username);
@@ -170,7 +191,7 @@ function createRepo({ getStore, persist }) {
     persist();
   }
 
-  return { sessions, users, applications, profiles, emailTokens, deleteAccount };
+  return { sessions, users, applications, profiles, emailTokens, feedback, deleteAccount };
 }
 
 module.exports = { createRepo };

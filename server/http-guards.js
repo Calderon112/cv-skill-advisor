@@ -115,6 +115,10 @@ function createGuards({ authenticate, getToken, publicBaseUrl, publicDir }) {
     // A confirmation token is 32 random bytes, so guessing is hopeless — but an
     // unmetered endpoint is still free load, and the limit costs nothing.
     { path: '/api/auth/confirm',     bucket: 'confirm', max: 30, windowMs: HOUR, msg: 'Too many attempts.' },
+    // Public and unauthenticated by design, which also makes it the easiest thing on
+    // the app to flood. Ten an hour is far more than an honest person needs and far
+    // less than a script wants.
+    { path: '/api/feedback',         bucket: 'feedback', max: 10, windowMs: HOUR, msg: 'Thanks — you have sent several already. Try again later.' },
   ];
 
   // ── Which routes require a session, in one table ────────────────────────────
