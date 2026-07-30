@@ -71,6 +71,12 @@ CREATE TABLE IF NOT EXISTS feedback (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS feedback_created_idx ON feedback (created_at DESC);
+
+-- Server-level bookkeeping that belongs to no user.
+CREATE TABLE IF NOT EXISTS meta (
+  key   TEXT PRIMARY KEY,
+  value JSONB
+);
 `;
 
 /**
@@ -301,6 +307,18 @@ function createPostgresRepo({ connectionString, ssl = false }) {
     },
   };
 
+  const meta = {
+    async get(key) {
+      const { rows } = await pool.query('SELECT value FROM meta WHERE key = ', [key]);
+      return rows[0] ? rows[0].value : null;
+    },
+    async set(key, value) {
+      await pool.query(
+        'INSERT INTO meta (key, value) VALUES (,) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value',
+        [key, JSON.stringify(value)]);
+    },
+  };
+
   async function deleteAccount(username) {
     // Feedback is untouched on purpose: nothing records who wrote it, so there is
     // nothing to delete. That is the cost of real anonymity, and it is the point.
@@ -309,7 +327,7 @@ function createPostgresRepo({ connectionString, ssl = false }) {
 
   async function close() { await pool.end(); }
 
-  return { init, close, sessions, users, applications, profiles, emailTokens, feedback, deleteAccount, _pool: pool };
+  return { init, close, sessions, users, applications, profiles, emailTokens, feedback, meta, deleteAccount, _pool: pool };
 }
 
 module.exports = { createPostgresRepo, SCHEMA };

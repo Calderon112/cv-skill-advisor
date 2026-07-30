@@ -34,6 +34,7 @@ function createRepo({ getStore, persist }) {
     s.profiles ||= {};
     s.emailTokens ||= {};
     s.feedback ||= [];
+    s.meta ||= {};
     return s;
   };
 
@@ -181,6 +182,15 @@ function createRepo({ getStore, persist }) {
     count() { return (store().feedback || []).length; },
   };
 
+  // ── Small key/value store ─────────────────────────────────────────────────
+  // For the handful of things the server needs to remember between restarts that
+  // belong to no user — when the feedback digest last went out, for instance.
+  // Without it a restart would re-send every summary already sent.
+  const meta = {
+    get(key) { return (store().meta ||= {})[key] ?? null; },
+    set(key, value) { (store().meta ||= {})[key] = value; persist(); },
+  };
+
   /** Everything belonging to one account, for account deletion. */
   function deleteAccount(username) {
     users.delete(username);
@@ -191,7 +201,7 @@ function createRepo({ getStore, persist }) {
     persist();
   }
 
-  return { sessions, users, applications, profiles, emailTokens, feedback, deleteAccount };
+  return { sessions, users, applications, profiles, emailTokens, feedback, meta, deleteAccount };
 }
 
 module.exports = { createRepo };

@@ -3942,5 +3942,14 @@ function tryListen(port, attempt = 1) {
       process.exit(1);
     }
   }
+  // One summary mail per period instead of one per submission — see the reasoning in
+  // server/feedback-digest.js. Off unless FEEDBACK_DIGEST_TO names a recipient.
+  require('./server/feedback-digest').start({
+    repo,
+    email,
+    to: process.env.FEEDBACK_DIGEST_TO || '',
+    everyHours: process.env.FEEDBACK_DIGEST_HOURS || 24,
+  });
+
   tryListen(DEFAULT_PORT);
 })();
