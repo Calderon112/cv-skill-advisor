@@ -38,3 +38,7 @@ COMPARISON-*.md
 # broken half-submodule that nobody can clone.
 /agent-skills/
 /job-agent-whs-tmp/
+
+# Interception CA exported from this developer machine (Norton). Local only —
+# useless to anyone else, and it advertises the antivirus in use.
+certs/

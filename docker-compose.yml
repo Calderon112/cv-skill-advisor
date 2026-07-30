@@ -68,6 +68,18 @@ services:
     volumes:
       # Realm, clients and users survive a restart. Wipe with: docker compose down -v
       - keycloak-data:/opt/keycloak/data
+      # LOCAL DEVELOPMENT ONLY — deliberately absent from docker-compose.prod.yml.
+      #
+      # Norton Web/Mail Shield intercepts TLS on this developer machine: it presents
+      # its own certificate for smtp.resend.com, signed by a root only the Windows
+      # store knows about. Node accepts it (it reads that store); the JVM inside this
+      # container does not, and outbound mail fails with
+      #   PKIX path building failed: unable to find valid certification path
+      #
+      # Trusting that root here fixes local testing. It is an interception CA, so
+      # trusting it means accepting that Norton can read this container's TLS traffic
+      # — acceptable on a laptop that is already being intercepted, never on a server.
+      - ./certs:/opt/keycloak/conf/truststores:ro
     restart: unless-stopped
 
 volumes:
