@@ -23,6 +23,7 @@ const embeddings = require('./server/embeddings.js');
 const rag = require('./server/rag.js');
 const graph = require('./server/graph.js');
 const usage = require('./server/usage.js');
+const oidc = require('./server/oidc.js');
 
 
 // ── Password hashing (scrypt — Node.js built-in, no npm needed) ──────────
@@ -60,66 +61,335 @@ if (fs.existsSync(envPath)) {
 // SSL revocation checks cannot validate external certs. ONLY in that case, set
 // ALLOW_INSECURE_TLS=1 in your .env to disable verification. Never do this in
 // production: it exposes outbound API calls (incl. your API keys) to MITM.
+// A warning is not a control: this flag turns off certificate verification for the
+// whole process, so every outbound call — carrying the Gemini key, the Resend key, the
+// Keycloak client secret — becomes interceptable. Left in a .env that gets copied to a
+// server, it survives silently behind one line of startup text nobody reads.
+//
+// So in production it is refused outright rather than warned about. Failing to start is
+// recoverable in seconds; shipping with TLS verification off is not.
 if (process.env.ALLOW_INSECURE_TLS === '1') {
+  if (process.env.NODE_ENV === 'production') {
+    console.error('FATAL: ALLOW_INSECURE_TLS=1 with NODE_ENV=production.');
+    console.error('       This disables TLS certificate verification process-wide and would expose');
+    console.error('       every API key this server sends. Remove it from your .env, or fix the');
+    console.error('       certificate chain on the host. Refusing to start.');
+    process.exit(1);
+  }
   process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
   console.warn('⚠️  ALLOW_INSECURE_TLS=1 — TLS certificate verification is DISABLED. Local dev only, never production.');
 }
 
-const PORT = process.env.PORT || 3000;
+const DEFAULT_PORT = Number(process.env.PORT || 3000);
+const MAX_PORT_TRIES = 10;
 const publicDir = __dirname;
 // Overridable so a container can keep state on a mounted volume, like
 // EMBED_CACHE_FILE and USAGE_STATS_FILE already do.
 const STORAGE_FILE = process.env.STORAGE_FILE || path.join(__dirname, 'storage.json');
 const USERS = [{ username: 'student', password: 'security', name: 'Student' }];
 
-let storage = { profiles: {}, tokens: {}, users: {}, applications: {} };
+const storageService = require('./server/storage');
+let storage = { profiles: {}, tokens: {}, users: {}, applications: {}, emailTokens: {} };
+
+// ── One writer per storage file ─────────────────────────────────────────────
+//
+// Within a single process the store is safe: Node is single-threaded, saveStorage()
+// is synchronous, and lowdb's sync adapter writes to a temp file and renames it, so a
+// reader sees either the old file or the new one — never a half-written one.
+//
+// Two processes on the same file is the case that loses data. Each holds the whole
+// object in memory and writes all of it back, so the second to save silently erases
+// every account, session and application the first one created. That is easy to do by
+// accident: a stray `node server.js` left running, a container mounted on the same
+// volume as a host process. The port check does not catch it, because the second
+// instance simply moves to port 3001 and keeps writing to the same file.
+//
+// So the file gets an advisory lock. `wx` fails if the lock already exists, which is
+// atomic at the filesystem level.
+const LOCK_FILE = `${STORAGE_FILE}.lock`;
+function acquireStorageLock() {
+  try {
+    fs.writeFileSync(LOCK_FILE, JSON.stringify({ pid: process.pid, since: new Date().toISOString() }), { flag: 'wx' });
+  } catch (err) {
+    if (err.code !== 'EEXIST') throw err;
+
+    // A lock left behind by a crash must not block startup for ever, so the recorded
+    // pid decides: still alive means a real conflict, gone means a stale file.
+    let owner = null;
+    try { owner = JSON.parse(fs.readFileSync(LOCK_FILE, 'utf8')); } catch (_) { /* unreadable → treat as stale */ }
+    const alive = owner && owner.pid && (() => {
+      try { process.kill(owner.pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+    })();
+
+    if (alive) {
+      console.error(`FATAL: another instance (pid ${owner.pid}, since ${owner.since}) is already using`);
+      console.error(`       ${STORAGE_FILE}`);
+      console.error('       Two servers on one storage file overwrite each other\'s accounts and sessions.');
+      console.error('       Stop the other one, or point this instance at its own STORAGE_FILE.');
+      process.exit(1);
+    }
+    console.warn(`⚠️  Stale lock from pid ${owner && owner.pid} removed — that process is gone.`);
+    fs.writeFileSync(LOCK_FILE, JSON.stringify({ pid: process.pid, since: new Date().toISOString() }));
+  }
+
+  const release = () => { try { fs.unlinkSync(LOCK_FILE); } catch (_) {} };
+  process.on('exit', release);
+  // Ctrl+C and container stop: without these the lock survives and the next start
+  // has to reason about a stale file.
+  for (const sig of ['SIGINT', 'SIGTERM']) {
+    process.on(sig, () => { release(); process.exit(0); });
+  }
+}
 
 function loadStorage() {
   try {
-    if (fs.existsSync(STORAGE_FILE)) {
-      const content = fs.readFileSync(STORAGE_FILE, 'utf8');
-      storage = JSON.parse(content || '{}');
-      storage.profiles     = storage.profiles     || {};
-      storage.tokens       = storage.tokens       || {};
-      storage.users        = storage.users        || {};
-      storage.applications = storage.applications || {};
-    } else {
-      saveStorage();
-    }
+    storageService.migrateLegacy(STORAGE_FILE);
+    const db = storageService.load(STORAGE_FILE);
+    storage = db.data;
   } catch (error) {
     console.error('Failed to load storage:', error);
-    storage = { profiles: {}, tokens: {}, users: {} };
+    storage = { profiles: {}, tokens: {}, users: {}, applications: {}, emailTokens: {} };
   }
 }
 
 function saveStorage() {
   try {
-    fs.writeFileSync(STORAGE_FILE, JSON.stringify(storage, null, 2), 'utf8');
+    storageService.save(STORAGE_FILE, storage);
   } catch (error) {
     console.error('Failed to save storage:', error);
   }
 }
 
-function createToken(username) {
+// All state access goes through here. Row-oriented on purpose, so step 2 can swap the
+// internals for SQL without touching a single caller. `getStore` is a function rather
+// than the object itself because loadStorage() REPLACES `storage` — capturing it once
+// would leave the repo pointing at the pre-load object for ever.
+const { createRepo } = require('./server/repo');
+const repo = createRepo({ getStore: () => storage, persist: saveStorage });
+
+// Usernames listed here get the admin role, which is what gates /api/admin/db.
+// Env-driven so nobody can grant themselves admin by editing their own record.
+const adminUsernames = new Set(
+  String(process.env.ADMIN_USERS || '').split(',').map(s => s.trim()).filter(Boolean)
+);
+
+// `meta` records how and from where the session was opened, so the account page
+// can show "Windows · Chrome · signed in with Keycloak" and let the user revoke it.
+function createToken(username, meta) {
   const token = crypto.randomBytes(24).toString('hex');
   const expires = Date.now() + 24 * 60 * 60 * 1000;
-  storage.tokens[token] = { username, created: Date.now(), expires };
-  saveStorage();
+  repo.sessions.create(token, {
+    username,
+    created: Date.now(),
+    expires,
+    lastSeen: Date.now(),
+    via: (meta && meta.via) || 'password',
+    ua:  (meta && meta.ua)  || '',
+    ip:  (meta && meta.ip)  || '',
+    // Set only for sessions that began at an identity provider, and used for one
+    // thing: ending that provider's session when the user signs out here. Never
+    // leaves the server.
+    providerId: (meta && meta.providerId) || '',
+    idToken:    (meta && meta.idToken)    || '',
+  });
   return token;
 }
 
 function validateToken(token) {
   if (!token) return null;
-  const session = storage.tokens[token];
+  const session = repo.sessions.get(token);
   if (!session) return null;
   if (session.expires && Date.now() > session.expires) {
-    delete storage.tokens[token];
-    saveStorage();
+    repo.sessions.delete(token);
     return null;
+  }
+  // Throttled: without this every authenticated request would rewrite the store.
+  if (!session.lastSeen || Date.now() - session.lastSeen > 60000) {
+    repo.sessions.touch(token, { lastSeen: Date.now() });
+    saveStorage();
   }
   return session.username;
 }
 
+// ── Registration validation ─────────────────────────────────────────────────
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// Deliberately permissive: real phone numbers carry +, spaces, dots, dashes and
+// parentheses, and rejecting a valid foreign number is worse than accepting an
+// odd-looking one. We only insist on enough digits to be a number at all.
+function normalizePhone(raw) {
+  const s = String(raw || '').trim();
+  const digits = s.replace(/\D/g, '');
+  if (digits.length < 6 || digits.length > 15) return null;
+  if (!/^[+()\d\s.\-/]+$/.test(s)) return null;
+  return s.replace(/\s{2,}/g, ' ');
+}
+
+// Returns { date, error }. Rejects non-dates, the future, and ages outside a
+// plausible range — a birth year of 1830 or 2025 is a typo, not a user.
+function validateBirthDate(raw) {
+  const s = String(raw || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return { error: 'Date of birth must be a valid date (YYYY-MM-DD).' };
+  const d = new Date(s + 'T00:00:00Z');
+  if (Number.isNaN(d.getTime())) return { error: 'Date of birth is not a real date.' };
+  // Catches 2026-02-30, which Date would silently roll over to March.
+  if (d.toISOString().slice(0, 10) !== s) return { error: 'Date of birth is not a real date.' };
+  const now = new Date();
+  if (d > now) return { error: 'Date of birth cannot be in the future.' };
+  let age = now.getUTCFullYear() - d.getUTCFullYear();
+  const md = now.getUTCMonth() - d.getUTCMonth();
+  if (md < 0 || (md === 0 && now.getUTCDate() < d.getUTCDate())) age--;
+  if (age < 16)  return { error: 'You must be at least 16 to register.' };
+  if (age > 110) return { error: 'Please check your date of birth.' };
+  return { date: s, age };
+}
+
+// Turn an email into a free username. New accounts never type one — they sign in
+// with their email — but the rest of the app keys everything on username.
+function usernameFromEmail(mail) {
+  const base = String(mail || '').split('@')[0].toLowerCase().replace(/[^a-z0-9._-]/g, '') || 'user';
+  let username = base;
+  for (let i = 2; getUser(username); i++) username = `${base}${i}`;
+  return username;
+}
+
+// ── Email confirmation ──────────────────────────────────────────────────────
+function createEmailToken(username, address) {
+  if (!storage.emailTokens) storage.emailTokens = {};
+  // One pending confirmation per account: issuing a new link invalidates the old.
+  for (const [t, v] of Object.entries(storage.emailTokens)) {
+    if (v.username === username) delete storage.emailTokens[t];
+  }
+  const token = crypto.randomBytes(24).toString('hex');
+  storage.emailTokens[token] = {
+    username,
+    email: address,
+    expires: Date.now() + 24 * 60 * 60 * 1000,
+  };
+  saveStorage();
+  return token;
+}
+
+// Best-effort by design: the account is already created when this runs, so a mail
+// failure must never turn into a failed registration. The caller reports whether
+// it went out, and the account page offers a resend.
+async function sendConfirmationEmail(user, address) {
+  if (!email.isAvailable()) {
+    return { sent: false, reason: 'No email provider configured (RESEND_API_KEY is empty).' };
+  }
+  const token = createEmailToken(user.username, address);
+  const link = `${publicBaseUrl()}/api/auth/confirm?token=${token}`;
+  try {
+    await email.sendEmail({
+      to: address,
+      subject: 'Confirm your CareerAI account',
+      text: [
+        `Hello ${user.name || ''},`.trim(),
+        '',
+        'Welcome to CareerAI. Please confirm your email address by opening this link:',
+        '',
+        link,
+        '',
+        'The link is valid for 24 hours. If you did not create this account, ignore this email.',
+        '',
+        '— CareerAI',
+      ].join('\n'),
+    });
+    return { sent: true };
+  } catch (e) {
+    return { sent: false, reason: e.message };
+  }
+}
+
+// The HTTP mediation layer lives in server/http-guards.js: auth, rate limits, body
+// size, the static allow-list and the response headers. One named place, so a guard
+// cannot hide inside a route body.
+const { createGuards } = require('./server/http-guards');
+const guards = createGuards({
+  validateToken: (t) => validateToken(t),
+  getToken:      (r) => getToken(r),
+  publicBaseUrl: () => publicBaseUrl(),
+  publicDir,
+});
+const {
+  sendJson, serveStaticFile, bodyLimitFor, rateLimited,
+  enforceAuth, enforceRateLimit, enforceBodyLimit,
+} = guards;
+function readJsonBody(req, maxBytes) {
+  // bodyLimitFor('') returns the default ceiling. Asking the guards module rather
+  // than keeping a copy of the constant here is what stops the two from drifting —
+  // the previous version referenced BODY_LIMIT_DEFAULT after that constant had moved
+  // into http-guards.js, so every route that read a JSON body threw ReferenceError
+  // and killed the process.
+  const max = maxBytes || bodyLimitFor('');
+  return new Promise((resolve) => {
+    let body = '';
+    let aborted = false;
+    req.on('data', chunk => {
+      if (aborted) return;
+      body += chunk;
+      // Counts what really arrives, so a lying Content-Length gains nothing.
+      if (body.length > max) { aborted = true; req.destroy(); resolve(null); }
+    });
+    req.on('end', () => {
+      if (aborted) return;
+      try { resolve(JSON.parse(body || '{}')); } catch (_) { resolve(null); }
+    });
+    req.on('error', () => resolve(null));
+  });
+}
+
+// The base URL the browser reaches this app on. The OIDC redirect URI must match
+// what is registered at the provider exactly, so it is configuration, not a guess
+// from Host headers (which an attacker can set).
+function publicBaseUrl() {
+  return String(process.env.PUBLIC_BASE_URL || `http://localhost:${PORT}`).replace(/\/+$/, '');
+}
+function oidcRedirectUri() { return `${publicBaseUrl()}/api/auth/callback`; }
+
+// ── Who is allowed to hold a password here ──────────────────────────────────
+//
+// AUTH_MODE=oidc-only delegates identity entirely to the configured provider: this
+// app stops accepting username/password sign-in, stops creating accounts, and stops
+// storing passwords. Every account then exists in exactly one place, so suspending
+// or deleting a user in the provider's admin console actually locks them out —
+// which a parallel local password would quietly defeat.
+//
+// Default is 'both', so an existing install keeps working after an upgrade. The
+// switch is env-only: no request can flip it.
+//
+// Refuses to disable local auth when no provider is configured, because that would
+// leave no way in at all.
+function authMode() {
+  const mode = String(process.env.AUTH_MODE || 'both').trim().toLowerCase();
+  if (mode === 'oidc-only' && !oidc.isAvailable()) return 'both';
+  return mode === 'oidc-only' ? 'oidc-only' : 'both';
+}
+function localAuthEnabled() { return authMode() !== 'oidc-only'; }
+
+// One reply for every local-credential endpoint that oidc-only turns off, so the
+// front-end and any script get the same explanation instead of a bare 404.
+function rejectLocalAuth(res) {
+  sendJson(res, 403, {
+    error: 'This server delegates sign-in to its identity provider. Use the provider button to sign in or create an account.',
+    code: 'local_auth_disabled',
+  });
+}
+
+// Request metadata for the session list. Behind a reverse proxy the socket address
+// is the proxy's, so prefer the forwarded header when one is present.
+function requestMeta(req, via) {
+  const fwd = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return {
+    via,
+    ua: String(req.headers['user-agent'] || '').slice(0, 300),
+    ip: fwd || req.socket?.remoteAddress || '',
+  };
+}
+
+// Claim the store before reading it, so a second instance never even loads a copy it
+// would later write back over the first one's changes.
+acquireStorageLock();
 loadStorage();
 
 const BUNDES_API_KEY       = process.env.BUNDES_API_KEY  || 'jobboerse-jobsuche';
@@ -191,24 +461,7 @@ function pageList(depth) {
   return Array.from({ length: Math.max(1, depth) }, (_, i) => i + 1);
 }
 
-// ── Rate limiting (per IP + bucket, sliding window) ───────────────────────
-// Protects the LLM/embedding endpoints from abuse and runaway API cost. Purely
-// in-memory (fine for a single-process app); resets on restart.
-const _rlBuckets = new Map(); // "ip|bucket" → [timestamps]
-function clientIp(req) {
-  const fwd = (req.headers['x-forwarded-for'] || '').split(',')[0].trim();
-  return fwd || (req.socket && req.socket.remoteAddress) || 'unknown';
-}
-// Returns true when the caller has exceeded `max` requests in `windowMs`.
-function rateLimited(req, bucket, max, windowMs) {
-  const key = `${clientIp(req)}|${bucket}`;
-  const now = Date.now();
-  const hits = (_rlBuckets.get(key) || []).filter((t) => now - t < windowMs);
-  if (hits.length >= max) { _rlBuckets.set(key, hits); return true; }
-  hits.push(now);
-  _rlBuckets.set(key, hits);
-  return false;
-}
+
 const NOMINATIM_BASE_URL = 'https://nominatim.openstreetmap.org/search';
 const locationCoordinatesCache = {};
 const NEWPLAN_BASE_URL = 'https://rest.arbeitsagentur.de';
@@ -407,10 +660,38 @@ function kwTokens(keyword) {
   return (keyword || '').toLowerCase().split(/\s+/).filter(t => t.length > 2);
 }
 
+// Whole-word test for one token. A plain `includes` was matching inside longer
+// words, and for job titles that is not a near-miss, it is a different profession:
+// "siem" matched Siemens, "soc" matched Associate and Social, "cert" matched
+// certificate. Those were the bulk of what one feed returned for a security search.
+//
+// The boundary is required only at the END of the term, deliberately.
+//
+// Requiring one at the start as well looked more correct and was wrong here: this
+// vocabulary appears constantly as the tail of a compound. "Cybersecurity Analyst"
+// would stop matching 'security analyst' because the character before "security" is
+// the "r" of "cyber", and German compounds make it worse — Informationssicherheit,
+// IT-Sicherheit, Datenanalyst. A trailing-only boundary keeps those and still rejects
+// every case that caused the noise, because those all fail on the right-hand side:
+// Siemens ('siem' + "e"), Associate and Social ('soc' + "i"), certificate ('cert' + "i").
+//
+// \b is not usable directly: tokens can carry punctuation (ci/cd, .net, c#) where \b
+// sits in surprising places. An explicit non-alphanumeric class behaves predictably.
+const wordReCache = new Map();
+function wordRe(token) {
+  let re = wordReCache.get(token);
+  if (!re) {
+    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    re = new RegExp(`${escaped}([^a-z0-9]|$)`, 'i');
+    wordReCache.set(token, re);
+  }
+  return re;
+}
+
 function matchesKeyword(tokens, ...fields) {
   if (!tokens.length) return true;
   const hay = fields.map(f => (f || '').toLowerCase()).join(' ');
-  return tokens.some(t => hay.includes(t));
+  return tokens.some(t => wordRe(t).test(hay));
 }
 
 // ── Arbeitnow — free public API (no key, Germany-focused jobs) ───────────
@@ -846,6 +1127,31 @@ async function reverseGeocode(lat, lon) {
   }
 }
 
+// Approximate city from the network, for when the browser has no usable position
+// source at all. That is the normal case on a desktop PC: Chrome's geolocation asks
+// Google's service to place the machine from nearby Wi-Fi, and with no Wi-Fi radio, no
+// Windows location service, or an intercepting proxy in the way, it answers
+// POSITION_UNAVAILABLE rather than guessing.
+//
+// Deliberately coarse and clearly labelled to the user: this resolves the *network's*
+// exit point, so on a VPN it returns the VPN's city, and it is only ever offered as a
+// suggestion the user can overwrite. No API key, no request body — the service reads
+// the source address of this call, which is why the lookup has to happen server-side.
+async function geolocateByNetwork() {
+  try {
+    const r = await fetch('https://ipapi.co/json/', {
+      headers: { 'User-Agent': 'cv-skill-advisor-demo/1.0', Accept: 'application/json' },
+    });
+    if (!r.ok) return null;
+    const d = await r.json();
+    if (d.error) return null;
+    const city = d.city || d.region || null;
+    return city ? { city, country: d.country_name || '', approximate: true } : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 // Robustly pull the first JSON object out of an LLM reply (tolerates ```json
 // fences and surrounding prose).
 function parseJsonObject(raw) {
@@ -942,17 +1248,80 @@ function getUser(username) {
   return { username, ...data }; // always include the username field
 }
 
-function saveUser(username, password, name) {
-  storage.users[username] = { password: hashPassword(password), name };
+// Records written before the identity manager only had { password, name }. Read
+// through this so the rest of the code can rely on the fields existing without a
+// migration pass over storage.json.
+function normalizeUser(user) {
+  if (!user) return null;
+  return {
+    username:  user.username,
+    name:      user.name || user.username,
+    firstName: user.firstName || '',
+    lastName:  user.lastName || '',
+    email:     user.email || '',
+    phone:     user.phone || '',
+    birthDate: user.birthDate || '',
+    // Accounts that predate email confirmation have no flag; treat them as
+    // unconfirmed rather than inventing a verification that never happened.
+    emailVerified: user.emailVerified === true,
+    password:  user.password || '',
+    providers: user.providers || {},
+    createdAt: user.createdAt || null,
+    role:      adminUsernames.has(user.username) ? 'admin' : (user.role || 'user'),
+  };
+}
+
+// Merge-write: a full overwrite here would drop `providers` when someone changes
+// their password, and drop `password` when they link an identity provider.
+function patchUser(username, patch) {
+  const current = storage.users[username] || {};
+  storage.users[username] = { ...current, ...patch };
+  saveStorage();
+  return getUser(username);
+}
+
+function saveUser(username, password, name, extra) {
+  storage.users[username] = {
+    ...(extra || {}),
+    password: password ? hashPassword(password) : '',
+    name,
+    createdAt: new Date().toISOString(),
+  };
   saveStorage();
 }
 
-function getProfileText(token) {
-  return storage.profiles[token] || '';
+function findUserByEmail(email) {
+  const needle = String(email || '').trim().toLowerCase();
+  if (!needle) return null;
+  for (const [username, data] of Object.entries(storage.users || {})) {
+    if (String(data.email || '').trim().toLowerCase() === needle) return normalizeUser({ username, ...data });
+  }
+  return null;
 }
 
-function saveProfileText(token, profile) {
-  storage.profiles[token] = profile;
+// Find the account already linked to this IdP subject. `sub` is the only stable
+// identifier — emails and usernames change at the provider, `sub` does not.
+function findUserByProviderSub(providerId, sub) {
+  if (!sub) return null;
+  for (const [username, data] of Object.entries(storage.users || {})) {
+    if (data.providers && data.providers[providerId] && data.providers[providerId].sub === sub) {
+      return normalizeUser({ username, ...data });
+    }
+  }
+  return null;
+}
+
+// Keyed by username, not by session token. Keying it by token meant the CV text a
+// user saved was reachable only from the exact session that saved it: sign out, sign
+// back in, and it was gone — while the old entry stayed in storage.json forever,
+// since nothing removes a profile when its token expires.
+function getProfileText(username) {
+  return (username && storage.profiles[username]) || '';
+}
+
+function saveProfileText(username, profile) {
+  if (!username) return;
+  storage.profiles[username] = profile;
   saveStorage();
 }
 
@@ -1097,10 +1466,10 @@ function buildSearchKeyword(searchParams) {
 // job title + description (not just the title), which makes it far stricter
 // than the keyword-token pre-filter the scrapers apply.
 const DOMAIN_MATCH_TERMS = {
-  cybersecurity: ['security','cyber','soc ','siem','pentest','penetration','infosec','ciso','iso 27001','iso27001','threat','incident','vulnerab','firewall','malware','forensic','sicherheit','informationssicherheit','it-security','blue team','red team','grc','nist','mitre','ethical hack'],
+  cybersecurity: ['security','cyber','soc ','siem','pentest','penetration','infosec','ciso','iso 27001','iso27001','threat','incident','vulnerab','firewall','malware','forensic','sicherheit','informationssicherheit','it-security','blue team','red team','grc','nist','mitre att','ethical hack'],
 
   // ── Security specialisations ──
-  soc:           ['soc ','security operations','siem','splunk','qradar','sentinel','blue team','threat hunting','detection engineer','security analyst','security monitoring','log analysis','mitre','sicherheitsanalyst','alert triage','edr','xdr','soar'],
+  soc:           ['soc ','security operations','siem','splunk','qradar','sentinel','blue team','threat hunting','detection engineer','security analyst','security monitoring','log analysis','mitre att','sicherheitsanalyst','alert triage','edr','xdr','soar'],
   pentest:       ['penetration test','pentest','ethical hack','red team','offensive security','oscp','burp','metasploit','exploit','vulnerability assessment','bug bounty','penetrationstest','sicherheitsanalyse','purple team'],
   dfir:          ['incident response','digital forensic','dfir','forensic','incident handler','csirt','cert ','threat intelligence','memory forensic','malware triage','forensik','incident responder'],
   malware:       ['malware analy','reverse engineer','reverse-engineer','ghidra','ida pro','x64dbg','sandboxing','shellcode','ransomware analy','static analysis','dynamic analysis','threat research'],
@@ -1130,12 +1499,21 @@ const DOMAIN_MATCH_TERMS = {
 // must stay out of it: Bundesagentur echoes the requested sector back onto every
 // result, and other normalizers default it to 'security', so reading that field
 // made every job from those sources match its own query.
+// Matched on whole words, for the same reason as the source pre-filter: a substring
+// test let "siem" through on Siemens Mobility and "cert" on certificate, which is how
+// a railway signalling fitter ended up in a SOC search.
+//
+// Whole-word matching also fixes the opposite error. Some terms carried a trailing
+// space ('soc ', 'cert ', 'iam ', 'pam ') as a hand-rolled word boundary, which only
+// worked mid-sentence: a title ending in "… Analyst SOC" had no trailing space and was
+// dropped. Those are trimmed here and the boundary is enforced properly.
 function jobMatchesSector(job, sector) {
   if (!sector || sector === 'all') return true;
-  const terms = DOMAIN_MATCH_TERMS[sector] || kwTokens(DOMAIN_KEYWORDS[sector] || '');
+  const terms = (DOMAIN_MATCH_TERMS[sector] || kwTokens(DOMAIN_KEYWORDS[sector] || ''))
+    .map(t => t.trim()).filter(Boolean);
   if (!terms.length) return true;
   const hay = `${job.title || ''} ${job.description || ''}`.toLowerCase();
-  return terms.some(t => hay.includes(t));
+  return terms.some(t => wordRe(t).test(hay));
 }
 
 function buildSearchCountry(region) {
@@ -1877,43 +2255,6 @@ function filterJobs(region, sector, profileText = '') {
   });
 }
 
-function sendJson(res, status, data) {
-  res.writeHead(status, {
-    'Content-Type': 'application/json',
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization'
-  });
-  res.end(JSON.stringify(data));
-}
-
-function serveStaticFile(req, res) {
-  const filePath = req.url === '/' ? '/index.html' : req.url;
-  const resolvedPath = path.join(publicDir, filePath);
-  fs.readFile(resolvedPath, (err, data) => {
-    if (err) {
-      res.writeHead(404, { 'Content-Type': 'text/plain' });
-      res.end('Not found');
-      return;
-    }
-
-    const ext = path.extname(resolvedPath).toLowerCase();
-    const map = {
-      '.html': 'text/html',
-      '.css': 'text/css',
-      '.js': 'application/javascript',
-      '.json': 'application/json'
-    };
-
-    // No caching for the frontend so users always run the latest code (avoids
-    // "fixed but still broken" reports caused by a stale cached app.js).
-    res.writeHead(200, {
-      'Content-Type': map[ext] || 'application/octet-stream',
-      'Cache-Control': 'no-store, max-age=0'
-    });
-    res.end(data);
-  });
-}
 
 const server = http.createServer(async (req, res) => {
   const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
@@ -1921,6 +2262,13 @@ const server = http.createServer(async (req, res) => {
     sendJson(res, 204, {});
     return;
   }
+
+  // Before dispatch, so no route can be added without passing through them.
+  // Order matters: refuse anonymous callers before spending anything on them, and
+  // count the rate limit against an identified session rather than a shared IP.
+  if (enforceAuth(req, res, parsedUrl.pathname)) return;
+  if (enforceRateLimit(req, res, parsedUrl.pathname)) return;
+  if (enforceBodyLimit(req, res, parsedUrl.pathname)) return;
 
   if (parsedUrl.pathname === '/api/status' && req.method === 'GET') {
     sendJson(res, 200, { status: 'ok', backend: 'local', auth: 'optional' });
@@ -1937,25 +2285,127 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // Fallback for browsers that cannot produce a position at all. Public like the
+  // rest of job search — it reveals nothing about any account.
+  if (parsedUrl.pathname === '/api/geolocate-by-ip' && req.method === 'GET') {
+    (async () => {
+      const hit = await geolocateByNetwork();
+      if (!hit) { sendJson(res, 200, { city: '', approximate: true }); return; }
+      sendJson(res, 200, hit);
+    })();
+    return;
+  }
+
   if (parsedUrl.pathname === '/api/register' && req.method === 'POST') {
+    // In oidc-only mode the provider owns the sign-up form. Accepting a local
+    // registration here would create an account the provider's admin console
+    // cannot see, let alone suspend.
+    if (!localAuthEnabled()) { rejectLocalAuth(res); return; }
+    (async () => {
+      const body = await readJsonBody(req);
+      if (!body) { sendJson(res, 400, { error: 'Invalid request payload' }); return; }
+
+      const firstName = String(body.firstName || '').trim();
+      const lastName  = String(body.lastName  || '').trim();
+      const address   = String(body.email     || '').trim().toLowerCase();
+      const password  = String(body.password  || '');
+
+      if (!firstName || !lastName) { sendJson(res, 400, { error: 'First name and last name are required.' }); return; }
+      if (!EMAIL_RE.test(address)) { sendJson(res, 400, { error: 'Please enter a valid email address.' }); return; }
+      if (password.length < 6)     { sendJson(res, 400, { error: 'Password must be at least 6 characters.' }); return; }
+
+      const birth = validateBirthDate(body.birthDate);
+      if (birth.error) { sendJson(res, 400, { error: birth.error }); return; }
+
+      const phone = normalizePhone(body.phone);
+      if (!phone) { sendJson(res, 400, { error: 'Please enter a valid phone number.' }); return; }
+
+      // The email is the login identifier now, so a duplicate would make one of
+      // the two accounts unreachable.
+      if (findUserByEmail(address)) {
+        sendJson(res, 409, { error: 'An account with that email already exists.' });
+        return;
+      }
+
+      const name = `${firstName} ${lastName}`;
+      const username = usernameFromEmail(address);
+      saveUser(username, password, name, {
+        firstName, lastName,
+        email: address,
+        phone,
+        birthDate: birth.date,
+        emailVerified: false,
+      });
+
+      const token = createToken(username, requestMeta(req, 'password'));
+      const mail = await sendConfirmationEmail({ username, name }, address);
+      sendJson(res, 200, {
+        token,
+        user: { name, username, email: address },
+        confirmationSent: mail.sent,
+        confirmationError: mail.sent ? undefined : mail.reason,
+      });
+    })();
+    return;
+  }
+
+  // Clicked from the confirmation email. A GET from a mail client, so it answers
+  // with a redirect into the app rather than JSON.
+  if (parsedUrl.pathname === '/api/auth/confirm' && req.method === 'GET') {
+    const token = parsedUrl.searchParams.get('token') || '';
+    const back = (frag) => { res.writeHead(302, { Location: `/#${frag}` }); res.end(); };
+    const entry = storage.emailTokens && storage.emailTokens[token];
+    if (!entry) { back('confirm_error=' + encodeURIComponent('This confirmation link is invalid or has already been used.')); return; }
+    // Single-use, whatever happens next.
+    delete storage.emailTokens[token];
+    if (entry.expires < Date.now()) {
+      saveStorage();
+      back('confirm_error=' + encodeURIComponent('This confirmation link has expired. Request a new one from My Account.'));
+      return;
+    }
+    if (!getUser(entry.username)) {
+      saveStorage();
+      back('confirm_error=' + encodeURIComponent('That account no longer exists.'));
+      return;
+    }
+    patchUser(entry.username, { emailVerified: true, email: entry.email });
+    back('confirmed=' + encodeURIComponent(entry.email));
+    return;
+  }
+
+  if (parsedUrl.pathname === '/api/account/resend-confirmation' && req.method === 'POST') {
+    (async () => {
+      const username = validateToken(getToken(req));
+      if (!username) { sendJson(res, 401, { error: 'Login required' }); return; }
+      const user = normalizeUser(getUser(username));
+      if (!user.email) { sendJson(res, 400, { error: 'Add an email address first.' }); return; }
+      if (user.emailVerified) { sendJson(res, 400, { error: 'Your email is already confirmed.' }); return; }
+      const mail = await sendConfirmationEmail(user, user.email);
+      if (!mail.sent) { sendJson(res, 502, { error: `Could not send the email. ${mail.reason || ''}`.trim() }); return; }
+      sendJson(res, 200, { ok: true, email: user.email });
+    })();
+    return;
+  }
+
+  if (parsedUrl.pathname === '/api/login' && req.method === 'POST') {
+    if (!localAuthEnabled()) { rejectLocalAuth(res); return; }
     let body = '';
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
       try {
-        const { name, username, password } = JSON.parse(body || '{}');
-        if (!name || !username || !password) {
-          sendJson(res, 400, { error: 'Name, username, and password are required' });
+        const { username, password } = JSON.parse(body || '{}');
+        // New accounts never chose a username — it is derived from their email —
+        // so the identifier field accepts either. Username first, so a legacy
+        // account is never shadowed by someone else's email.
+        const identifier = String(username || '').trim();
+        const user = getUser(identifier)
+          || (identifier.includes('@') ? findUserByEmail(identifier) : null);
+        if (!user || !user.password || !verifyPassword(password, user.password)) {
+          sendJson(res, 401, { error: 'Invalid credentials' });
           return;
         }
-
-        if (getUser(username)) {
-          sendJson(res, 409, { error: 'Username already exists' });
-          return;
-        }
-
-        saveUser(username, password, name);
-        const token = createToken(username);
-        sendJson(res, 200, { token, user: { name, username } });
+        const token = createToken(user.username, requestMeta(req, 'password'));
+        sendJson(res, 200, { token, user: { name: user.name, username: user.username } });
       } catch (error) {
         sendJson(res, 400, { error: 'Invalid request payload' });
       }
@@ -1963,23 +2413,386 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (parsedUrl.pathname === '/api/login' && req.method === 'POST') {
-    let body = '';
-    req.on('data', chunk => { body += chunk; });
-    req.on('end', () => {
+  // ── Identity providers (OIDC) ────────────────────────────────────────────
+  // Which login buttons the front-end should render, and whether the local
+  // email/password panels should exist at all. Never exposes secrets.
+  if (parsedUrl.pathname === '/api/auth/providers' && req.method === 'GET') {
+    (async () => {
+      const list = oidc.publicProviders();
+      // Only advertise "create account" for a provider that can actually host a
+      // sign-up form, so the button never leads to a dead end.
+      const providers = await Promise.all(list.map(async (p) => ({
+        ...p,
+        canRegister: await oidc.supportsRegistration(p.id),
+      })));
+      sendJson(res, 200, {
+        available: oidc.isAvailable(),
+        providers,
+        localAuth: localAuthEnabled(),
+      });
+    })();
+    return;
+  }
+
+  // Start a sign-up: send the browser to the provider's own registration form.
+  // Same callback, same account provisioning as a sign-in — the only difference is
+  // which page the provider shows first.
+  const registerMatch = parsedUrl.pathname.match(/^\/api\/auth\/([a-z0-9_-]+)\/register$/i);
+  if (registerMatch && req.method === 'GET') {
+    (async () => {
       try {
-        const { username, password } = JSON.parse(body || '{}');
-        const user = getUser(username);
-        if (!user || !verifyPassword(password, user.password)) {
-          sendJson(res, 401, { error: 'Invalid username or password' });
+        const url = await oidc.buildAuthUrl(registerMatch[1], oidcRedirectUri(), { register: true });
+        res.writeHead(302, { Location: url });
+        res.end();
+      } catch (e) {
+        res.writeHead(302, { Location: `/#auth_error=${encodeURIComponent(e.message)}` });
+        res.end();
+      }
+    })();
+    return;
+  }
+
+  // Start a sign-in: send the browser to the provider's own login form.
+  const startMatch = parsedUrl.pathname.match(/^\/api\/auth\/([a-z0-9_-]+)\/start$/i);
+  if (startMatch && req.method === 'GET') {
+    (async () => {
+      try {
+        const url = await oidc.buildAuthUrl(startMatch[1], oidcRedirectUri(), {});
+        res.writeHead(302, { Location: url });
+        res.end();
+      } catch (e) {
+        // A failure here is almost always misconfiguration, and the user is mid-
+        // navigation, so hand them back to the app with a readable reason.
+        res.writeHead(302, { Location: `/#auth_error=${encodeURIComponent(e.message)}` });
+        res.end();
+      }
+    })();
+    return;
+  }
+
+  // Link an extra provider to the account that is already signed in. This is a
+  // fetch (not a navigation) so the bearer token stays in a header, never a URL.
+  const linkMatch = parsedUrl.pathname.match(/^\/api\/auth\/([a-z0-9_-]+)\/link-start$/i);
+  if (linkMatch && req.method === 'POST') {
+    (async () => {
+      const username = validateToken(getToken(req));
+      if (!username) { sendJson(res, 401, { error: 'Login required' }); return; }
+      try {
+        const url = await oidc.buildAuthUrl(linkMatch[1], oidcRedirectUri(), { linkTo: username });
+        sendJson(res, 200, { url });
+      } catch (e) {
+        sendJson(res, 400, { error: e.message });
+      }
+    })();
+    return;
+  }
+
+  // The provider redirects here. Tokens are handed to the SPA in the URL *fragment*
+  // — fragments are never sent to servers, so the session token stays out of access
+  // logs, proxy logs and Referer headers.
+  if (parsedUrl.pathname === '/api/auth/callback' && req.method === 'GET') {
+    (async () => {
+      const back = (frag) => { res.writeHead(302, { Location: `/#${frag}` }); res.end(); };
+      try {
+        const identity = await oidc.handleCallback(Object.fromEntries(parsedUrl.searchParams));
+
+        // ── Linking an identity to the signed-in account ──
+        if (identity.linkTo) {
+          const owner = getUser(identity.linkTo);
+          if (!owner) { back(`auth_error=${encodeURIComponent('The account to link to no longer exists')}`); return; }
+          const clash = findUserByProviderSub(identity.providerId, identity.sub);
+          if (clash && clash.username !== identity.linkTo) {
+            back(`auth_error=${encodeURIComponent(`That ${identity.providerLabel} identity is already linked to another account`)}`);
+            return;
+          }
+          const providers = { ...(owner.providers || {}) };
+          providers[identity.providerId] = {
+            sub: identity.sub, email: identity.email, linkedAt: new Date().toISOString(),
+          };
+          patchUser(identity.linkTo, { providers });
+          back(`linked=${encodeURIComponent(identity.providerId)}`);
           return;
         }
-        const token = createToken(user.username);
-        sendJson(res, 200, { token, user: { name: user.name, username: user.username } });
-      } catch (error) {
-        sendJson(res, 400, { error: 'Invalid request payload' });
+
+        // ── Signing in ──
+        // 1. Known subject → that account. `sub` is the stable identifier.
+        let user = findUserByProviderSub(identity.providerId, identity.sub);
+
+        // The provider owns the verification of the addresses it asserts, so refresh
+        // our copy on every sign-in. Without this, someone who confirms their email
+        // in Keycloak *after* their first sign-in would stay "not confirmed" here for
+        // good — and under AUTH_MODE=oidc-only there is no local confirmation flow
+        // left to fix it with.
+        if (user && identity.email) {
+          const holder = findUserByEmail(identity.email);
+          const freeToTake = !holder || holder.username === user.username;
+          if (freeToTake && (user.email !== identity.email || user.emailVerified !== identity.emailVerified)) {
+            patchUser(user.username, { email: identity.email, emailVerified: identity.emailVerified });
+            user = normalizeUser(getUser(user.username));
+          }
+        }
+
+        // 2. Otherwise a verified email matching a local account links them, so
+        //    signing in with Google after registering with a password lands on the
+        //    same account instead of silently creating a second one.
+        //
+        //    BOTH sides must have proven the address. The provider's claim alone is
+        //    not enough: anyone could register here with victim@gmail.com, and the
+        //    real owner signing in with Google would then land in the impostor's
+        //    account. Requiring our own confirmation closes that.
+        if (!user && identity.email && identity.emailVerified) {
+          const byEmail = findUserByEmail(identity.email);
+          if (byEmail && byEmail.emailVerified) {
+            const providers = { ...(byEmail.providers || {}) };
+            providers[identity.providerId] = {
+              sub: identity.sub, email: identity.email, linkedAt: new Date().toISOString(),
+            };
+            patchUser(byEmail.username, { providers });
+            user = normalizeUser({ ...getUser(byEmail.username) });
+          }
+        }
+
+        // 3. Still nothing → provision a new account. No password: this account can
+        //    only be reached through the provider until the user sets one.
+        if (!user) {
+          const base = (identity.preferredUsername || identity.email.split('@')[0] || 'user')
+            .toLowerCase().replace(/[^a-z0-9._-]/g, '') || 'user';
+          let username = base;
+          for (let i = 2; getUser(username); i++) username = `${base}${i}`;
+          saveUser(username, '', identity.name || username, {
+            email: identity.email,
+            // Carry the provider's verdict across. Defaulting to false would mark
+            // every provider-created account unconfirmed even when the provider had
+            // just verified the address itself.
+            emailVerified: identity.emailVerified,
+            providers: {
+              [identity.providerId]: {
+                sub: identity.sub, email: identity.email, linkedAt: new Date().toISOString(),
+              },
+            },
+          });
+          user = normalizeUser(getUser(username));
+        }
+
+        const token = createToken(user.username, {
+          ...requestMeta(req, identity.providerId),
+          providerId: identity.providerId,
+          idToken: identity.idToken,
+        });
+        // auth_user is the account identifier, sent so the browser can tell whether
+        // the profile and application list cached on this device belong to the person
+        // who just signed in. The display name cannot do that job — two accounts can
+        // share one. Fragment, not query string: it never reaches a server log.
+        back(`auth_token=${encodeURIComponent(token)}`
+          + `&auth_name=${encodeURIComponent(user.name)}`
+          + `&auth_user=${encodeURIComponent(user.username)}`);
+      } catch (e) {
+        back(`auth_error=${encodeURIComponent(e.message)}`);
       }
+    })();
+    return;
+  }
+
+  // Sign out. Drops this session here, then hands back the provider's logout URL so
+  // the browser can end the session there too.
+  //
+  // Local-only sign-out is a trap when identity is delegated: the IdP cookie would
+  // survive, and the next click on "Sign in" would come straight back authenticated
+  // without ever showing a form. On a shared machine that is the next person's
+  // problem. `url` is null for a password session or a provider with no
+  // end_session_endpoint — the caller just stays put.
+  if (parsedUrl.pathname === '/api/auth/logout' && req.method === 'POST') {
+    (async () => {
+      const token = getToken(req);
+      const username = validateToken(token);
+      if (!username) { sendJson(res, 401, { error: 'Login required' }); return; }
+
+      const session = repo.sessions.get(token) || {};
+      const providerId = session.providerId || '';
+      const idToken = session.idToken || '';
+
+      // Local session dies first and unconditionally: if building the provider URL
+      // fails, the user must still end up signed out here.
+      repo.sessions.delete(token);
+
+      let url = null;
+      if (providerId) {
+        try {
+          url = await oidc.buildLogoutUrl(providerId, {
+            idToken,
+            postLogoutRedirectUri: `${publicBaseUrl()}/`,
+          });
+        } catch (_) { /* provider unreachable — local sign-out already happened */ }
+      }
+      sendJson(res, 200, { ok: true, url });
+    })();
+    return;
+  }
+
+  // ── Account / identity manager ───────────────────────────────────────────
+  if (parsedUrl.pathname === '/api/account' && req.method === 'GET') {
+    const username = validateToken(getToken(req));
+    if (!username) { sendJson(res, 401, { error: 'Login required' }); return; }
+    const user = normalizeUser(getUser(username));
+    if (!user) { sendJson(res, 404, { error: 'Account not found' }); return; }
+    const current = getToken(req);
+    const now = Date.now();
+    sendJson(res, 200, {
+      username: user.username,
+      name: user.name,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email,
+      emailVerified: user.emailVerified,
+      phone: user.phone,
+      birthDate: user.birthDate,
+      role: user.role,
+      createdAt: user.createdAt,
+      hasPassword: !!user.password,
+      // False in oidc-only mode: the account page then hides the password panel
+      // instead of offering a form the server will refuse.
+      localAuth: localAuthEnabled(),
+      canResendConfirmation: !!user.email && !user.emailVerified && email.isAvailable(),
+      providers: Object.entries(user.providers).map(([id, p]) => ({
+        id,
+        label: (oidc.getProvider(id) || {}).label || id,
+        email: p.email || '',
+        linkedAt: p.linkedAt || null,
+      })),
+      // Offer only providers that are configured and not already linked.
+      linkable: oidc.publicProviders().filter(p => !user.providers[p.id]),
+      sessions: repo.sessions.listForUser(username, now)
+        .map(({ token: tok, ...s }) => ({
+          id: tok.slice(0, 12),          // enough to revoke, never the whole token
+          current: tok === current,
+          via: s.via || 'password',
+          // `via` is a provider *id* ("keycloak"), which is plumbing. Resolve it to
+          // the configured display label so the UI never shows an internal name.
+          viaLabel: s.via && s.via !== 'password'
+            ? ((oidc.getProvider(s.via) || {}).label || s.via)
+            : 'password',
+          ua: s.ua || '',
+          ip: s.ip || '',
+          created: s.created,
+          lastSeen: s.lastSeen || s.created,
+        }))
+        .sort((a, b) => b.lastSeen - a.lastSeen),
     });
+    return;
+  }
+
+  if (parsedUrl.pathname === '/api/account' && req.method === 'PATCH') {
+    (async () => {
+      const username = validateToken(getToken(req));
+      if (!username) { sendJson(res, 401, { error: 'Login required' }); return; }
+      const body = await readJsonBody(req);
+      if (!body) { sendJson(res, 400, { error: 'Invalid request payload' }); return; }
+
+      const patch = {};
+      if (typeof body.name === 'string') {
+        const name = body.name.trim();
+        if (!name) { sendJson(res, 400, { error: 'Name cannot be empty' }); return; }
+        patch.name = name.slice(0, 120);
+      }
+      if (typeof body.email === 'string') {
+        const email = body.email.trim().toLowerCase();
+        if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+          sendJson(res, 400, { error: 'That does not look like an email address' }); return;
+        }
+        // Emails identify accounts for provider auto-linking, so they must be unique.
+        const holder = findUserByEmail(email);
+        if (email && holder && holder.username !== username) {
+          sendJson(res, 409, { error: 'Another account already uses that email' }); return;
+        }
+        patch.email = email;
+        // A new address is unproven. Keeping the old verified flag would let anyone
+        // claim a confirmed status for an address they do not control.
+        const before = normalizeUser(getUser(username));
+        if (email !== before.email) patch.emailVerified = false;
+      }
+      if (!Object.keys(patch).length) { sendJson(res, 400, { error: 'Nothing to update' }); return; }
+
+      patchUser(username, patch);
+      const user = normalizeUser(getUser(username));
+      sendJson(res, 200, { ok: true, name: user.name, email: user.email });
+    })();
+    return;
+  }
+
+  if (parsedUrl.pathname === '/api/account/password' && req.method === 'POST') {
+    // Setting a password in oidc-only mode would re-open the very door the mode
+    // closes: a credential that works even after the provider disables the account.
+    if (!localAuthEnabled()) { rejectLocalAuth(res); return; }
+    (async () => {
+      const username = validateToken(getToken(req));
+      if (!username) { sendJson(res, 401, { error: 'Login required' }); return; }
+      const body = await readJsonBody(req);
+      if (!body) { sendJson(res, 400, { error: 'Invalid request payload' }); return; }
+      const user = normalizeUser(getUser(username));
+      const next = String(body.newPassword || '');
+      if (next.length < 6) { sendJson(res, 400, { error: 'New password must be at least 6 characters' }); return; }
+      // An account created through a provider has no password yet, so there is
+      // nothing to confirm — it is setting one, not changing one.
+      if (user.password && !verifyPassword(String(body.currentPassword || ''), user.password)) {
+        sendJson(res, 403, { error: 'Current password is incorrect' }); return;
+      }
+      patchUser(username, { password: hashPassword(next) });
+
+      // Changing a password invalidates every other session — that is the whole
+      // point of changing it after a suspected compromise.
+      const current = getToken(req);
+      const revoked = repo.sessions.revokeForUser(username, { except: current });
+      sendJson(res, 200, { ok: true, revoked });
+    })();
+    return;
+  }
+
+  // Revoke one session by its short id, or every session except this one.
+  const sessionMatch = parsedUrl.pathname.match(/^\/api\/account\/sessions(?:\/([a-f0-9]{6,64}))?$/i);
+  if (sessionMatch && req.method === 'DELETE') {
+    const username = validateToken(getToken(req));
+    if (!username) { sendJson(res, 401, { error: 'Login required' }); return; }
+    const current = getToken(req);
+    const wanted = sessionMatch[1];
+    // Two different requests share this route. With a short id, revoke exactly that
+    // session — including the caller's own, which is how "sign out this device" works
+    // from the account page. Without one, revoke every session except the caller's.
+    // revokeForUser never crosses accounts in either case.
+    const revoked = repo.sessions.revokeForUser(
+      username,
+      wanted ? { shortIdOnly: wanted } : { except: current },
+    );
+    sendJson(res, 200, { ok: true, revoked });
+    return;
+  }
+
+  const unlinkMatch = parsedUrl.pathname.match(/^\/api\/account\/providers\/([a-z0-9_-]+)$/i);
+  if (unlinkMatch && req.method === 'DELETE') {
+    const username = validateToken(getToken(req));
+    if (!username) { sendJson(res, 401, { error: 'Login required' }); return; }
+    const user = normalizeUser(getUser(username));
+    const id = unlinkMatch[1].toLowerCase();
+    if (!user.providers[id]) { sendJson(res, 404, { error: 'That provider is not linked' }); return; }
+    // Refuse to remove the last way in. Without this, unlinking the only provider
+    // on a password-less account locks the user out of their own data permanently.
+    if (!user.password && Object.keys(user.providers).length === 1) {
+      sendJson(res, 409, { error: 'Set a password first — this is the only way you can sign in' });
+      return;
+    }
+    const providers = { ...user.providers };
+    delete providers[id];
+    patchUser(username, { providers });
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  if (parsedUrl.pathname === '/api/account' && req.method === 'DELETE') {
+    const username = validateToken(getToken(req));
+    if (!username) { sendJson(res, 401, { error: 'Login required' }); return; }
+    // One call, so "delete my account" cannot forget a collection. It previously
+    // listed five by hand; a sixth added later would have been left behind.
+    repo.deleteAccount(username);
+    sendJson(res, 200, { ok: true });
     return;
   }
 
@@ -2153,7 +2966,10 @@ const server = http.createServer(async (req, res) => {
     req.on('data', chunk => { body += chunk; });
     req.on('end', async () => {
       try {
-        const { role, skills, domain } = JSON.parse(body || '{}');
+        // company / jobDescription arrive when the prep was started from a specific
+        // saved job rather than from a typed role. They are what make the questions
+        // about that posting instead of about the job title in the abstract.
+        const { role, skills, domain, company, jobDescription } = JSON.parse(body || '{}');
         if (!llm.isAvailable()) {
           const data = buildTemplateInterview(role, skills);
           sendJson(res, 200, { ok: false, source: 'template', data });
@@ -2163,12 +2979,20 @@ const server = http.createServer(async (req, res) => {
         const system = 'You are an experienced technical interviewer and career coach. Produce realistic '
           + 'interview preparation. Respond with ONLY a JSON object matching the schema — no markdown, no commentary. '
           + 'Write in English.';
+        const posting = String(jobDescription || '').trim().slice(0, 3000);
         const user = `Target role: ${role || 'IT professional'}\n`
+          + (company ? `Company: ${company}\n` : '')
           + `Candidate skills: ${Array.isArray(skills) ? skills.join(', ') : (skills || '(unknown)')}\n`
-          + `Domain: ${domain || '(general)'}\n\n`
-          + `Schema:\n${schema}\n\n`
+          + `Domain: ${domain || '(general)'}\n`
+          + (posting ? `\nThe actual job posting:\n"""\n${posting}\n"""\n` : '')
+          + `\nSchema:\n${schema}\n\n`
           + `Give 6 "common" behavioural/HR questions, 6 "roleSpecific" technical questions tailored to this exact `
           + `role and the candidate's skills, and 5 actionable "tips" (incl. STAR method, company research, questions to ask). `
+          + (posting
+              ? `Base the roleSpecific questions on the requirements named in the posting above, and make at least one tip `
+                + `about a gap between the posting's requirements and the candidate's skills. `
+              : '')
+          + (company ? `Make one of the tips specific to researching ${company}. ` : '')
           + `Return the JSON.`;
         const raw = await llm.chat({ system, user, maxTokens: 2500, temperature: 0.5 });
         const data = parseJsonObject(raw);
@@ -2264,15 +3088,40 @@ const server = http.createServer(async (req, res) => {
 
 
   // ── Email notification / send application (Resend) with mailto fallback ──
+  // Sending mail costs money, carries this deployment's verified sender identity, and
+  // was reachable with no credentials at all: anyone on the network could send
+  // arbitrary mail to arbitrary recipients as you. Three gates now.
   if (parsedUrl.pathname === '/api/send-email' && req.method === 'POST') {
+    // 1. Signed in.
+    const sender = validateToken(getToken(req));
+    if (!sender) { sendJson(res, 401, { error: 'Login required to send email' }); return; }
+    // 2. Metered. A compromised account should not be able to run a campaign.
+    if (rateLimited(req, 'email', 5, 60 * 60 * 1000)) {
+      sendJson(res, 429, { error: 'Email limit reached — 5 per hour.' }); return;
+    }
+
     let body = '';
-    req.on('data', chunk => { body += chunk; });
+    let tooLarge = false;
+    req.on('data', chunk => {
+      body += chunk;
+      if (body.length > 100 * 1024 && !tooLarge) { tooLarge = true; req.destroy(); }
+    });
     req.on('end', async () => {
+      if (tooLarge) return;
       try {
         const { to, subject, text } = JSON.parse(body || '{}');
         if (!to || !subject) { sendJson(res, 400, { error: 'Recipient and subject are required' }); return; }
+
+        // 3. One recipient, syntactically valid. `to` used to be passed straight
+        //    through, so a comma-separated list or an array turned one request into a
+        //    bulk send.
+        const recipient = String(Array.isArray(to) ? to[0] : to).trim();
+        if (!EMAIL_RE.test(recipient)) { sendJson(res, 400, { error: 'Enter one valid recipient address.' }); return; }
+
         if (!email.isAvailable()) { sendJson(res, 200, { ok: false, fallback: 'mailto' }); return; }
-        const result = await email.sendEmail({ to, subject, text: text || '' });
+        const result = await email.sendEmail({ to: recipient, subject, text: text || '' });
+        // Who sent what, so abuse through a stolen session is traceable afterwards.
+        console.log(`[mail] ${sender} → ${recipient} (${String(subject).slice(0, 60)})`);
         sendJson(res, 200, { ok: true, sent: true, id: result && result.id });
       } catch (error) {
         sendJson(res, 200, { ok: false, fallback: 'mailto', error: String(error.message || error) });
@@ -2282,8 +3131,11 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (parsedUrl.pathname === '/api/profile' && req.method === 'POST') {
-    const token = getToken(req);
-    if (!token) {
+    // validateToken, not merely "a token was sent": the previous check accepted any
+    // non-empty Authorization header, so an unauthenticated caller could write a
+    // profile. Harmless while the key was the token itself, not once it is a username.
+    const username = validateToken(getToken(req));
+    if (!username) {
       sendJson(res, 401, { error: 'Authorization required to save profile' });
       return;
     }
@@ -2298,7 +3150,7 @@ const server = http.createServer(async (req, res) => {
           return;
         }
 
-        saveProfileText(token, profile.trim());
+        saveProfileText(username, profile.trim());
         sendJson(res, 200, { status: 'ok', profileSaved: true });
       } catch (error) {
         sendJson(res, 400, { error: 'Invalid request payload' });
@@ -2308,9 +3160,9 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (parsedUrl.pathname === '/api/jobs' && req.method === 'GET') {
-    // Job search is public — no login required
-    const token = getToken(req);
-    const profileText = token ? getProfileText(token) : '';
+    // Job search is public — no login required. An invalid or expired token simply
+    // means no profile to match against, not an error.
+    const profileText = getProfileText(validateToken(getToken(req)));
     const region   = parsedUrl.searchParams.get('region')   || 'germany';
     const sector   = parsedUrl.searchParams.get('sector')   || 'all';
     const platform = parsedUrl.searchParams.get('platform') || 'bundesagentur';
@@ -2538,19 +3390,41 @@ const server = http.createServer(async (req, res) => {
   if (parsedUrl.pathname === '/api/admin/db' && req.method === 'GET') {
     const username = validateToken(getToken(req));
     if (!username) { sendJson(res, 401, { error: 'Login required' }); return; }
+    // This returns every account and every saved application in the system. It used
+    // to require only *a* login, so any registered user could read all of it. Admin
+    // is granted by ADMIN_USERS in .env, never by a field a user can edit.
+    if (normalizeUser(getUser(username)).role !== 'admin') {
+      sendJson(res, 403, { error: 'Admin only. Add your username to ADMIN_USERS in .env.' });
+      return;
+    }
     const now = Date.now();
-    const users = Object.entries(storage.users || {}).map(([u, d]) => ({
-      username: u, name: d.name, passwordHashed: d.password?.includes(':')
+    // Counts only — the repo never hands session tokens to this endpoint.
+    const sessionStats = repo.sessions.stats(now);
+    const sessionsByUser = sessionStats.byUser;
+    const users = repo.users.entries().map(([u, d]) => ({
+      username: u,
+      name: d.name,
+      email: d.email || '',
+      passwordHashed: d.password?.includes(':'),
+      // How this person can sign in, and through which identity providers.
+      authMethods: [
+        ...(d.password ? ['password'] : []),
+        ...Object.keys(d.providers || {}),
+      ],
+      providers: Object.entries(d.providers || {}).map(([id, p]) => ({ id, email: p.email || '', linkedAt: p.linkedAt || null })),
+      createdAt: d.createdAt || null,
+      role: adminUsernames.has(u) ? 'admin' : (d.role || 'user'),
+      activeSessions: sessionsByUser[u] || 0,
+      online: (sessionsByUser[u] || 0) > 0,
     }));
-    const activeSessions = Object.values(storage.tokens || {}).filter(t => t.expires > now).length;
-    const applications   = Object.entries(storage.applications || {}).map(([u, apps]) => ({
+    const applications   = repo.applications.entries().map(([u, apps]) => ({
       user: u, count: apps.length, apps: apps.map(a => ({ title: a.title, company: a.company, status: a.status }))
     }));
     sendJson(res, 200, {
       users,
       totalUsers:       users.length,
-      activeSessions,
-      expiredTokens:    Object.values(storage.tokens || {}).filter(t => t.expires <= now).length,
+      activeSessions:   sessionStats.active,
+      expiredTokens:    sessionStats.expired,
       applicationUsers: applications.length,
       applications
     });
@@ -2559,9 +3433,22 @@ const server = http.createServer(async (req, res) => {
 
   // ── Server-side PDF parsing ──────────────────────────────────────────────
   if (parsedUrl.pathname === '/api/parse-pdf' && req.method === 'POST') {
+    // The largest accepted payload in the app, so it counts what actually arrives
+    // rather than trusting the declared Content-Length checked before dispatch.
+    const max = bodyLimitFor('/api/parse-pdf');
     let body = '';
-    req.on('data', chunk => { body += chunk; });
+    let tooLarge = false;
+    req.on('data', chunk => {
+      if (tooLarge) return;
+      body += chunk;
+      if (body.length > max) {
+        tooLarge = true;
+        sendJson(res, 413, { error: 'PDF too large — limit is 12 MB.', code: 'payload_too_large' });
+        req.destroy();
+      }
+    });
     req.on('end', async () => {
+      if (tooLarge) return;
       try {
         const { pdf } = JSON.parse(body || '{}');
         if (!pdf) { sendJson(res, 400, { error: 'pdf base64 string required' }); return; }
@@ -2687,6 +3574,9 @@ const server = http.createServer(async (req, res) => {
       const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
       try {
         const input = JSON.parse(body || '{}');
+        // Same language/tone/length directive the single-shot writer used, so the
+        // Language select still governs the letter now the graph is the only path.
+        input.writerDirective = writerDirective(input.options);
         const result = await graph.runGraphStream(input, buildAgentDeps(), llm, rag, (step) => send({ type: 'step', step }));
         send({ type: 'done', result });
       } catch (e) {
@@ -2884,7 +3774,26 @@ const server = http.createServer(async (req, res) => {
   serveStaticFile(req, res);
 });
 
-server.listen(PORT, () => {
-  console.log(`Server running at http://localhost:${PORT}`);
-  console.log('API available at /api/status, /api/analyze, /api/jobs');
-});
+function tryListen(port, attempt = 1) {
+  const onError = (error) => {
+    if (error.code === 'EADDRINUSE' && attempt < MAX_PORT_TRIES) {
+      const nextPort = port + 1;
+      console.warn(`Port ${port} is busy; trying ${nextPort} instead.`);
+      setImmediate(() => tryListen(nextPort, attempt + 1));
+      return;
+    }
+
+    console.error('Failed to start server:', error);
+    process.exit(1);
+  };
+
+  server.once('error', onError);
+
+  server.listen(port, () => {
+    server.removeListener('error', onError);
+    console.log(`Server running at http://localhost:${port}`);
+    console.log('API available at /api/status, /api/analyze, /api/jobs');
+  });
+}
+
+tryListen(DEFAULT_PORT);

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>CareerAI — Job Application Agent</title>
   <link rel="stylesheet" href="styles.css" />
-  <script>try{var t=localStorage.getItem('careerai-theme');if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>
+  <script src="theme-boot.js"></script>
 </head>
 
 
@@ -136,23 +136,35 @@
             <div class="brand-tagline">Job Application Agent</div>
           </div>
         </div>
+        <!-- Identity providers. Populated from /api/auth/providers; the whole block
+             stays hidden when no provider is configured. -->
+        <div id="auth-providers" class="auth-providers hidden"></div>
+        <div id="auth-providers-sep" class="auth-sep hidden"><span>or</span></div>
+
         <div class="modal-tabs">
           <button class="modal-tab active" data-modal-tab="login">Sign In</button>
           <button class="modal-tab" data-modal-tab="register">Register</button>
         </div>
-        <div id="modal-login" class="modal-panel active">
-          <input id="login-username" type="text" class="field" placeholder="Username" autocomplete="username" />
+        <form id="modal-login" class="modal-panel active">
+          <input id="login-username" type="text" class="field" placeholder="Email or username" autocomplete="username" />
           <input id="login-password" type="password" class="field" placeholder="Password" autocomplete="current-password" />
-          <button id="login-btn" class="btn btn-primary btn-full">Sign In</button>
+          <button id="login-btn" type="submit" class="btn btn-primary btn-full">Sign In</button>
           <p id="login-msg" class="form-msg"></p>
-        </div>
-        <div id="modal-register" class="modal-panel">
-          <input id="reg-name" type="text" class="field" placeholder="Full name" autocomplete="name" />
-          <input id="reg-username" type="text" class="field" placeholder="Username" autocomplete="username" />
-          <input id="reg-password" type="password" class="field" placeholder="Password" autocomplete="new-password" />
-          <button id="register-btn" class="btn btn-primary btn-full">Create Account</button>
+        </form>
+        <form id="modal-register" class="modal-panel">
+          <div class="reg-row">
+            <input id="reg-firstname" type="text" class="field" placeholder="First name" autocomplete="given-name" required />
+            <input id="reg-lastname" type="text" class="field" placeholder="Last name" autocomplete="family-name" required />
+          </div>
+          <label class="reg-label" for="reg-birthdate">Date of birth</label>
+          <input id="reg-birthdate" type="date" class="field" autocomplete="bday" required />
+          <input id="reg-email" type="email" class="field" placeholder="Email" autocomplete="email" required />
+          <input id="reg-phone" type="tel" class="field" placeholder="Phone number" autocomplete="tel" required />
+          <input id="reg-password" type="password" class="field" placeholder="Password (min. 6 characters)" autocomplete="new-password" required />
+          <button id="register-btn" type="submit" class="btn btn-primary btn-full">Create Account</button>
+          <p class="reg-hint">You will receive a confirmation email. You can sign in with your email address.</p>
           <p id="register-msg" class="form-msg"></p>
-        </div>
+        </form>
       </div>
     </div>
   </div>
@@ -188,6 +200,12 @@
         </button>
         <button class="nav-btn" data-page="interviews">
           <span class="nav-label">Interviews</span>
+        </button>
+        <button class="nav-btn" data-page="account">
+          <span class="nav-label">My Account</span>
+        </button>
+        <button class="nav-btn hidden" data-page="admin" id="nav-admin">
+          <span class="nav-label">Admin</span>
         </button>
       </nav>
 
@@ -309,7 +327,7 @@
             </div>
             <div class="form-group">
               <label>Job Title / Keywords</label>
-              <input id="job-keyword-input" type="text" class="field" placeholder="e.g. Data Analyst, Pflegefachkraft, Marketing Manager…" />
+              <input id="job-keyword-input" type="text" class="field" placeholder="e.g. SOC Analyst, Penetration Tester, IT-Sicherheit…" />
             </div>
             <div class="form-group">
               <label>Domain</label>
@@ -390,11 +408,26 @@
 
       <!-- ═══ Career Path ═══ -->
       <section class="page" id="page-career">
-        <div class="page-intro">
-          <h2>Career Pathway</h2>
-          <p>How a career unfolds in each security domain on the German market — the roles, what
-             they pay, the skills and certifications each step asks for. Skills you already have,
-             detected from your CV, are highlighted.</p>
+        <!-- The intro used to be three overlapping paragraphs — this one, the dynamic
+             #cp-summary, and the chart hint — all restating "click a role". One
+             tagline here; #cp-summary carries the per-domain detail. -->
+        <div class="page-intro page-hero cp-hero">
+          <div class="cp-hero-text">
+            <h2>Career Pathway</h2>
+            <p>Every security job on one chart — German market salaries, skills and certifications
+               at each step. Yours are highlighted.</p>
+          </div>
+        </div>
+
+        <!-- Answers "where do I start?" before the chart does. Each chip scrolls to the
+             column that hires at that level, so the page is usable at any experience
+             level without reading anything first. -->
+        <div class="cp-where" id="cp-where">
+          <span class="cp-where-label">Where are you now?</span>
+          <button class="cp-where-chip" data-goto="start">No IT experience yet</button>
+          <button class="cp-where-chip" data-goto="feeder">In IT, not security</button>
+          <button class="cp-where-chip" data-goto="entry">Ready for a first security role</button>
+          <button class="cp-where-chip" data-goto="mid">Already working in security</button>
         </div>
 
         <div id="cp-status" class="cp-status hidden" role="status" aria-live="polite"></div>
@@ -402,9 +435,8 @@
 
         <div class="card cp-chart-card">
           <div class="cp-chart-bar">
-            <p class="cp-chart-hint">
-              Click a role to trace where it leads. Hover to preview its next steps.
-              Use the arrow keys to move between roles.
+            <p class="cp-chart-hint" title="Hover a role to preview its next steps. Use the arrow keys to move between roles.">
+              Click a role to trace where it leads.
             </p>
             <div class="cp-legend" id="cp-legend">
               <span id="cp-source" class="cp-badge hidden"></span>
@@ -444,7 +476,7 @@
           <div class="card-header"><h2>CV Generator</h2></div>
           <div class="form-group">
             <label>Target Job (optional)</label>
-            <input id="target-job-input" type="text" class="field" placeholder="e.g. Pflegefachkraft at Charité" />
+            <input id="target-job-input" type="text" class="field" placeholder="e.g. SOC Analyst at Telekom Security" />
           </div>
           <div class="form-group">
             <label>CV Text <span class="hint" style="text-transform:none;font-weight:400">— auto-fills from your Profile</span></label>
@@ -489,7 +521,7 @@
           <div class="form-row">
             <div class="form-group">
               <label>Job Title</label>
-              <input id="cover-job-title" type="text" class="field" placeholder="e.g. Pflegefachkraft" />
+              <input id="cover-job-title" type="text" class="field" placeholder="e.g. SOC Analyst" />
             </div>
             <div class="form-group">
               <label>Company</label>
@@ -536,9 +568,12 @@
 
         <div class="card">
           <div class="card-header"><h2>Generate questions</h2></div>
+          <!-- Filled when the prep was started from a job on the tracker board, so it
+               is obvious which posting the questions are about. -->
+          <div id="interview-context" class="interview-context hidden"></div>
           <div class="form-group">
             <label>Target Role</label>
-            <input id="interview-role" type="text" class="field" placeholder="e.g. Pflegefachkraft, Data Analyst…" />
+            <input id="interview-role" type="text" class="field" placeholder="e.g. SOC Analyst, Incident Responder…" />
           </div>
           <button id="generate-interview-btn" class="btn btn-primary">Generate Interview Prep</button>
         </div>
@@ -554,7 +589,7 @@
 
       <!-- ═══ Jobs (tracker) ═══ -->
       <section class="page" id="page-jobs">
-        <div class="page-intro tracker-intro">
+        <div class="page-intro page-hero tracker-intro">
           <div>
             <h1>Jobs</h1>
             <p>Track every application across your pipeline.</p>
@@ -569,7 +604,7 @@
           <div class="form-row">
             <div class="form-group">
               <label>Job Title</label>
-              <input id="app-title" type="text" class="field" placeholder="Pflegefachkraft" />
+              <input id="app-title" type="text" class="field" placeholder="SOC Analyst" />
             </div>
             <div class="form-group">
               <label>Company</label>
@@ -644,6 +679,30 @@
           <button class="profile-mode-btn active" data-mode="manual">Manual entry</button>
         </div>
 
+        <div id="profile-summary-card" class="card profile-summary-card">
+          <div class="profile-summary-grid">
+            <div class="summary-card-item">
+              <div class="summary-card-label">Profile strength</div>
+              <div class="summary-card-value" id="pf-completion-pct">0%</div>
+            </div>
+            <div class="summary-card-item">
+              <div class="summary-card-label">Skills</div>
+              <div class="summary-card-value" id="pf-summary-skills">0</div>
+            </div>
+            <div class="summary-card-item">
+              <div class="summary-card-label">Experience</div>
+              <div class="summary-card-value" id="pf-summary-exp">0</div>
+            </div>
+            <div class="summary-card-item">
+              <div class="summary-card-label">Education</div>
+              <div class="summary-card-value" id="pf-summary-edu">0</div>
+            </div>
+          </div>
+          <div class="profile-completion-bar">
+            <div id="pf-completion-fill"></div>
+          </div>
+        </div>
+
         <!-- Import mode -->
         <div id="profile-import" class="profile-mode-panel hidden">
           <div class="card">
@@ -657,6 +716,12 @@
               <span class="drop-hint">.txt and searchable .pdf supported</span>
             </div>
             <input id="cv-file-input" type="file" accept=".txt,.pdf" hidden />
+            <div id="cv-progress-steps" class="progress-steps hidden">
+              <div class="progress-step" data-step="parsing">Reading CV</div>
+              <div class="progress-step" data-step="analyzing">Analyzing skills</div>
+              <div class="progress-step" data-step="building">Building profile</div>
+              <div class="progress-step" data-step="done">Done</div>
+            </div>
             <textarea id="cv-input" class="field cv-textarea" placeholder="…or paste CV text directly here"></textarea>
             <button id="analyze-btn" class="btn btn-primary">Extract &amp; Build Profile</button>
           </div>
@@ -673,7 +738,21 @@
               <div><h3 class="col-label">Recommended Roles</h3><ul id="recommended-roles" class="role-list"></ul></div>
             </div>
             <div class="form-actions">
+              <button class="btn btn-ghost btn-sm" id="cv-view-extracted">View extracted text</button>
               <button class="btn btn-ghost btn-sm" id="profile-edit-extracted">Edit details manually →</button>
+            </div>
+            <!-- What the parser actually read out of the file. Worth showing: when an
+                 extraction looks wrong, this is the only place to see whether the text
+                 came out mangled or the analysis mis-read good text. -->
+            <div id="cv-extracted-view" class="hidden">
+              <div class="cv-extracted-bar">
+                <span class="hint" id="cv-extracted-meta"></span>
+                <span class="cv-extracted-actions">
+                  <a class="btn btn-ghost btn-xs hidden" id="cv-open-original" target="_blank" rel="noopener">Open original PDF</a>
+                  <button class="btn btn-ghost btn-xs" id="cv-copy-extracted">Copy</button>
+                </span>
+              </div>
+              <pre id="cv-extracted-text" class="cv-extracted-text"></pre>
             </div>
           </div>
         </div>
@@ -709,7 +788,7 @@
 
           <div class="card">
             <div class="card-header"><h2>Objective &amp; summary</h2></div>
-            <div class="form-group"><label>Target job title</label><input id="pf-title" class="field" type="text" placeholder="e.g. Pflegefachkraft" /></div>
+            <div class="form-group"><label>Target job title</label><input id="pf-title" class="field" type="text" placeholder="e.g. SOC Analyst" /></div>
             <div class="form-group"><label>Professional summary</label><textarea id="pf-summary" class="field" rows="4" placeholder="A short paragraph about you, your goals and motivation…"></textarea></div>
           </div>
 
@@ -754,7 +833,121 @@
             <button id="pf-download-pdf" class="btn btn-ghost">Generate as PDF</button>
             <span id="pf-save-msg" class="form-msg" style="align-self:center"></span>
           </div>
+
+          <div class="card danger-zone-card">
+            <div class="card-header">
+              <h2>Danger zone</h2>
+              <span class="hint">Reset your stored profile data from this browser.</span>
+            </div>
+            <p class="danger-note">This will remove your current profile, saved skills, experience and certifications. Your job tracking data will remain.</p>
+            <button id="pf-reset" class="btn btn-ghost btn-sm">Delete profile data</button>
+          </div>
         </div>
+      </section>
+
+      <!-- ═══ My Account (identity manager) ═══ -->
+      <section class="page" id="page-account">
+        <div class="page-intro">
+          <div>
+            <h1>My Account</h1>
+            <p>Your identity, sign-in methods and active sessions.</p>
+          </div>
+        </div>
+
+        <div id="account-signed-out" class="empty-state">
+          <h3>You are not signed in</h3>
+          <p>Sign in to manage your account.</p>
+          <button class="btn btn-primary" id="account-signin-btn">Sign in</button>
+        </div>
+
+        <div id="account-body" class="account-grid hidden">
+          <div class="card">
+            <div class="card-header">
+              <h2>Identity</h2>
+              <span class="pill" id="ac-role">user</span>
+            </div>
+            <form id="ac-identity-form">
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="ac-name">Display name</label>
+                  <input id="ac-name" type="text" class="field" autocomplete="name" />
+                </div>
+                <div class="form-group">
+                  <label for="ac-email">Email</label>
+                  <input id="ac-email" type="email" class="field" autocomplete="email" placeholder="you@example.com" />
+                </div>
+              </div>
+              <p id="ac-email-state" class="ac-email-state"></p>
+              <p class="hint">Your email is your sign-in identifier, and how a provider sign-in is matched to this account. Changing it requires confirming the new address.</p>
+              <div class="form-actions">
+                <button type="submit" class="btn btn-primary btn-sm">Save changes</button>
+                <span class="form-msg" id="ac-identity-msg"></span>
+              </div>
+            </form>
+            <p class="hint" id="ac-meta"></p>
+          </div>
+
+          <!-- Hidden entirely when AUTH_MODE=oidc-only: passwords live at the
+               identity provider, and it serves its own change-password page. -->
+          <div class="card" id="ac-password-card">
+            <div class="card-header">
+              <h2>Password</h2>
+              <span class="hint" id="ac-password-state"></span>
+            </div>
+            <form id="ac-password-form">
+              <div class="form-group" id="ac-current-wrap">
+                <label for="ac-current-password">Current password</label>
+                <input id="ac-current-password" type="password" class="field" autocomplete="current-password" />
+              </div>
+              <div class="form-group">
+                <label for="ac-new-password">New password</label>
+                <input id="ac-new-password" type="password" class="field" autocomplete="new-password" />
+              </div>
+              <p class="hint">Changing your password signs out every other session.</p>
+              <div class="form-actions">
+                <button type="submit" class="btn btn-primary btn-sm">Update password</button>
+                <span class="form-msg" id="ac-password-msg"></span>
+              </div>
+            </form>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h2>Linked accounts</h2>
+              <span class="hint">Sign in through an identity provider.</span>
+            </div>
+            <div id="ac-providers"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h2>Active sessions</h2>
+              <button class="btn btn-ghost btn-sm" id="ac-revoke-others">Sign out everywhere else</button>
+            </div>
+            <div id="ac-sessions"></div>
+          </div>
+
+          <div class="card danger-card">
+            <div class="card-header">
+              <h2>Danger zone</h2>
+              <span class="hint">This cannot be undone.</span>
+            </div>
+            <p class="danger-note">Deleting your account removes your login, your saved jobs and your stored profile from the server.</p>
+            <button class="btn btn-ghost btn-sm" id="ac-delete">Delete my account</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══ Admin (all accounts) ═══ -->
+      <section class="page" id="page-admin">
+        <div class="page-intro">
+          <div>
+            <h1>Admin</h1>
+            <p>Every account in the system, how each one signs in, and who is online.</p>
+          </div>
+          <button class="btn btn-ghost btn-sm" id="admin-refresh" style="margin-left:auto;align-self:center">Refresh</button>
+        </div>
+        <div id="admin-body"></div>
       </section>
 
     </main>
@@ -815,21 +1008,21 @@
       <div id="jw-match" class="jw-match"></div>
       <div id="jw-gaps" class="jw-section"></div>
       <div id="jw-oracle" class="jw-section"></div>
-      <div class="jw-actions">
-        <button id="jw-update-profile" class="btn btn-ghost btn-sm">✎ Update profile</button>
-        <button id="jw-recheck" class="btn btn-ghost btn-sm">↻ Re-check match</button>
-        <button id="jw-cover" class="btn btn-ghost btn-sm">Cover letter only</button>
-        <button id="jw-graph-btn" class="btn btn-ghost btn-sm" title="Multi-agent LangGraph pipeline with a Writer⇄Critic self-improvement loop">🔗 Agent graph (self-improve)</button>
-        <label for="jw-lang" style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-muted)">Language
-          <select id="jw-lang" class="field" style="width:auto;padding:6px 8px">
-            <option value="auto">Auto (match job)</option>
-            <option value="en">English</option>
-            <option value="de">Deutsch</option>
-          </select>
-        </label>
-        <button id="jw-docs-btn" class="btn btn-primary btn-sm">Generate documents (CV + cover letter)</button>
+      <!-- Language is a setting, not an action, so it gets its own row above the
+           buttons. Sitting between two of them it read as a third button. -->
+      <div class="jw-lang-row">
+        <label for="jw-lang">Language</label>
+        <select id="jw-lang" class="jw-lang-select">
+          <option value="auto">Auto (match job)</option>
+          <option value="en">English</option>
+          <option value="de">Deutsch</option>
+        </select>
       </div>
-      <textarea id="jw-cover-output" class="field hidden" rows="12" readonly placeholder="Your cover letter will appear here…"></textarea>
+      <div class="jw-actions">
+        <button id="jw-update-profile" class="btn btn-action btn-sm">✎ Update profile</button>
+        <button id="jw-recheck" class="btn btn-action btn-sm">↻ Re-check match</button>
+        <button id="jw-graph-btn" class="btn btn-primary btn-sm" title="Multi-agent LangGraph pipeline with a Writer⇄Critic self-improvement loop">Generate cover letter</button>
+      </div>
       <div id="jw-graph-panel" class="jw-graph hidden"></div>
       <div id="jw-docs" class="jw-docs hidden"></div>
     </div>
@@ -900,75 +1093,6 @@
   </div>
 </div>
 
-<script>
-const GDPR_KEY = 'careerai-gdpr-consent';
-
-function gdprInit() {
-  if (!localStorage.getItem(GDPR_KEY)) {
-    document.getElementById('gdpr-banner').style.display = 'flex';
-  } else {
-    document.getElementById('gdpr-banner').style.display = 'none';
-  }
-}
-
-function gdprAccept() {
-  localStorage.setItem(GDPR_KEY, JSON.stringify({ accepted: true, date: new Date().toISOString() }));
-  document.getElementById('gdpr-banner').style.display = 'none';
-}
-
-function gdprReject() {
-  localStorage.setItem(GDPR_KEY, JSON.stringify({ accepted: false, date: new Date().toISOString() }));
-  document.getElementById('gdpr-banner').style.display = 'none';
-}
-
-function showPrivacyModal() {
-  document.getElementById('privacy-modal').style.display = 'flex';
-}
-
-function closePrivacyModal() {
-  document.getElementById('privacy-modal').style.display = 'none';
-}
-
-document.getElementById('privacy-modal').addEventListener('click', e => {
-  if (e.target === document.getElementById('privacy-modal')) closePrivacyModal();
-});
-
-// Lance au chargement
-gdprInit();
-
-// Light / dark theme toggle (persisted in localStorage)
-(function themeToggle() {
-  const btns = document.querySelectorAll('.theme-toggle');
-  if (!btns.length) return;
-  const apply = (theme) => {
-    if (theme === 'light') document.documentElement.setAttribute('data-theme', 'light');
-    else document.documentElement.removeAttribute('data-theme');
-    btns.forEach(b => { b.textContent = theme === 'light' ? '☀️' : '🌙'; });
-  };
-  apply(localStorage.getItem('careerai-theme') || 'dark');
-  btns.forEach(btn => btn.addEventListener('click', () => {
-    const next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
-    try { localStorage.setItem('careerai-theme', next); } catch (e) {}
-    apply(next);
-  }));
-})();
-
-// Robot speech bubble — alternating phrases, synced with the pop animation
-(function rotateSpeech() {
-  const bubble = document.querySelector('.robot-speech');
-  if (!bubble) return;
-  const phrases = [
-    'Welcome <span class="speech-wave">👋</span>',
-    'Let\'s find your job! <span class="speech-wave">🚀</span>',
-    'Ready to get hired? <span class="speech-wave">💼</span>',
-  ];
-  let i = 0;
-  // Swap text while the bubble is hidden (start of each animation cycle)
-  bubble.addEventListener('animationiteration', () => {
-    i = (i + 1) % phrases.length;
-    bubble.innerHTML = phrases[i];
-  });
-})();
-</script>
+<script src="page-boot.js"></script>
 </body>
 </html>

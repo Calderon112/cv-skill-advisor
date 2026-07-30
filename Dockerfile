@@ -8,7 +8,11 @@
 
 # Debian slim, not Alpine: npm 10 on musl aborts `npm ci` with "Exit handler never
 # called!" yet still exits 0, producing an image whose node_modules is empty.
-FROM node:20-slim
+#
+# Node 24, not 20: STORAGE_BACKEND=sqlite uses the built-in `node:sqlite`, which
+# only exists from 22.5. On 20 the module is missing and the server refuses to
+# start rather than silently writing somewhere else.
+FROM node:24-slim
 
 WORKDIR /app
 
@@ -41,6 +45,12 @@ ENV STORAGE_FILE=/app/data/storage.json \
     CAREER_CACHE_FILE=/app/data/.career-paths.json \
     NODE_ENV=production \
     PORT=3000
+
+# Durable storage by default in the image: a container is expected to be killed,
+# and rewriting the whole JSON file on every change loses everything if that
+# happens mid-write. The SQLite file lands beside STORAGE_FILE on the same volume,
+# and an existing storage.json is imported once on first start.
+ENV STORAGE_BACKEND=sqlite
 
 RUN mkdir -p /app/data && chown -R node:node /app/data
 USER node

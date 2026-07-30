@@ -123,11 +123,18 @@ async function chatAnthropic({ system, user, maxTokens, temperature }) {
  * Generic caller for any OpenAI "chat/completions"-compatible endpoint
  * (OpenAI, OpenRouter, Gemini's OpenAI-compatible layer).
  */
-async function chatOpenAICompatible({ label, hostname, path, apiKey, model, extraHeaders, system, user, maxTokens, temperature }) {
+async function chatOpenAICompatible({ label, hostname, path, apiKey, model, extraHeaders, system, user, maxTokens, temperature, reasoningEffort }) {
   const body = JSON.stringify({
     model,
     max_tokens: maxTokens || 1500,
     temperature: temperature == null ? 0.5 : temperature,
+    // Gemini 2.5 models spend part of the OUTPUT budget on internal reasoning, and
+    // that share is invisible in completion_tokens. A 3000-token ceiling left ~300
+    // tokens of actual text, so long structured answers came back cut mid-string and
+    // failed to parse — which silently demoted the career ladders to the hardcoded
+    // template. Asking for low effort on a formatting task returns the budget to the
+    // answer. Only sent when a caller asks: not every provider accepts the field.
+    ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
     messages: [
       { role: 'system', content: system },
       { role: 'user', content: user },
@@ -156,6 +163,10 @@ function callProvider(name, args) {
 
   if (name === 'gemini') {
     return chatOpenAICompatible({
+      // Callers can override with reasoningEffort; 'low' is the right default for the
+      // extract-and-format work this app asks for, and it stops thinking tokens from
+      // eating the output budget on the long JSON answers.
+      reasoningEffort: 'low',
       ...args,
       label: 'Gemini',
       hostname: 'generativelanguage.googleapis.com',
@@ -166,17 +177,18 @@ function callProvider(name, args) {
   }
 
   if (name === 'openrouter') {
-    // Try several free models — any single one can be rate-limited upstream, so
-    // we fall through the list and use the first that answers.
-    // Free slugs come and go: deepseek-r1:free was withdrawn, and llama-3.3-70b:free
-    // is refused on some accounts. Keep several and let the loop find one that answers.
-    const models = [...new Set([
-      OPENROUTER_MODEL(),
-      'google/gemma-4-31b-it:free',
-      'meta-llama/llama-3.3-70b-instruct:free',
-      'qwen/qwen3-coder:free',
-      'deepseek/deepseek-chat-v3-0324:free',
-    ])];
+    // Try each model in turn — any single one can be rate-limited upstream.
+    //
+    // Probed 2026-07-30 against a real account: every ":free" slug this list used to
+    // carry now answers HTTP 404 "This model is unavailable for free". OpenRouter
+    // keeps withdrawing free tiers, so hard-coding more of them just rebuilds a dead
+    // list. Only OPENROUTER_MODEL is tried now, and the error says plainly that the
+    // slug is gone rather than burying it under four more 404s.
+    //
+    // A paid slug works if you want a real safety net behind Gemini's daily quota —
+    // deepseek/deepseek-chat-v3-0324 (no ":free") answered. Set OPENROUTER_MODEL to it
+    // knowing it bills per token.
+    const models = [...new Set([OPENROUTER_MODEL()].filter(Boolean))];
     return (async () => {
       let lastErr;
       for (const model of models) {

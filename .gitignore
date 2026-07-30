@@ -13,3 +13,25 @@ storage.json
 
 # Career pathways written by the model (regenerated on demand)
 .career-paths.json
+
+# Production secrets — never commit
+.env.prod
+
+# SQLite database and its WAL sidecars
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# Runtime lock beside the storage file
+storage.json.lock
+
+# Presentation and comparison artefacts — deliverables, not source
+*.pptx
+CyberCareer_Sprint*.pdf
+COMPARISON-*.md
+
+# Other projects that happen to sit inside this working copy.
+# agent-skills is its own git repository; committing it here would create a
+# broken half-submodule that nobody can clone.
+/agent-skills/
+/job-agent-whs-tmp/

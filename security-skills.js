@@ -234,6 +234,29 @@
       ],
     },
     {
+      // Vulnerability management had no group of its own, so its career ladder
+      // borrowed "Offensive Security / Pentesting" and told students the job needs
+      // red teaming and Metasploit. It is a defensive, operational discipline:
+      // find, rate, prioritise, get it patched, prove it is gone.
+      category: 'Vulnerability Management',
+      skills: [
+        { key: 'vulnerability management', label: 'Vulnerability management', aliases: ['schwachstellenmanagement', 'vulnerability mgmt'] },
+        { key: 'vulnerability scanning', label: 'Vulnerability scanning', aliases: ['schwachstellenscan', 'vulnerability scan'] },
+        { key: 'nessus', label: 'Nessus' },
+        { key: 'qualys', label: 'Qualys' },
+        { key: 'openvas', label: 'OpenVAS / Greenbone', aliases: ['greenbone'] },
+        { key: 'cvss', label: 'CVSS scoring', aliases: ['cvss score'] },
+        { key: 'cve', label: 'CVE / NVD research', aliases: ['nvd', 'cve analysis'] },
+        { key: 'patch management', label: 'Patch management', aliases: ['patchmanagement'] },
+        { key: 'remediation tracking', label: 'Remediation tracking' },
+        { key: 'asset inventory', label: 'Asset inventory', aliases: ['asset management', 'cmdb'] },
+        { key: 'risk prioritisation', label: 'Risk-based prioritisation', aliases: ['risk prioritization'] },
+        { key: 'attack surface management', label: 'Attack surface management', aliases: ['asm'] },
+        { key: 'security baselines', label: 'Security baselines / hardening', aliases: ['cis benchmarks', 'bsi grundschutz'] },
+        { key: 'vulnerability reporting', label: 'Vulnerability reporting' },
+      ],
+    },
+    {
       category: 'Malware Analysis & Reverse Engineering',
       skills: [
         { key: 'malware analysis', label: 'Malware analysis' },

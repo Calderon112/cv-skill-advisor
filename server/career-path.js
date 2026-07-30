@@ -41,7 +41,7 @@ const DOMAINS = {
   crypto:       { label: 'Cryptography & PKI',                 title: 'PKI Engineer',                category: 'Cryptography & PKI',                   kind: 'security' },
   otsec:        { label: 'OT / ICS / IoT Security',            title: 'OT Security Engineer',        category: 'OT / IoT / Mobile Security',           kind: 'security' },
   threatintel:  { label: 'Threat Intelligence',                title: 'Threat Intelligence Analyst', category: 'Defensive Security / Blue Team / SOC', kind: 'security' },
-  vulnmgmt:     { label: 'Vulnerability Management',           title: 'Vulnerability Analyst',       category: 'Offensive Security / Pentesting',      kind: 'security' },
+  vulnmgmt:     { label: 'Vulnerability Management',           title: 'Vulnerability Analyst',       category: 'Vulnerability Management',             kind: 'security' },
   secarch:      { label: 'Security Architecture',              title: 'Security Architect',          category: 'Network Security',                     kind: 'security' },
   privacy:      { label: 'Data Protection & Privacy',          title: 'Data Protection Officer',     category: 'GRC, Compliance & Frameworks',         kind: 'security' },
   mobile:       { label: 'Mobile & Embedded Security',         title: 'Mobile Security Engineer',    category: 'OT / IoT / Mobile Security',           kind: 'security' },
@@ -158,6 +158,9 @@ function buildUser(domain) {
     roles.length ? `  role titles we already use: ${roles.join(', ')}` : '',
     '',
     'Exactly 3 feeder roles, exactly 2 roles per level, 4 to 6 skills and 1 to 3 certifications per role.',
+    // Left unbounded, the model spent ~640 characters on the summary and half its
+    // output budget with it, then got cut off mid-ladder. The ladder is the payload.
+    '"summary" is ONE sentence, 25 words maximum. "why" for a feeder role: 20 words maximum.',
     '"commonTitles" lists 3 real job-ad titles employers use for that role, German ones welcome.',
     '"education" is one short phrase, e.g. "Bachelor in Informatik or Ausbildung Fachinformatiker".',
     '"next" wires the chart: each role names the role(s) it typically leads to in the following',
@@ -261,7 +264,10 @@ async function pathwayFor(domain, { refresh = false } = {}) {
     // sampling at a lower temperature almost always parses.
     for (const temperature of [0.3, 0.1]) {
       try {
-        const text = await llm.chat({ system: SYSTEM, user: buildUser(domain), maxTokens: 3000, temperature });
+        // A full ladder — 3 feeders plus 6 roles, each with skills, certs, titles and
+        // wiring — is a long answer, and on a thinking model the reasoning share comes
+        // out of the same budget. 3000 was not enough for either.
+        const text = await llm.chat({ system: SYSTEM, user: buildUser(domain), maxTokens: 8000, temperature });
         const parsed = parseJson(text);
         if (!validate(parsed)) throw new Error('model output failed validation');
         payload = { ...parsed, source: 'llm', model: llm.provider() };
