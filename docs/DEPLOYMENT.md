@@ -23,9 +23,86 @@ it, so nobody can bypass TLS by connecting to :3000 directly.
 | | |
 |---|---|
 | A server | 2 GB RAM minimum — Keycloak and PostgreSQL together want ~1 GB. Hetzner CX22 (~4.50 €/month, Germany) is enough. |
-| A domain | ~5 €/year. Netcup or INWX for `.de`, Porkbun or Cloudflare for `.com`. |
+| A domain | ~5 €/year. Netcup or INWX for `.de`, Porkbun or Cloudflare for `.com`. For a test deployment, a free DuckDNS name works — see below. |
 | Docker | `curl -fsSL https://get.docker.com \| sh` |
 | Ports 80 and 443 open | Let's Encrypt validates over port 80. Without it there is no certificate. |
+
+### The 1 GB trap
+
+Every "free tier" that gives you 1 GB — AWS `t3.micro`, Oracle's AMD shape, most
+PaaS free plans — is **too small**. Keycloak alone wants 700 MB–1 GB before
+PostgreSQL, the app and Caddy. It does not run slowly on 1 GB; it is killed by the
+OOM reaper part-way through booting, which reads like a crash with no clear cause.
+
+Budget 2 GB, and 4 GB if you want headroom.
+
+---
+
+## Deploying on AWS
+
+Skip this section if you are using a plain VPS — the numbered steps below apply to
+any Docker host.
+
+**Use Lightsail, not EC2.** It is the same infrastructure with flat pricing, a
+static IP included, bandwidth included, and no VPC or security-group assembly. EC2
+is the right answer when you need autoscaling or private subnets; for one server it
+is a lot of ceremony for the same result.
+
+| Lightsail plan | Verdict |
+|---|---|
+| 1 GB | Will not boot Keycloak. |
+| **2 GB / 2 vCPU** | **Minimum that works.** |
+| 4 GB / 2 vCPU | Comfortable. |
+
+New Lightsail instances usually carry a free first period, and new AWS accounts get
+signup credits — check what is offered at creation rather than trusting a number
+written here.
+
+1. **Lightsail → Create instance** → Linux/Unix → **Ubuntu 24.04 LTS** → 2 GB plan.
+   Choose the **Frankfurt (eu-central-1)** region: closest to you, and it keeps
+   personal data in the EU, which is one paragraph less to justify in a report.
+2. **Networking → attach a static IP.** Without it the address changes on every
+   stop/start and your DNS silently points at nothing.
+3. **Networking → IPv4 Firewall**, add:
+
+   | Application | Protocol | Port |
+   |---|---|---|
+   | SSH | TCP | 22 |
+   | HTTP | TCP | 80 |
+   | HTTPS | TCP | 443 |
+
+   Port 80 is not optional — Let's Encrypt validates over it.
+4. Connect (the browser SSH button works), then:
+
+   ```bash
+   sudo apt update && sudo apt upgrade -y
+   curl -fsSL https://get.docker.com | sudo sh
+   sudo usermod -aG docker $USER && exit      # reconnect for the group to apply
+   ```
+
+5. Keycloak's JVM and PostgreSQL together will touch swap on a 2 GB instance.
+   Lightsail images ship without any, and the first OOM kill is silent:
+
+   ```bash
+   sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
+   sudo mkswap /swapfile && sudo swapon /swapfile
+   echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+   ```
+
+Then continue from step 1 below, using the static IP as your DNS target.
+
+### A test deployment without buying a domain
+
+[DuckDNS](https://duckdns.org) gives free subdomains that Let's Encrypt will
+certify. Register two, point both at the static IP, and set:
+
+```ini
+APP_DOMAIN=careerai.duckdns.org
+AUTH_DOMAIN=careerai-auth.duckdns.org
+```
+
+Everything else works unchanged. Swap in the real domain later by editing those two
+lines and restarting — nothing else refers to them.
 
 ---
 
