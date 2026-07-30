@@ -1,7 +1,10 @@
 node_modules/
 storage.json
-.env
-.env.local
+# Every .env variant. A named list misses the next one someone invents —
+# .env.production, .env.staging, .env.vps — and a secret is only ever committed once.
+.env*
+!.env.example
+!.env.prod.example
 *.log
 .DS_Store
 

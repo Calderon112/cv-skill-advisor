@@ -3,9 +3,22 @@
 node_modules
 
 # Secrets and local state — never copy these into an image.
-.env
-.env.local
+#
+# Every .env variant, not a hand-kept list. The list only named `.env` and
+# `.env.local`, so `.env.prod` — the file holding the production database password,
+# the Keycloak client secret and every API key — was copied straight into the image by
+# `COPY . .`. Verified: a build context probe found /ctx/.env.prod inside the layer.
+# Anyone who can pull the image can read them, and deleting the file later does not
+# remove it from the layer history.
+#
+# The .example templates are re-admitted below: they carry no values and are useful
+# documentation inside the container.
+.env*
+!.env.example
+!.env.prod.example
+
 storage.json
+storage.json.lock
 .embeddings-cache.json
 .usage-stats.json
 .career-paths.json

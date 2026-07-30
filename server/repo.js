@@ -121,10 +121,17 @@ function createRepo({ getStore, persist }) {
   const applications = {
     listFor(username) { return store().applications[username] || []; },
     replaceFor(username, apps) { store().applications[username] = apps; persist(); },
+    /**
+     * Idempotent on `id`, matching the (username, id) primary key the SQL backend
+     * uses. Without this the two implementations disagree: a repeated save appended a
+     * second copy here and was silently ignored there, so the same call produced a
+     * different list depending on which store was configured.
+     */
     add(username, app) {
-      (store().applications[username] ||= []).push(app);
+      const list = (store().applications[username] ||= []);
+      if (!list.some(a => String(a.id) === String(app.id))) list.push(app);
       persist();
-      return store().applications[username];
+      return list;
     },
     deleteAllFor(username) { delete store().applications[username]; persist(); },
     entries() { return Object.entries(store().applications); },

@@ -230,6 +230,12 @@ async function buildAuthUrl(providerId, redirectUri, opts) {
     code_challenge_method: 'S256',
   });
 
+  // Step-up: max_age=0 makes the provider re-prompt even though its own session is
+  // still valid, which is how a "confirm it is really you" flow is done without this
+  // app ever handling a password. OIDC Core §3.1.2.1 — supported by any compliant
+  // provider, so nothing here is Keycloak-specific.
+  if (opts && opts.maxAge != null) params.set('max_age', String(opts.maxAge));
+
   let endpoint = doc.authorization_endpoint;
   if (opts && opts.register) {
     const target = registrationTarget(provider, doc);

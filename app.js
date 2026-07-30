@@ -389,9 +389,34 @@ async function apiRequest(method, path, body) {
   const r = await fetch(baseUrl + path, opts);
   if (!r.ok) {
     const err = await r.json().catch(() => ({}));
+
+    // The server refuses irreversible actions on a session that authenticated a while
+    // ago. Send the user back through the provider with reauth=1, which re-prompts
+    // even though the provider's own session is still valid. Handled centrally so no
+    // individual caller has to remember this exists.
+    if (r.status === 403 && err.code === 'reauth_required') {
+      const providerId = await firstProviderId();
+      if (providerId) {
+        toast('Confirm it is you — signing in again.', 'info');
+        setTimeout(() => { window.location.href = `${baseUrl}/api/auth/${providerId}/start?reauth=1`; }, 900);
+        throw new Error(err.error || 'Re-authentication required.');
+      }
+    }
     throw new Error(err.error || `HTTP ${r.status}`);
   }
   return r.json();
+}
+
+// Cached: the provider list does not change while the page is open, and this runs on
+// an error path where a second round trip would delay the redirect.
+let _providerIdCache;
+async function firstProviderId() {
+  if (_providerIdCache !== undefined) return _providerIdCache;
+  try {
+    const d = await (await fetch(`${baseUrl}/api/auth/providers`)).json();
+    _providerIdCache = (d.providers && d.providers[0] && d.providers[0].id) || null;
+  } catch (_) { _providerIdCache = null; }
+  return _providerIdCache;
 }
 
 const api = {

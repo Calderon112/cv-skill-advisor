@@ -160,12 +160,35 @@ function saveStorage() {
   }
 }
 
-// All state access goes through here. Row-oriented on purpose, so step 2 can swap the
-// internals for SQL without touching a single caller. `getStore` is a function rather
-// than the object itself because loadStorage() REPLACES `storage` — capturing it once
-// would leave the repo pointing at the pre-load object for ever.
-const { createRepo } = require('./server/repo');
-const repo = createRepo({ getStore: () => storage, persist: saveStorage });
+// All state access goes through here. Row-oriented on purpose, so the backend can be
+// swapped without touching a caller. `getStore` is a function rather than the object
+// itself because loadStorage() REPLACES `storage` — capturing it once would leave the
+// repo pointing at the pre-load object for ever.
+//
+// STORAGE_BACKEND=postgres selects the SQL implementation. Callers always `await`, so
+// they work with either: awaiting a plain value is a no-op. That is what lets one code
+// path serve a laptop running on a JSON file and a server running on Postgres.
+//
+// This variable used to appear only in docker-compose.prod.yml and was read nowhere, so
+// setting it to "sqlite" in production changed nothing and the app kept writing a JSON
+// file while looking configured. It is real now.
+const STORAGE_BACKEND = String(process.env.STORAGE_BACKEND || 'json').toLowerCase();
+let repo;
+if (STORAGE_BACKEND === 'postgres') {
+  const url = process.env.DATABASE_URL;
+  if (!url) {
+    console.error('FATAL: STORAGE_BACKEND=postgres but DATABASE_URL is not set.');
+    console.error('       Refusing to start rather than silently falling back to a JSON file —');
+    console.error('       that fallback is how a deployment ends up storing accounts somewhere');
+    console.error('       nobody is backing up.');
+    process.exit(1);
+  }
+  const { createPostgresRepo } = require('./server/repo-postgres');
+  repo = createPostgresRepo({ connectionString: url, ssl: process.env.DATABASE_SSL === '1' });
+} else {
+  const { createRepo } = require('./server/repo');
+  repo = createRepo({ getStore: () => storage, persist: saveStorage });
+}
 
 // Usernames listed here get the admin role, which is what gates /api/admin/db.
 // Env-driven so nobody can grant themselves admin by editing their own record.
@@ -175,10 +198,10 @@ const adminUsernames = new Set(
 
 // `meta` records how and from where the session was opened, so the account page
 // can show "Windows · Chrome · signed in with Keycloak" and let the user revoke it.
-function createToken(username, meta) {
+async function createToken(username, meta) {
   const token = crypto.randomBytes(24).toString('hex');
   const expires = Date.now() + 24 * 60 * 60 * 1000;
-  repo.sessions.create(token, {
+  await repo.sessions.create(token, {
     username,
     created: Date.now(),
     expires,
@@ -195,17 +218,17 @@ function createToken(username, meta) {
   return token;
 }
 
-function validateToken(token) {
+async function authenticate(token) {
   if (!token) return null;
-  const session = repo.sessions.get(token);
+  const session = await repo.sessions.get(token);
   if (!session) return null;
   if (session.expires && Date.now() > session.expires) {
-    repo.sessions.delete(token);
+    await repo.sessions.delete(token);
     return null;
   }
   // Throttled: without this every authenticated request would rewrite the store.
   if (!session.lastSeen || Date.now() - session.lastSeen > 60000) {
-    repo.sessions.touch(token, { lastSeen: Date.now() });
+    await repo.sessions.touch(token, { lastSeen: Date.now() });
     saveStorage();
   }
   return session.username;
@@ -246,27 +269,23 @@ function validateBirthDate(raw) {
 
 // Turn an email into a free username. New accounts never type one — they sign in
 // with their email — but the rest of the app keys everything on username.
-function usernameFromEmail(mail) {
+async function usernameFromEmail(mail) {
   const base = String(mail || '').split('@')[0].toLowerCase().replace(/[^a-z0-9._-]/g, '') || 'user';
   let username = base;
-  for (let i = 2; getUser(username); i++) username = `${base}${i}`;
+  for (let i = 2; await getUser(username); i++) username = `${base}${i}`;
   return username;
 }
 
 // ── Email confirmation ──────────────────────────────────────────────────────
-function createEmailToken(username, address) {
-  if (!storage.emailTokens) storage.emailTokens = {};
+async function createEmailToken(username, address) {
   // One pending confirmation per account: issuing a new link invalidates the old.
-  for (const [t, v] of Object.entries(storage.emailTokens)) {
-    if (v.username === username) delete storage.emailTokens[t];
-  }
+  await repo.emailTokens.deleteForUser(username);
   const token = crypto.randomBytes(24).toString('hex');
-  storage.emailTokens[token] = {
+  await repo.emailTokens.create(token, {
     username,
     email: address,
     expires: Date.now() + 24 * 60 * 60 * 1000,
-  };
-  saveStorage();
+  });
   return token;
 }
 
@@ -277,7 +296,7 @@ async function sendConfirmationEmail(user, address) {
   if (!email.isAvailable()) {
     return { sent: false, reason: 'No email provider configured (RESEND_API_KEY is empty).' };
   }
-  const token = createEmailToken(user.username, address);
+  const token = await createEmailToken(user.username, address);
   const link = `${publicBaseUrl()}/api/auth/confirm?token=${token}`;
   try {
     await email.sendEmail({
@@ -306,7 +325,7 @@ async function sendConfirmationEmail(user, address) {
 // cannot hide inside a route body.
 const { createGuards } = require('./server/http-guards');
 const guards = createGuards({
-  validateToken: (t) => validateToken(t),
+  authenticate:  (t) => authenticate(t),
   getToken:      (r) => getToken(r),
   publicBaseUrl: () => publicBaseUrl(),
   publicDir,
@@ -387,10 +406,13 @@ function requestMeta(req, via) {
   };
 }
 
-// Claim the store before reading it, so a second instance never even loads a copy it
-// would later write back over the first one's changes.
-acquireStorageLock();
-loadStorage();
+// The JSON backend keeps everything in one process-local file, so a second instance
+// would overwrite the first. Postgres is the shared store this refactor exists for —
+// several instances are the point there, and the lock would prevent exactly that.
+if (STORAGE_BACKEND !== 'postgres') {
+  acquireStorageLock();
+  loadStorage();
+}
 
 const BUNDES_API_KEY       = process.env.BUNDES_API_KEY  || 'jobboerse-jobsuche';
 const NEWPLAN_API_KEY      = process.env.NEWPLAN_API_KEY || '';  // set in .env (never hardcode keys)
@@ -1238,12 +1260,52 @@ function getToken(req) {
   return match ? match[1] : null;
 }
 
-function isAuthorized(req) {
-  return validateToken(getToken(req)) !== null;
+// ── Step-up authentication ──────────────────────────────────────────────────
+//
+// Separation of privilege: a valid session was the ONLY condition for deleting an
+// account, changing a password or signing every other device out. A stolen token —
+// a borrowed laptop, an unlocked screen — was therefore enough to destroy someone's
+// data outright.
+//
+// These actions now need two things: a valid session AND proof that the person
+// authenticated recently. Ordinary use is untouched; only the irreversible operations
+// ask again.
+const FRESH_AUTH_MS = 10 * 60 * 1000;
+
+/**
+ * @returns the username when the session is fresh enough, otherwise null — having
+ *          already answered 403 with a code the front end can act on.
+ */
+async function requireFreshAuth(req, res) {
+  const token = getToken(req);
+  const username = await authenticate(token);
+  if (!username) { sendJson(res, 401, { error: 'Login required' }); return null; }
+
+  const session = await repo.sessions.get(token);
+  const authAt = (session && session.created) || 0;
+  const age = Date.now() - authAt;
+  if (age > FRESH_AUTH_MS) {
+    sendJson(res, 403, {
+      error: 'Please sign in again to confirm this action.',
+      code: 'reauth_required',
+      // The front end turns this into an OIDC request with max_age=0, which makes the
+      // provider re-prompt even though its own session is still valid.
+      authenticatedMinutesAgo: Math.floor(age / 60000),
+    });
+    return null;
+  }
+  return username;
 }
 
-function getUser(username) {
-  const data = storage.users[username] || USERS.find(u => u.username === username);
+async function isAuthorized(req) {
+  // Parenthesised on purpose: `await a() !== null` parses as `await (a() !== null)`,
+  // which compares a Promise to null — always true, so every caller would have been
+  // treated as authorised.
+  return (await authenticate(getToken(req))) !== null;
+}
+
+async function getUser(username) {
+  const data = await repo.users.get(username) || USERS.find(u => u.username === username);
   if (!data) return null;
   return { username, ...data }; // always include the username field
 }
@@ -1273,56 +1335,43 @@ function normalizeUser(user) {
 
 // Merge-write: a full overwrite here would drop `providers` when someone changes
 // their password, and drop `password` when they link an identity provider.
-function patchUser(username, patch) {
-  const current = storage.users[username] || {};
-  storage.users[username] = { ...current, ...patch };
-  saveStorage();
+async function patchUser(username, patch) {
+  await repo.users.patch(username, patch);
   return getUser(username);
 }
 
-function saveUser(username, password, name, extra) {
-  storage.users[username] = {
+async function saveUser(username, password, name, extra) {
+  await repo.users.put(username, {
     ...(extra || {}),
     password: password ? hashPassword(password) : '',
     name,
     createdAt: new Date().toISOString(),
-  };
-  saveStorage();
+  });
 }
 
-function findUserByEmail(email) {
-  const needle = String(email || '').trim().toLowerCase();
-  if (!needle) return null;
-  for (const [username, data] of Object.entries(storage.users || {})) {
-    if (String(data.email || '').trim().toLowerCase() === needle) return normalizeUser({ username, ...data });
-  }
-  return null;
+async function findUserByEmail(email) {
+  const hit = await repo.users.findByEmail(email);
+  return hit ? normalizeUser(hit) : null;
 }
 
 // Find the account already linked to this IdP subject. `sub` is the only stable
 // identifier — emails and usernames change at the provider, `sub` does not.
-function findUserByProviderSub(providerId, sub) {
+async function findUserByProviderSub(providerId, sub) {
   if (!sub) return null;
-  for (const [username, data] of Object.entries(storage.users || {})) {
-    if (data.providers && data.providers[providerId] && data.providers[providerId].sub === sub) {
-      return normalizeUser({ username, ...data });
-    }
-  }
-  return null;
+  const hit = await repo.users.findByProviderSub(providerId, sub);
+  return hit ? normalizeUser(hit) : null;
 }
 
 // Keyed by username, not by session token. Keying it by token meant the CV text a
 // user saved was reachable only from the exact session that saved it: sign out, sign
 // back in, and it was gone — while the old entry stayed in storage.json forever,
 // since nothing removes a profile when its token expires.
-function getProfileText(username) {
-  return (username && storage.profiles[username]) || '';
+async function getProfileText(username) {
+  return repo.profiles.get(username);
 }
 
-function saveProfileText(username, profile) {
-  if (!username) return;
-  storage.profiles[username] = profile;
-  saveStorage();
+async function saveProfileText(username, profile) {
+  await repo.profiles.set(username, profile);
 }
 
 function extractBundesJobFields(job, searchParams) {
@@ -2266,7 +2315,10 @@ const server = http.createServer(async (req, res) => {
   // Before dispatch, so no route can be added without passing through them.
   // Order matters: refuse anonymous callers before spending anything on them, and
   // count the rate limit against an identified session rather than a shared IP.
-  if (enforceAuth(req, res, parsedUrl.pathname)) return;
+  // await matters here: enforceAuth became async when session lookup became a database
+  // read, and an un-awaited call returns a Promise, which is always truthy — every
+  // protected route would answer 401 to everyone.
+  if (await enforceAuth(req, res, parsedUrl.pathname)) return;
   if (enforceRateLimit(req, res, parsedUrl.pathname)) return;
   if (enforceBodyLimit(req, res, parsedUrl.pathname)) return;
 
@@ -2322,14 +2374,14 @@ const server = http.createServer(async (req, res) => {
 
       // The email is the login identifier now, so a duplicate would make one of
       // the two accounts unreachable.
-      if (findUserByEmail(address)) {
+      if (await findUserByEmail(address)) {
         sendJson(res, 409, { error: 'An account with that email already exists.' });
         return;
       }
 
       const name = `${firstName} ${lastName}`;
-      const username = usernameFromEmail(address);
-      saveUser(username, password, name, {
+      const username = await usernameFromEmail(address);
+      await saveUser(username, password, name, {
         firstName, lastName,
         email: address,
         phone,
@@ -2337,7 +2389,7 @@ const server = http.createServer(async (req, res) => {
         emailVerified: false,
       });
 
-      const token = createToken(username, requestMeta(req, 'password'));
+      const token = await createToken(username, requestMeta(req, 'password'));
       const mail = await sendConfirmationEmail({ username, name }, address);
       sendJson(res, 200, {
         token,
@@ -2354,30 +2406,29 @@ const server = http.createServer(async (req, res) => {
   if (parsedUrl.pathname === '/api/auth/confirm' && req.method === 'GET') {
     const token = parsedUrl.searchParams.get('token') || '';
     const back = (frag) => { res.writeHead(302, { Location: `/#${frag}` }); res.end(); };
-    const entry = storage.emailTokens && storage.emailTokens[token];
+    const entry = await repo.emailTokens.get(token);
     if (!entry) { back('confirm_error=' + encodeURIComponent('This confirmation link is invalid or has already been used.')); return; }
-    // Single-use, whatever happens next.
-    delete storage.emailTokens[token];
+    // Single-use, whatever happens next. The delete persists on its own, so the two
+    // early exits below no longer need their own saveStorage() call.
+    await repo.emailTokens.delete(token);
     if (entry.expires < Date.now()) {
-      saveStorage();
       back('confirm_error=' + encodeURIComponent('This confirmation link has expired. Request a new one from My Account.'));
       return;
     }
-    if (!getUser(entry.username)) {
-      saveStorage();
+    if (!await getUser(entry.username)) {
       back('confirm_error=' + encodeURIComponent('That account no longer exists.'));
       return;
     }
-    patchUser(entry.username, { emailVerified: true, email: entry.email });
+    await patchUser(entry.username, { emailVerified: true, email: entry.email });
     back('confirmed=' + encodeURIComponent(entry.email));
     return;
   }
 
   if (parsedUrl.pathname === '/api/account/resend-confirmation' && req.method === 'POST') {
     (async () => {
-      const username = validateToken(getToken(req));
+      const username = await authenticate(getToken(req));
       if (!username) { sendJson(res, 401, { error: 'Login required' }); return; }
-      const user = normalizeUser(getUser(username));
+      const user = normalizeUser(await getUser(username));
       if (!user.email) { sendJson(res, 400, { error: 'Add an email address first.' }); return; }
       if (user.emailVerified) { sendJson(res, 400, { error: 'Your email is already confirmed.' }); return; }
       const mail = await sendConfirmationEmail(user, user.email);
@@ -2391,20 +2442,20 @@ const server = http.createServer(async (req, res) => {
     if (!localAuthEnabled()) { rejectLocalAuth(res); return; }
     let body = '';
     req.on('data', chunk => { body += chunk; });
-    req.on('end', () => {
+    req.on('end', async () => {
       try {
         const { username, password } = JSON.parse(body || '{}');
         // New accounts never chose a username — it is derived from their email —
         // so the identifier field accepts either. Username first, so a legacy
         // account is never shadowed by someone else's email.
         const identifier = String(username || '').trim();
-        const user = getUser(identifier)
-          || (identifier.includes('@') ? findUserByEmail(identifier) : null);
+        const user = await getUser(identifier)
+          || (identifier.includes('@') ? await findUserByEmail(identifier) : null);
         if (!user || !user.password || !verifyPassword(password, user.password)) {
           sendJson(res, 401, { error: 'Invalid credentials' });
           return;
         }
-        const token = createToken(user.username, requestMeta(req, 'password'));
+        const token = await createToken(user.username, requestMeta(req, 'password'));
         sendJson(res, 200, { token, user: { name: user.name, username: user.username } });
       } catch (error) {
         sendJson(res, 400, { error: 'Invalid request payload' });
@@ -2457,7 +2508,13 @@ const server = http.createServer(async (req, res) => {
   if (startMatch && req.method === 'GET') {
     (async () => {
       try {
-        const url = await oidc.buildAuthUrl(startMatch[1], oidcRedirectUri(), {});
+        // ?reauth=1 asks the provider to re-prompt even if its session is live. Used
+        // by the front end when the server answers `reauth_required` on a destructive
+        // action. Only the flag is honoured, never an arbitrary max_age from the
+        // query string, so a caller cannot ask for a WEAKER check than intended.
+        const reauth = parsedUrl.searchParams.get('reauth') === '1';
+        const url = await oidc.buildAuthUrl(startMatch[1], oidcRedirectUri(),
+          reauth ? { maxAge: 0 } : {});
         res.writeHead(302, { Location: url });
         res.end();
       } catch (e) {
@@ -2475,7 +2532,7 @@ const server = http.createServer(async (req, res) => {
   const linkMatch = parsedUrl.pathname.match(/^\/api\/auth\/([a-z0-9_-]+)\/link-start$/i);
   if (linkMatch && req.method === 'POST') {
     (async () => {
-      const username = validateToken(getToken(req));
+      const username = await authenticate(getToken(req));
       if (!username) { sendJson(res, 401, { error: 'Login required' }); return; }
       try {
         const url = await oidc.buildAuthUrl(linkMatch[1], oidcRedirectUri(), { linkTo: username });
@@ -2498,9 +2555,9 @@ const server = http.createServer(async (req, res) => {
 
         // ── Linking an identity to the signed-in account ──
         if (identity.linkTo) {
-          const owner = getUser(identity.linkTo);
+          const owner = await getUser(identity.linkTo);
           if (!owner) { back(`auth_error=${encodeURIComponent('The account to link to no longer exists')}`); return; }
-          const clash = findUserByProviderSub(identity.providerId, identity.sub);
+          const clash = await findUserByProviderSub(identity.providerId, identity.sub);
           if (clash && clash.username !== identity.linkTo) {
             back(`auth_error=${encodeURIComponent(`That ${identity.providerLabel} identity is already linked to another account`)}`);
             return;
@@ -2509,14 +2566,14 @@ const server = http.createServer(async (req, res) => {
           providers[identity.providerId] = {
             sub: identity.sub, email: identity.email, linkedAt: new Date().toISOString(),
           };
-          patchUser(identity.linkTo, { providers });
+          await patchUser(identity.linkTo, { providers });
           back(`linked=${encodeURIComponent(identity.providerId)}`);
           return;
         }
 
         // ── Signing in ──
         // 1. Known subject → that account. `sub` is the stable identifier.
-        let user = findUserByProviderSub(identity.providerId, identity.sub);
+        let user = await findUserByProviderSub(identity.providerId, identity.sub);
 
         // The provider owns the verification of the addresses it asserts, so refresh
         // our copy on every sign-in. Without this, someone who confirms their email
@@ -2524,11 +2581,11 @@ const server = http.createServer(async (req, res) => {
         // good — and under AUTH_MODE=oidc-only there is no local confirmation flow
         // left to fix it with.
         if (user && identity.email) {
-          const holder = findUserByEmail(identity.email);
+          const holder = await findUserByEmail(identity.email);
           const freeToTake = !holder || holder.username === user.username;
           if (freeToTake && (user.email !== identity.email || user.emailVerified !== identity.emailVerified)) {
-            patchUser(user.username, { email: identity.email, emailVerified: identity.emailVerified });
-            user = normalizeUser(getUser(user.username));
+            await patchUser(user.username, { email: identity.email, emailVerified: identity.emailVerified });
+            user = normalizeUser(await getUser(user.username));
           }
         }
 
@@ -2541,13 +2598,13 @@ const server = http.createServer(async (req, res) => {
         //    real owner signing in with Google would then land in the impostor's
         //    account. Requiring our own confirmation closes that.
         if (!user && identity.email && identity.emailVerified) {
-          const byEmail = findUserByEmail(identity.email);
+          const byEmail = await findUserByEmail(identity.email);
           if (byEmail && byEmail.emailVerified) {
             const providers = { ...(byEmail.providers || {}) };
             providers[identity.providerId] = {
               sub: identity.sub, email: identity.email, linkedAt: new Date().toISOString(),
             };
-            patchUser(byEmail.username, { providers });
+            await patchUser(byEmail.username, { providers });
             user = normalizeUser({ ...getUser(byEmail.username) });
           }
         }
@@ -2558,8 +2615,8 @@ const server = http.createServer(async (req, res) => {
           const base = (identity.preferredUsername || identity.email.split('@')[0] || 'user')
             .toLowerCase().replace(/[^a-z0-9._-]/g, '') || 'user';
           let username = base;
-          for (let i = 2; getUser(username); i++) username = `${base}${i}`;
-          saveUser(username, '', identity.name || username, {
+          for (let i = 2; await getUser(username); i++) username = `${base}${i}`;
+          await saveUser(username, '', identity.name || username, {
             email: identity.email,
             // Carry the provider's verdict across. Defaulting to false would mark
             // every provider-created account unconfirmed even when the provider had
@@ -2571,10 +2628,10 @@ const server = http.createServer(async (req, res) => {
               },
             },
           });
-          user = normalizeUser(getUser(username));
+          user = normalizeUser(await getUser(username));
         }
 
-        const token = createToken(user.username, {
+        const token = await createToken(user.username, {
           ...requestMeta(req, identity.providerId),
           providerId: identity.providerId,
           idToken: identity.idToken,
@@ -2604,16 +2661,16 @@ const server = http.createServer(async (req, res) => {
   if (parsedUrl.pathname === '/api/auth/logout' && req.method === 'POST') {
     (async () => {
       const token = getToken(req);
-      const username = validateToken(token);
+      const username = await authenticate(token);
       if (!username) { sendJson(res, 401, { error: 'Login required' }); return; }
 
-      const session = repo.sessions.get(token) || {};
+      const session = await repo.sessions.get(token) || {};
       const providerId = session.providerId || '';
       const idToken = session.idToken || '';
 
       // Local session dies first and unconditionally: if building the provider URL
       // fails, the user must still end up signed out here.
-      repo.sessions.delete(token);
+      await repo.sessions.delete(token);
 
       let url = null;
       if (providerId) {
@@ -2631,9 +2688,9 @@ const server = http.createServer(async (req, res) => {
 
   // ── Account / identity manager ───────────────────────────────────────────
   if (parsedUrl.pathname === '/api/account' && req.method === 'GET') {
-    const username = validateToken(getToken(req));
+    const username = await authenticate(getToken(req));
     if (!username) { sendJson(res, 401, { error: 'Login required' }); return; }
-    const user = normalizeUser(getUser(username));
+    const user = normalizeUser(await getUser(username));
     if (!user) { sendJson(res, 404, { error: 'Account not found' }); return; }
     const current = getToken(req);
     const now = Date.now();
@@ -2661,7 +2718,7 @@ const server = http.createServer(async (req, res) => {
       })),
       // Offer only providers that are configured and not already linked.
       linkable: oidc.publicProviders().filter(p => !user.providers[p.id]),
-      sessions: repo.sessions.listForUser(username, now)
+      sessions: (await repo.sessions.listForUser(username, now))
         .map(({ token: tok, ...s }) => ({
           id: tok.slice(0, 12),          // enough to revoke, never the whole token
           current: tok === current,
@@ -2683,7 +2740,7 @@ const server = http.createServer(async (req, res) => {
 
   if (parsedUrl.pathname === '/api/account' && req.method === 'PATCH') {
     (async () => {
-      const username = validateToken(getToken(req));
+      const username = await authenticate(getToken(req));
       if (!username) { sendJson(res, 401, { error: 'Login required' }); return; }
       const body = await readJsonBody(req);
       if (!body) { sendJson(res, 400, { error: 'Invalid request payload' }); return; }
@@ -2700,20 +2757,20 @@ const server = http.createServer(async (req, res) => {
           sendJson(res, 400, { error: 'That does not look like an email address' }); return;
         }
         // Emails identify accounts for provider auto-linking, so they must be unique.
-        const holder = findUserByEmail(email);
+        const holder = await findUserByEmail(email);
         if (email && holder && holder.username !== username) {
           sendJson(res, 409, { error: 'Another account already uses that email' }); return;
         }
         patch.email = email;
         // A new address is unproven. Keeping the old verified flag would let anyone
         // claim a confirmed status for an address they do not control.
-        const before = normalizeUser(getUser(username));
+        const before = normalizeUser(await getUser(username));
         if (email !== before.email) patch.emailVerified = false;
       }
       if (!Object.keys(patch).length) { sendJson(res, 400, { error: 'Nothing to update' }); return; }
 
-      patchUser(username, patch);
-      const user = normalizeUser(getUser(username));
+      await patchUser(username, patch);
+      const user = normalizeUser(await getUser(username));
       sendJson(res, 200, { ok: true, name: user.name, email: user.email });
     })();
     return;
@@ -2724,24 +2781,32 @@ const server = http.createServer(async (req, res) => {
     // closes: a credential that works even after the provider disables the account.
     if (!localAuthEnabled()) { rejectLocalAuth(res); return; }
     (async () => {
-      const username = validateToken(getToken(req));
+      const username = await authenticate(getToken(req));
       if (!username) { sendJson(res, 401, { error: 'Login required' }); return; }
       const body = await readJsonBody(req);
       if (!body) { sendJson(res, 400, { error: 'Invalid request payload' }); return; }
-      const user = normalizeUser(getUser(username));
+      const user = normalizeUser(await getUser(username));
       const next = String(body.newPassword || '');
       if (next.length < 6) { sendJson(res, 400, { error: 'New password must be at least 6 characters' }); return; }
       // An account created through a provider has no password yet, so there is
-      // nothing to confirm — it is setting one, not changing one.
+      // nothing to confirm — it is setting one, not changing one. That is precisely
+      // the case with no second factor: for an account that HAS a password, typing
+      // the old one is the second condition, but here a stolen session alone could
+      // plant a credential that keeps working after the provider disables the user.
+      // So the missing condition is supplied by requiring a recent authentication.
+      if (!user.password) {
+        const fresh = await requireFreshAuth(req, res);
+        if (!fresh) return;
+      }
       if (user.password && !verifyPassword(String(body.currentPassword || ''), user.password)) {
         sendJson(res, 403, { error: 'Current password is incorrect' }); return;
       }
-      patchUser(username, { password: hashPassword(next) });
+      await patchUser(username, { password: hashPassword(next) });
 
       // Changing a password invalidates every other session — that is the whole
       // point of changing it after a suspected compromise.
       const current = getToken(req);
-      const revoked = repo.sessions.revokeForUser(username, { except: current });
+      const revoked = await repo.sessions.revokeForUser(username, { except: current });
       sendJson(res, 200, { ok: true, revoked });
     })();
     return;
@@ -2750,7 +2815,7 @@ const server = http.createServer(async (req, res) => {
   // Revoke one session by its short id, or every session except this one.
   const sessionMatch = parsedUrl.pathname.match(/^\/api\/account\/sessions(?:\/([a-f0-9]{6,64}))?$/i);
   if (sessionMatch && req.method === 'DELETE') {
-    const username = validateToken(getToken(req));
+    const username = await authenticate(getToken(req));
     if (!username) { sendJson(res, 401, { error: 'Login required' }); return; }
     const current = getToken(req);
     const wanted = sessionMatch[1];
@@ -2758,7 +2823,7 @@ const server = http.createServer(async (req, res) => {
     // session — including the caller's own, which is how "sign out this device" works
     // from the account page. Without one, revoke every session except the caller's.
     // revokeForUser never crosses accounts in either case.
-    const revoked = repo.sessions.revokeForUser(
+    const revoked = await repo.sessions.revokeForUser(
       username,
       wanted ? { shortIdOnly: wanted } : { except: current },
     );
@@ -2768,9 +2833,9 @@ const server = http.createServer(async (req, res) => {
 
   const unlinkMatch = parsedUrl.pathname.match(/^\/api\/account\/providers\/([a-z0-9_-]+)$/i);
   if (unlinkMatch && req.method === 'DELETE') {
-    const username = validateToken(getToken(req));
+    const username = await authenticate(getToken(req));
     if (!username) { sendJson(res, 401, { error: 'Login required' }); return; }
-    const user = normalizeUser(getUser(username));
+    const user = normalizeUser(await getUser(username));
     const id = unlinkMatch[1].toLowerCase();
     if (!user.providers[id]) { sendJson(res, 404, { error: 'That provider is not linked' }); return; }
     // Refuse to remove the last way in. Without this, unlinking the only provider
@@ -2781,17 +2846,19 @@ const server = http.createServer(async (req, res) => {
     }
     const providers = { ...user.providers };
     delete providers[id];
-    patchUser(username, { providers });
+    await patchUser(username, { providers });
     sendJson(res, 200, { ok: true });
     return;
   }
 
   if (parsedUrl.pathname === '/api/account' && req.method === 'DELETE') {
-    const username = validateToken(getToken(req));
-    if (!username) { sendJson(res, 401, { error: 'Login required' }); return; }
+    // The most irreversible action in the app: a fresh authentication is required,
+    // not merely a session that was opened at some point today.
+    const username = await requireFreshAuth(req, res);
+    if (!username) return;
     // One call, so "delete my account" cannot forget a collection. It previously
     // listed five by hand; a sixth added later would have been left behind.
-    repo.deleteAccount(username);
+    await repo.deleteAccount(username);
     sendJson(res, 200, { ok: true });
     return;
   }
@@ -3093,7 +3160,7 @@ const server = http.createServer(async (req, res) => {
   // arbitrary mail to arbitrary recipients as you. Three gates now.
   if (parsedUrl.pathname === '/api/send-email' && req.method === 'POST') {
     // 1. Signed in.
-    const sender = validateToken(getToken(req));
+    const sender = await authenticate(getToken(req));
     if (!sender) { sendJson(res, 401, { error: 'Login required to send email' }); return; }
     // 2. Metered. A compromised account should not be able to run a campaign.
     if (rateLimited(req, 'email', 5, 60 * 60 * 1000)) {
@@ -3134,7 +3201,7 @@ const server = http.createServer(async (req, res) => {
     // validateToken, not merely "a token was sent": the previous check accepted any
     // non-empty Authorization header, so an unauthenticated caller could write a
     // profile. Harmless while the key was the token itself, not once it is a username.
-    const username = validateToken(getToken(req));
+    const username = await authenticate(getToken(req));
     if (!username) {
       sendJson(res, 401, { error: 'Authorization required to save profile' });
       return;
@@ -3142,7 +3209,7 @@ const server = http.createServer(async (req, res) => {
 
     let body = '';
     req.on('data', chunk => { body += chunk; });
-    req.on('end', () => {
+    req.on('end', async () => {
       try {
         const { profile } = JSON.parse(body || '{}');
         if (!profile || typeof profile !== 'string') {
@@ -3150,7 +3217,7 @@ const server = http.createServer(async (req, res) => {
           return;
         }
 
-        saveProfileText(username, profile.trim());
+        await saveProfileText(username, profile.trim());
         sendJson(res, 200, { status: 'ok', profileSaved: true });
       } catch (error) {
         sendJson(res, 400, { error: 'Invalid request payload' });
@@ -3162,7 +3229,7 @@ const server = http.createServer(async (req, res) => {
   if (parsedUrl.pathname === '/api/jobs' && req.method === 'GET') {
     // Job search is public — no login required. An invalid or expired token simply
     // means no profile to match against, not an error.
-    const profileText = getProfileText(validateToken(getToken(req)));
+    const profileText = await getProfileText(await authenticate(getToken(req)));
     const region   = parsedUrl.searchParams.get('region')   || 'germany';
     const sector   = parsedUrl.searchParams.get('sector')   || 'all';
     const platform = parsedUrl.searchParams.get('platform') || 'bundesagentur';
@@ -3388,20 +3455,20 @@ const server = http.createServer(async (req, res) => {
 
   // ── Admin DB viewer ──────────────────────────────────────────────────────
   if (parsedUrl.pathname === '/api/admin/db' && req.method === 'GET') {
-    const username = validateToken(getToken(req));
+    const username = await authenticate(getToken(req));
     if (!username) { sendJson(res, 401, { error: 'Login required' }); return; }
     // This returns every account and every saved application in the system. It used
     // to require only *a* login, so any registered user could read all of it. Admin
     // is granted by ADMIN_USERS in .env, never by a field a user can edit.
-    if (normalizeUser(getUser(username)).role !== 'admin') {
+    if (normalizeUser(await getUser(username)).role !== 'admin') {
       sendJson(res, 403, { error: 'Admin only. Add your username to ADMIN_USERS in .env.' });
       return;
     }
     const now = Date.now();
     // Counts only — the repo never hands session tokens to this endpoint.
-    const sessionStats = repo.sessions.stats(now);
+    const sessionStats = await repo.sessions.stats(now);
     const sessionsByUser = sessionStats.byUser;
-    const users = repo.users.entries().map(([u, d]) => ({
+    const users = (await repo.users.entries()).map(([u, d]) => ({
       username: u,
       name: d.name,
       email: d.email || '',
@@ -3417,7 +3484,7 @@ const server = http.createServer(async (req, res) => {
       activeSessions: sessionsByUser[u] || 0,
       online: (sessionsByUser[u] || 0) > 0,
     }));
-    const applications   = repo.applications.entries().map(([u, apps]) => ({
+    const applications   = (await repo.applications.entries()).map(([u, apps]) => ({
       user: u, count: apps.length, apps: apps.map(a => ({ title: a.title, company: a.company, status: a.status }))
     }));
     sendJson(res, 200, {
@@ -3536,7 +3603,7 @@ const server = http.createServer(async (req, res) => {
 
   // ── Observability: aggregate LLM/embedding token usage + estimated cost ───
   if (parsedUrl.pathname === '/api/usage' && req.method === 'GET') {
-    if (!validateToken(getToken(req))) { sendJson(res, 401, { error: 'Authorization required' }); return; }
+    if (!await authenticate(getToken(req))) { sendJson(res, 401, { error: 'Authorization required' }); return; }
     sendJson(res, 200, usage.snapshot());
     return;
   }
@@ -3695,68 +3762,60 @@ const server = http.createServer(async (req, res) => {
 
   // ── Applications (Tracker Agent) ────────────────────────────────────────
   if (parsedUrl.pathname === '/api/applications' && req.method === 'GET') {
-    const username = validateToken(getToken(req));
+    const username = await authenticate(getToken(req));
     if (!username) { sendJson(res, 401, { error: 'Authorization required' }); return; }
-    const apps = storage.applications[username] || [];
-    sendJson(res, 200, { applications: apps });
+    sendJson(res, 200, { applications: await repo.applications.listFor(username) });
     return;
   }
 
   if (parsedUrl.pathname === '/api/applications' && req.method === 'POST') {
-    const username = validateToken(getToken(req));
+    const username = await authenticate(getToken(req));
     if (!username) { sendJson(res, 401, { error: 'Authorization required' }); return; }
     let body = '';
     req.on('data', chunk => { body += chunk; });
-    req.on('end', () => {
+    req.on('end', async () => {
       try {
         const app = JSON.parse(body || '{}');
         if (!app.title || !app.company) { sendJson(res, 400, { error: 'title and company are required' }); return; }
-        if (!storage.applications[username]) storage.applications[username] = [];
-        const existing = storage.applications[username].find(a => a.id === app.id);
-        if (!existing) {
-          storage.applications[username].push({ ...app, status: app.status || 'applied' });
-        }
-        saveStorage();
-        sendJson(res, 200, { applications: storage.applications[username] });
+        // Idempotent: re-saving the same id must not duplicate the card.
+        const existing = (await repo.applications.listFor(username)).some(a => a.id === app.id);
+        if (!existing) await repo.applications.add(username, { ...app, status: app.status || 'applied' });
+        sendJson(res, 200, { applications: await repo.applications.listFor(username) });
       } catch (_) { sendJson(res, 400, { error: 'Invalid request payload' }); }
     });
     return;
   }
 
   if (parsedUrl.pathname.startsWith('/api/applications/') && req.method === 'PUT') {
-    const username = validateToken(getToken(req));
+    const username = await authenticate(getToken(req));
     if (!username) { sendJson(res, 401, { error: 'Authorization required' }); return; }
     const id = parsedUrl.pathname.slice('/api/applications/'.length);
     let body = '';
     req.on('data', chunk => { body += chunk; });
-    req.on('end', () => {
+    req.on('end', async () => {
       try {
         const updates = JSON.parse(body || '{}');
-        if (!storage.applications[username]) { sendJson(res, 404, { error: 'Not found' }); return; }
-        storage.applications[username] = storage.applications[username].map(a =>
-          a.id === id ? { ...a, ...updates } : a
-        );
-        saveStorage();
-        sendJson(res, 200, { applications: storage.applications[username] });
+        const current = await repo.applications.listFor(username);
+        if (!current.length) { sendJson(res, 404, { error: 'Not found' }); return; }
+        await repo.applications.replaceFor(username, current.map(a => (a.id === id ? { ...a, ...updates } : a)));
+        sendJson(res, 200, { applications: await repo.applications.listFor(username) });
       } catch (_) { sendJson(res, 400, { error: 'Invalid request payload' }); }
     });
     return;
   }
 
   if (parsedUrl.pathname.startsWith('/api/applications/') && req.method === 'DELETE') {
-    const username = validateToken(getToken(req));
+    const username = await authenticate(getToken(req));
     if (!username) { sendJson(res, 401, { error: 'Authorization required' }); return; }
     const id = parsedUrl.pathname.slice('/api/applications/'.length);
-    if (storage.applications[username]) {
-      storage.applications[username] = storage.applications[username].filter(a => a.id !== id);
-      saveStorage();
-    }
-    sendJson(res, 200, { applications: storage.applications[username] || [] });
+    const current = await repo.applications.listFor(username);
+    if (current.length) await repo.applications.replaceFor(username, current.filter(a => a.id !== id));
+    sendJson(res, 200, { applications: await repo.applications.listFor(username) });
     return;
   }
 
   if (parsedUrl.pathname === '/api/newplan' && req.method === 'GET') {
-    if (!isAuthorized(req)) {
+    if (!(await isAuthorized(req))) {
       sendJson(res, 401, { error: 'Authorization required for NewPlan access' });
       return;
     }
@@ -3796,4 +3855,20 @@ function tryListen(port, attempt = 1) {
   });
 }
 
-tryListen(DEFAULT_PORT);
+// Create the schema before accepting a single request. Without this the tables only
+// exist if someone happened to run a migration by hand — the first deployment would
+// answer 500 to everything, or worse, look healthy on /api/status while every write
+// failed.
+(async () => {
+  if (typeof repo.init === 'function') {
+    try {
+      await repo.init();
+      console.log(`Storage backend: ${STORAGE_BACKEND} (schema ready)`);
+    } catch (err) {
+      console.error('FATAL: could not prepare the database schema:', err.message);
+      console.error('       Check DATABASE_URL and that the server is reachable.');
+      process.exit(1);
+    }
+  }
+  tryListen(DEFAULT_PORT);
+})();

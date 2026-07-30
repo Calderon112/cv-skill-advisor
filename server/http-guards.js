@@ -14,11 +14,11 @@ const path = require('path');
 // Dependencies are injected rather than imported, so this module holds no opinion
 // about how sessions or configuration work and can be tested on its own.
 //
-// @param deps.validateToken  (token) => username | null
+// @param deps.authenticate   async (token) => username | null
 // @param deps.getToken       (req) => string
 // @param deps.publicBaseUrl  () => string
 // @param deps.publicDir      absolute path static files are resolved against
-function createGuards({ validateToken, getToken, publicBaseUrl, publicDir }) {
+function createGuards({ authenticate, getToken, publicBaseUrl, publicDir }) {
   // ── Request body limits ─────────────────────────────────────────────────────
   //
   // 23 handlers accumulated `body += chunk` with no ceiling: a single POST could grow
@@ -150,10 +150,20 @@ function createGuards({ validateToken, getToken, publicBaseUrl, publicDir }) {
     return false;
   }
 
-  /** True when this request should be refused; sends the 401 itself. */
-  function enforceAuth(req, res, pathname) {
+  /**
+   * True when this request should be refused; sends the 401 itself.
+   *
+   * ASYNC, because looking a session up is a database read once the SQL backend is
+   * in use. The caller MUST await it: an un-awaited call returns a Promise, which is
+   * always truthy, so `if (enforceAuth(...))` would refuse every request — and the
+   * mirror-image mistake inside would let every request through. That is why
+   * `validateToken` was renamed to `authenticate` in this refactor: any call site
+   * that was not updated throws ReferenceError instead of quietly returning a
+   * truthy Promise where a username was expected.
+   */
+  async function enforceAuth(req, res, pathname) {
     if (!authRequiredFor(pathname)) return false;
-    if (validateToken(getToken(req))) return false;
+    if (await authenticate(getToken(req))) return false;
     sendJson(res, 401, { error: 'Sign in to use this feature.', code: 'login_required' });
     return true;
   }
