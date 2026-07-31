@@ -1,3 +1,4 @@
+[Uploading recording-jardel_kenneTedjeu.openscreen…]()
 # CyberCareer — IT Security Job Advisor
 ### Sprint 1 · Foundation · May 2025
 
@@ -210,8 +211,210 @@ The goal: help students and professionals in cybersecurity find relevant jobs in
 understand what skills they're missing, and get a concrete plan to acquire them.
 
 **Built with:** Node.js · vanilla JavaScript · zero-build frontend
-
 ---
+
+Video: 
+
+https://github.com/user-attachments/assets/e43c8d8f-369a-4a24-b280-0e28bcbfa129
+{
+  "version": 2,
+  "media": {
+    "screenVideoPath": "C:\\Users\\benig\\AppData\\Roaming\\openscreen\\recordings\\recording-1785529253499.mp4",
+    "cursorCaptureMode": "editable-overlay"
+  },
+  "editor": {
+    "wallpaper": "/wallpapers/wallpaper1.jpg",
+    "shadowIntensity": 0,
+    "showBlur": false,
+    "showTrimWaveform": true,
+    "motionBlurAmount": 0,
+    "borderRadius": 0,
+    "padding": 50,
+    "cropRegion": {
+      "x": 0,
+      "y": 0,
+      "width": 1,
+      "height": 1
+    },
+    "zoomRegions": [
+      {
+        "id": "zoom-1",
+        "startMs": 247691,
+        "endMs": 263114,
+        "depth": 3,
+        "customScale": 1.8,
+        "focus": {
+          "cx": 0.7024431818181821,
+          "cy": 0.7975084175084174
+        },
+        "source": "auto"
+      },
+      {
+        "id": "zoom-2",
+        "startMs": 162498,
+        "endMs": 177921,
+        "depth": 3,
+        "customScale": 1.8,
+        "focus": {
+          "cx": 0.49668469551282024,
+          "cy": 0.7073539886039881
+        },
+        "source": "auto"
+      },
+      {
+        "id": "zoom-3",
+        "startMs": 202767,
+        "endMs": 218190,
+        "depth": 3,
+        "customScale": 1.8,
+        "focus": {
+          "cx": 0.036141748366013096,
+          "cy": 0.3538489469862022
+        },
+        "source": "auto"
+      },
+      {
+        "id": "zoom-4",
+        "startMs": 100936,
+        "endMs": 116359,
+        "depth": 3,
+        "customScale": 1.8,
+        "focus": {
+          "cx": 0.2525701992753622,
+          "cy": 0.26553945249597427
+        },
+        "source": "auto"
+      },
+      {
+        "id": "zoom-5",
+        "startMs": 124633,
+        "endMs": 140056,
+        "depth": 3,
+        "customScale": 1.8,
+        "focus": {
+          "cx": 0.5231707317073172,
+          "cy": 0.7724932249322495
+        },
+        "source": "auto"
+      },
+      {
+        "id": "zoom-6",
+        "startMs": 80176,
+        "endMs": 95599,
+        "depth": 3,
+        "customScale": 1.8,
+        "focus": {
+          "cx": 0.39668445121951224,
+          "cy": 0.5456865401987352
+        },
+        "source": "auto"
+      },
+      {
+        "id": "zoom-7",
+        "startMs": 143132,
+        "endMs": 158555,
+        "depth": 3,
+        "customScale": 1.8,
+        "focus": {
+          "cx": 0.4990494791666665,
+          "cy": 0.43261574074074083
+        },
+        "source": "auto"
+      },
+      {
+        "id": "zoom-8",
+        "startMs": 39123,
+        "endMs": 54546,
+        "depth": 3,
+        "customScale": 1.8,
+        "focus": {
+          "cx": 0.42484923245614065,
+          "cy": 0.5546539961013649
+        },
+        "source": "auto"
+      },
+      {
+        "id": "zoom-9",
+        "startMs": 18161,
+        "endMs": 33584,
+        "depth": 3,
+        "customScale": 1.8,
+        "focus": {
+          "cx": 0.9281387061403507,
+          "cy": 0.2699561403508773
+        },
+        "source": "auto"
+      },
+      {
+        "id": "zoom-10",
+        "startMs": 219664,
+        "endMs": 235087,
+        "depth": 3,
+        "customScale": 1.8,
+        "focus": {
+          "cx": 0.54404296875,
+          "cy": 0.706221064814815
+        },
+        "source": "auto"
+      },
+      {
+        "id": "zoom-11",
+        "startMs": 58372,
+        "endMs": 73795,
+        "depth": 3,
+        "customScale": 1.8,
+        "focus": {
+          "cx": 0.2788541666666669,
+          "cy": 0.5110802469135804
+        },
+        "source": "auto"
+      },
+      {
+        "id": "zoom-12",
+        "startMs": 0,
+        "endMs": 15423,
+        "depth": 3,
+        "customScale": 1.8,
+        "focus": {
+          "cx": 0.6836588541666666,
+          "cy": 0.8121141975308643
+        },
+        "source": "auto"
+      },
+      {
+        "id": "zoom-13",
+        "startMs": 264984,
+        "endMs": 280407,
+        "depth": 3,
+        "customScale": 1.8,
+        "focus": {
+          "cx": 0.6455965909090909,
+          "cy": 0.9960016835016833
+        },
+        "source": "auto"
+      }
+    ],
+    "autoZoomEnabled": true,
+    "autoFocusAll": false,
+    "trimRegions": [],
+    "speedRegions": [],
+    "annotationRegions": [],
+    "aspectRatio": "16:9",
+    "webcamLayoutPreset": "picture-in-picture",
+    "webcamMaskShape": "rectangle",
+    "webcamMirrored": false,
+    "webcamReactiveZoom": true,
+    "webcamSizePreset": 25,
+    "webcamPosition": null,
+    "exportQuality": "good",
+    "exportFormat": "mp4",
+    "gifFrameRate": 15,
+    "gifLoop": true,
+    "gifSizePreset": "medium",
+    "cursorTheme": "default"
+  }
+}
+
 
 ## 📄 License
 
