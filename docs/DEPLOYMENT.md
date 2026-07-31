@@ -266,7 +266,9 @@ Everything that matters lives in one PostgreSQL server: Keycloak's database hold
 the accounts and credentials, the app's holds profiles, saved jobs and generated
 documents. One dump captures both.
 
-Create `/usr/local/bin/backup-careerai.sh`:
+The script ships with the repository at
+[`scripts/backup-careerai.sh`](../scripts/backup-careerai.sh) — `git pull` and it is
+there. It is reproduced below so you can read what it does before running it as root.
 
 ```sh
 #!/bin/sh
@@ -295,11 +297,15 @@ echo "backup ok: $DEST/careerai-$STAMP.sql.gz"
 Install it:
 
 ```bash
-sudo install -m 700 backup-careerai.sh /usr/local/bin/
+sudo install -m 700 scripts/backup-careerai.sh /usr/local/bin/
 sudo /usr/local/bin/backup-careerai.sh          # run once, check it prints "backup ok"
 sudo crontab -e
 # 15 3 * * *  /usr/local/bin/backup-careerai.sh >> /var/log/careerai-backup.log 2>&1
 ```
+
+It refuses to leave a file behind on failure — an empty dump, a `pg_dumpall` error or
+a truncated archive all exit non-zero with nothing written. A backup job that fails
+silently and writes a plausible-looking file is worse than none at all.
 
 ### Restoring
 
