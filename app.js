@@ -4845,7 +4845,7 @@ function cpRenderFeeder(role) {
   el.classList.remove('hidden');
 
   if (target) $('cp-plan-btn').addEventListener('click', () => cpBuildPlan(target));
-  cpLoadCount(role.title);
+  cpLoadCount(role.title, role.salary);
 }
 
 function cpRenderDetail(role) {
@@ -4889,9 +4889,11 @@ function cpRenderDetail(role) {
       ${panel('Open positions', 'Live count from Bundesagentur für Arbeit, all of Germany.',
         `<div class="cp-figure" id="cp-count">…</div>
          <div class="cp-figure-sub" id="cp-count-note">counting…</div>
-         ${role.salary ? `<div class="cp-stat"><div class="cp-salary">${esc(role.salary)}</div>
-           <div class="cp-figure-sub">gross per year — indicative band for this level, not measured per domain</div></div>` : ''}
-         ${role.education ? `<div class="cp-stat"><div class="cp-figure-sub">Usual education<br>${esc(role.education)}</div></div>` : ''}`)}
+         <div class="cp-stat" id="cp-salary-box">
+           <div class="cp-salary" id="cp-salary">…</div>
+           <div class="cp-figure-sub" id="cp-salary-note">reading job ads…</div>
+         </div>
+         ${role.education ? `<div class="cp-stat"><div class="cp-figure-sub">Typical background at this level — not a requirement<br>${esc(role.education)}</div></div>` : ''}`)}
 
       <div id="cp-plan" class="hidden"></div>
     </div>`;
@@ -4899,7 +4901,7 @@ function cpRenderDetail(role) {
 
   $('cp-add-compare').addEventListener('click', () => { cpToggleCompare(role.title); cpRenderDetail(role); });
   $('cp-plan-btn').addEventListener('click', () => cpBuildPlan(role));
-  cpLoadCount(role.title);
+  cpLoadCount(role.title, role.salary);
 }
 
 // Ladder titles are constructed ("Junior X", "X (Tier 1)", "Senior X", "X Architect"),
@@ -4917,7 +4919,7 @@ function cpCountableTitle(title) {
     .trim();
 }
 
-async function cpLoadCount(title) {
+async function cpLoadCount(title, referenceSalary) {
   const el = $('cp-count');
   if (!el) return;
   const query = cpCountableTitle(title) || title;
@@ -4932,6 +4934,52 @@ async function cpLoadCount(title) {
   } catch (_) {
     if (el.isConnected) el.textContent = '—';
     if (note) note.textContent = 'count unavailable';
+  }
+  cpLoadSalary(query, referenceSalary);
+}
+
+// Salary measured from the ads themselves. The figure printed here used to be a
+// constant — every entry-level role in every domain showed the same band — so what
+// matters as much as the number is the evidence beside it: how many ads were read,
+// and how many of them stated pay at all. Most German postings do not.
+// Measured when the ads allow it, clearly flagged as an orientation figure when
+// they do not. In practice German postings almost never state pay — 0 of 34 on a
+// live check — so the second branch is the common one, and the wording matters:
+// the band it shows is a level-wide constant, and must not be mistaken for data.
+async function cpLoadSalary(query, referenceSalary) {
+  const el = $('cp-salary');
+  const note = $('cp-salary-note');
+  if (!el || !note) return;
+
+  const showReference = (reason) => {
+    if (!referenceSalary) {
+      el.textContent = '—';
+      el.classList.add('cp-salary-none');
+      note.textContent = reason;
+      return;
+    }
+    el.textContent = referenceSalary;
+    el.classList.add('cp-salary-reference');
+    note.textContent = `orientation only, NOT measured — typical for this level, same figure for every `
+      + `role at this stage. ${reason}`;
+  };
+
+  try {
+    const d = await (await fetch(`${baseUrl}/api/salary-band?keyword=${encodeURIComponent(query)}`)).json();
+    if (!el.isConnected) return;
+
+    if (d.display) {
+      el.textContent = d.display;
+      el.classList.remove('cp-salary-reference', 'cp-salary-none');
+      note.textContent = `gross per year — middle half of the ${d.withSalary} ad(s) that stated pay, `
+        + `out of ${d.read} read for “${query}”`;
+      return;
+    }
+    showReference(d.read
+      ? `Only ${d.withSalary} of ${d.read} live ads stated a salary; ${d.minSample || 5} are needed to measure one.`
+      : 'No ads could be read for this role right now.');
+  } catch (_) {
+    if (el.isConnected) showReference('Live ads could not be read.');
   }
 }
 

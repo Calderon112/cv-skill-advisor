@@ -24,6 +24,12 @@ const rag = require('./server/rag.js');
 const graph = require('./server/graph.js');
 const usage = require('./server/usage.js');
 const oidc = require('./server/oidc.js');
+const salaryBand = require('./server/salary-band.js');
+
+// Per-role salary bands. Measured from live ads, so worth re-reading occasionally,
+// but not on every page view — the same role gives the same answer to everyone.
+const salaryBandCache = new Map();
+const SALARY_BAND_TTL = 6 * 60 * 60 * 1000;   // 6 hours
 
 
 // ── Password hashing (scrypt — Node.js built-in, no npm needed) ──────────
@@ -3787,6 +3793,44 @@ const server = http.createServer(async (req, res) => {
 
   // How many positions are actually open in Germany for a role title. One page
   // is enough: Bundesagentur reports the full match count in `maxErgebnisse`.
+  // Salary measured from real ads for one role title, rather than the constant the
+  // career pathway used to print for every entry-level role in every domain.
+  //
+  // Free sources only: this runs from a page view, and the paid scrapers bill per
+  // call. Cached in memory per title — the answer depends on the role, not the user.
+  if (parsedUrl.pathname === '/api/salary-band' && req.method === 'GET') {
+    (async () => {
+      const keyword = String(parsedUrl.searchParams.get('keyword') || '').trim();
+      if (!keyword) { sendJson(res, 400, { error: 'keyword required' }); return; }
+
+      const key = keyword.toLowerCase();
+      const hit = salaryBandCache.get(key);
+      if (hit && Date.now() - hit.at < SALARY_BAND_TTL) { sendJson(res, 200, hit.data); return; }
+
+      // Failures are per-source: one dead scraper must not blank the whole figure,
+      // it must only shrink the sample — which the response then reports honestly.
+      const settled = await Promise.allSettled([
+        fetchBundesJobs(new URLSearchParams({ was: keyword, size: '100' }), 1),
+        fetchArbeitnowJobs(keyword, 1),
+        fetchRemotiveJobs(keyword, 1),
+      ]);
+      const jobs = settled.flatMap(r => (r.status === 'fulfilled' && Array.isArray(r.value) ? r.value : []));
+      const sourcesUp = settled.filter(r => r.status === 'fulfilled').length;
+
+      const band = salaryBand.measureBand(jobs);
+      const data = {
+        keyword,
+        ...band,
+        display: salaryBand.formatBand(band),
+        sourcesQueried: settled.length,
+        sourcesAnswered: sourcesUp,
+      };
+      salaryBandCache.set(key, { at: Date.now(), data });
+      sendJson(res, 200, data);
+    })().catch(e => sendJson(res, 200, { error: e.message, enough: false, read: 0, withSalary: 0 }));
+    return;
+  }
+
   if (parsedUrl.pathname === '/api/job-count' && req.method === 'GET') {
     const keyword = (parsedUrl.searchParams.get('keyword') || '').trim();
     if (!keyword) { sendJson(res, 400, { error: 'keyword required' }); return; }
