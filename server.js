@@ -1787,14 +1787,14 @@ function buildSearchKeyword(searchParams) {
 // job title + description (not just the title), which makes it far stricter
 // than the keyword-token pre-filter the scrapers apply.
 const DOMAIN_MATCH_TERMS = {
-  cybersecurity: ['security','cyber','soc ','siem','pentest','penetration','infosec','ciso','iso 27001','iso27001','threat','incident','vulnerab','firewall','malware','forensic','sicherheit','informationssicherheit','it-security','blue team','red team','grc','nist','mitre att','ethical hack'],
+  cybersecurity: ['security','cyber','soc ','siem','pentest','penetration','infosec','ciso','iso 27001','iso27001','threat','incident','vulnerab','firewall','malware','forensic','sicherheit','informationssicherheit','it-security','blue team','red team','grc','nist','mitre att','ethical hack','it-sicherheit','cybersicherheit','security engineer','security architect','zero trust'],
 
   // ── Security specialisations ──
-  soc:           ['soc ','security operations','siem','splunk','qradar','sentinel','blue team','threat hunting','detection engineer','security analyst','security monitoring','log analysis','mitre att','sicherheitsanalyst','alert triage','edr','xdr','soar'],
-  pentest:       ['penetration test','pentest','ethical hack','red team','offensive security','oscp','burp','metasploit','exploit','vulnerability assessment','bug bounty','penetrationstest','sicherheitsanalyse','purple team'],
+  soc:           ['soc ','security operations','siem','splunk','qradar','sentinel','blue team','threat hunting','detection engineer','security analyst','security monitoring','log analysis','mitre att','sicherheitsanalyst','alert triage','edr','xdr','soar','soc analyst','threat hunt'],
+  pentest:       ['penetration test','pentest','ethical hack','red team','offensive security','oscp','burp','metasploit','exploit','vulnerability assessment','bug bounty','penetrationstest','sicherheitsanalyse','purple team','pen tester','pentester','schwachstellenanalyse','offensive','intrusion'],
   dfir:          ['incident response','digital forensic','dfir','forensic','incident handler','csirt','cert ','threat intelligence','memory forensic','malware triage','forensik','incident responder'],
   malware:       ['malware analy','reverse engineer','reverse-engineer','ghidra','ida pro','x64dbg','sandboxing','shellcode','ransomware analy','static analysis','dynamic analysis','threat research'],
-  appsec:        ['application security','appsec','secure coding','owasp','sast','dast','software security','product security','secure development','threat modeling','api security','anwendungssicherheit'],
+  appsec:        ['application security','appsec','secure coding','owasp','sast','dast','software security','product security','secure development','threat modeling','api security','anwendungssicherheit','produktsicherheit'],
   netsec:        ['network security','firewall','intrusion detection','intrusion prevention','vpn','zero trust','netzwerksicherheit','fortinet','palo alto','checkpoint','network segmentation','ddos'],
   cloud:         ['cloud security','aws security','azure security','gcp security','kubernetes security','container security','cspm','cloud sicherheit','cloud native security','secrets management'],
   devsecops:     ['devsecops','security engineer','ci/cd security','pipeline security','shift left','sast','sca','supply chain security','platform security','infrastructure as code'],
@@ -1811,6 +1811,40 @@ const DOMAIN_MATCH_TERMS = {
   software:      ['developer','software','programmer','engineer','backend','frontend','full stack','fullstack','entwickler','java','python','javascript','typescript','react','node','.net','golang'],
   data:          ['data analyst','data scientist','data engineer','analytics','business intelligence','power bi','sql','machine learning','datenanalyst','data warehouse','etl'],
 };
+
+// Terms that disqualify a posting outright, whatever else matched.
+//
+// "Security" in a German job title far more often means a guard than an engineer.
+// A search for the cybersecurity domain was returning "Security mit 34a oder
+// Sachkunde" and "Security für Veranstaltungen" — §34a GewO is the licence for
+// physical security staff, and event security is not an IT job. The keyword alone
+// cannot separate them, because both really do say "Security".
+//
+// Applied only to the IT domains below: a positive match on one of their terms is
+// not enough if one of these also appears.
+// Unambiguous: these words belong to the guarding trade and to nothing else, so
+// they disqualify wherever they appear, title or description.
+const PHYSICAL_SECURITY_TERMS = [
+  '34a', 'sachkunde', 'objektschutz', 'wachdienst', 'sicherheitsdienst',
+  'werkschutz', 'sicherheitsmitarbeiter', 'wachmann', 'wachpersonal',
+  'pförtner', 'pfoertner', 'doorman', 'türsteher', 'tuersteher',
+  'veranstaltungsschutz', 'revierdienst', 'geld- und werttransport',
+  'security guard', 'ladendetektiv', 'brandwache',
+];
+
+// Weaker signals, checked in the TITLE only. An IT posting may well mention
+// company events or a reception desk somewhere in its description; "Security bei
+// Veranstaltungen" as a job title is never a software role.
+const PHYSICAL_SECURITY_TITLE_TERMS = [
+  'veranstaltung', 'empfangsdienst', 'einlasskontrolle', 'ordnungsdienst',
+];
+
+// Domains where a physical-security posting is always a false positive.
+const IT_DOMAINS = new Set([
+  'cybersecurity', 'soc', 'pentest', 'dfir', 'malware', 'appsec', 'netsec',
+  'cloud', 'devsecops', 'iam', 'grc', 'crypto', 'otsec',
+  'sysadmin', 'network', 'devops', 'software', 'data',
+]);
 
 // Keep a job only if it is on-topic for the selected domain. `all` keeps
 // everything; an unknown sector keeps everything rather than silently emptying
@@ -1833,7 +1867,17 @@ function jobMatchesSector(job, sector) {
   const terms = (DOMAIN_MATCH_TERMS[sector] || kwTokens(DOMAIN_KEYWORDS[sector] || ''))
     .map(t => t.trim()).filter(Boolean);
   if (!terms.length) return true;
-  const hay = `${job.title || ''} ${job.description || ''}`.toLowerCase();
+
+  const title = String(job.title || '').toLowerCase();
+  const hay = `${title} ${String(job.description || '').toLowerCase()}`;
+
+  // Reject before matching. A guard posting says "Security" as truthfully as an
+  // engineering one, so no positive term can tell them apart — only the vocabulary
+  // that appears exclusively in the physical trade can.
+  if (IT_DOMAINS.has(sector)
+      && (PHYSICAL_SECURITY_TERMS.some(t => hay.includes(t))
+          || PHYSICAL_SECURITY_TITLE_TERMS.some(t => title.includes(t)))) return false;
+
   return terms.some(t => wordRe(t).test(hay));
 }
 
