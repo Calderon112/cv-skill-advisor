@@ -2877,6 +2877,37 @@ function addChatMsg(text, from) {
   return div;
 }
 
+// ── Body scroll lock for overlays ─────────────────────────────────────────
+//
+// An overlay that only hides itself with a class leaves the document behind it
+// scrollable. On a phone that is very visible: the page slides around under the
+// open panel as you try to scroll the panel's own content.
+//
+// `overflow: hidden` on <body> is the usual answer and iOS Safari ignores it for
+// touch scrolling, so the body has to come out of flow entirely — which loses the
+// scroll position, hence putting it back by hand on release.
+let _scrollLockY = 0;
+let _scrollLockDepth = 0;
+
+function lockBodyScroll() {
+  if (_scrollLockDepth++ > 0) return;      // already locked by another overlay
+  _scrollLockY = window.scrollY;
+  const b = document.body.style;
+  b.position = 'fixed';
+  b.top = `-${_scrollLockY}px`;
+  b.left = '0';
+  b.right = '0';
+  b.width = '100%';
+}
+
+function unlockBodyScroll() {
+  if (_scrollLockDepth === 0) return;
+  if (--_scrollLockDepth > 0) return;      // another overlay still open
+  const b = document.body.style;
+  b.position = b.top = b.left = b.right = b.width = '';
+  window.scrollTo(0, _scrollLockY);
+}
+
 function initChat() {
   const panel    = $('chat-panel');
   const toggleBtn= $('chat-toggle-btn');
@@ -2886,15 +2917,25 @@ function initChat() {
 
   if (!panel || !toggleBtn) return;
 
+  const openChat = () => {
+    panel.classList.remove('hidden');
+    lockBodyScroll();
+    setTimeout(() => input.focus(), 50);
+  };
+  const closeChat = () => {
+    if (panel.classList.contains('hidden')) return;   // never unlock twice
+    panel.classList.add('hidden');
+    unlockBodyScroll();
+  };
+
   toggleBtn.addEventListener('click', () => {
-    panel.classList.toggle('hidden');
     toggleBtn.classList.remove('has-new');
-    if (!panel.classList.contains('hidden')) {
-      setTimeout(() => input.focus(), 50);
-    }
+    if (panel.classList.contains('hidden')) openChat(); else closeChat();
   });
 
-  closeBtn.addEventListener('click', () => panel.classList.add('hidden'));
+  closeBtn.addEventListener('click', closeChat);
+  // Escape closes it, like every other overlay in the app.
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeChat(); });
 
   async function sendMessage(text) {
     const msg = (text != null ? text : input.value).trim();
