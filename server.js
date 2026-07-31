@@ -805,6 +805,66 @@ async function fetchRemotiveJobs(keyword, depth = DEFAULT_PAGE_DEPTH) {
   }
 }
 
+// ── Jobicy — free public API, no key ─────────────────────────────────────
+//
+// Added for two things the German sources do not give: a full description on every
+// single posting (50 of 50 on a live check, against 0 of 28 from LinkedIn), and
+// structured salary fields.
+//
+// It is not a German source, and pretending otherwise would be misleading:
+// geo=germany returns mostly Europe-wide remote roles. It adds volume and evidence,
+// not local coverage — Bundesagentur and Adzuna remain the German backbone.
+async function fetchJobicyJobs(keyword, depth = DEFAULT_PAGE_DEPTH) {
+  try {
+    const count = Math.min(50 * depth, 100);
+    const url = `https://jobicy.com/api/v2/remote-jobs?count=${count}&geo=germany`;
+    const r = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(9000) });
+    if (!r.ok) return [];
+    const data = await r.json();
+
+    const kw = String(keyword || '').trim().toLowerCase();
+    return (data.jobs || [])
+      // The API has no keyword parameter, so filter here rather than returning
+      // every remote job in Europe for a search about penetration testing.
+      .filter(j => !kw || `${j.jobTitle || ''} ${j.jobExcerpt || ''}`.toLowerCase().includes(kw)
+                || kw.split(/\s+/).some(w => w.length > 3 && String(j.jobTitle || '').toLowerCase().includes(w)))
+      .map(j => {
+        // Only annual euro figures reach the salary band. 19 of 21 salaried
+        // postings quote USD, and folding those into a euro band at an unstated
+        // exchange rate would corrupt the one number meant to be trustworthy.
+        const eurAnnual = String(j.salaryCurrency || '').toUpperCase() === 'EUR'
+          && String(j.salaryPeriod || '').toLowerCase() === 'yearly';
+        const min = Number(j.salaryMin) || null;
+        const max = Number(j.salaryMax) || null;
+
+        return {
+          platform:      'Jobicy',
+          source:        'jobicy',
+          title:         j.jobTitle || 'Job offer',
+          company:       j.companyName || 'Unknown',
+          location:      j.jobGeo || 'Remote',
+          description:   stripHtml(j.jobDescription || j.jobExcerpt || ''),
+          jobUrl:        j.url || null,
+          publishedDate: j.pubDate ? String(j.pubDate).slice(0, 10) : null,
+          sector:        Array.isArray(j.jobIndustry) ? j.jobIndustry[0] : (j.jobIndustry || null),
+          board:         'Jobicy',
+          remote:        true,
+          jobType:       Array.isArray(j.jobType) ? j.jobType[0] : (j.jobType || null),
+          // Shown to the reader with its currency; only euros are measured.
+          salary:        (min || max)
+            ? [min, max].filter(Boolean).map(n => n.toLocaleString('de-DE')).join(' – ')
+              + ` ${j.salaryCurrency || ''} / ${j.salaryPeriod || ''}`.trimEnd()
+            : null,
+          salaryFrom:    eurAnnual ? min : null,
+          salaryTo:      eurAnnual ? max : null,
+          raw:           j
+        };
+      });
+  } catch (_) {
+    return [];
+  }
+}
+
 // ── LinkedIn — public guest API (no auth, anti-bot headers) ──────────────
 function parseLinkedInPage(html, location) {
   const jobs = [];
@@ -1755,6 +1815,7 @@ function buildAllPlatformSources({ searchParams, keyword, location, region, dist
     { key: 'Arbeitnow',     run: () => fetchArbeitnowJobs(keyword, depth),       pick: r => r || [] },
     { key: 'LinkedIn',      run: () => fetchLinkedInJobs(keyword, loc, depth),   pick: r => r || [] },
     { key: 'Remotive',      run: () => fetchRemotiveJobs(keyword, depth),        pick: r => r || [] },
+    { key: 'Jobicy',        run: () => fetchJobicyJobs(keyword, depth),          pick: r => r || [] },
     { key: 'Xing',          run: () => fetchXingJobs(keyword, loc),              pick: r => r || [] },
   ];
   // Free HTML StepStone scraper when no paid Apify token is configured.
@@ -4018,6 +4079,21 @@ const server = http.createServer(async (req, res) => {
       try {
         const app = JSON.parse(body || '{}');
         if (!app.title || !app.company) { sendJson(res, 400, { error: 'title and company are required' }); return; }
+
+        // Search enriches only the first few Bundesagentur hits — 448 detail calls
+        // would add twenty seconds to a five-second search. Saving is the moment
+        // the full text starts to matter: it is what the Writer and the Critic read
+        // when composing the letter. One call, once, and it is stored for good.
+        if (app.source === 'bundesapi' && (app.description || '').length < 200) {
+          const ref = app.raw?.referenznummer || app.raw?.refnr || app.reference;
+          const d = await fetchBundesJobDetail(ref);
+          if (d?.description) {
+            app.description = d.description;
+            if (d.title) app.title = d.title;
+            if (d.salaryFrom || d.salaryTo) { app.salaryFrom = d.salaryFrom; app.salaryTo = d.salaryTo; }
+          }
+        }
+
         // Idempotent: re-saving the same id must not duplicate the card.
         const existing = (await repo.applications.listFor(username)).some(a => a.id === app.id);
         if (!existing) await repo.applications.add(username, { ...app, status: app.status || 'applied' });
