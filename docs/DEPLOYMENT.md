@@ -194,7 +194,7 @@ settings — the app's `RESEND_API_KEY` never reaches it.
 From                : noreply@careerai.example.de
 Host                : smtp.resend.com        (or Brevo, or your provider)
 Port                : 587
-Encryption          : Enable StartTLS  ✔
+Encryption          : Enable StartTLS (on)
 Authentication      : On
 Username            : resend
 Password            : your Resend API key

@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CareerAI — AI job-application assistant for IT security</title>
+<meta name="description" content="A deployed web application that searches nine German job portals at once, scores each posting against your CV, and writes a cover letter through a self-correcting multi-agent pipeline.">
+<style>
+  /* Self-contained on purpose: no CDN, no font service, no analytics. The page
+     must render identically from GitHub Pages, from a local file, and from a
+     memory stick handed to an examiner. */
+  :root {
+    --bg: #0b0e1c; --bg-soft: #11162e; --card: #151b38;
+    --text: #e8ecf8; --muted: #94a0c4; --line: rgba(255,255,255,.10);
+    --cyan: #38bdf8; --violet: #a855f7; --teal: #10b981; --amber: #f59e0b;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f7f9fc; --bg-soft: #eef2f9; --card: #ffffff;
+      --text: #0e1430; --muted: #5a6685; --line: rgba(10,20,50,.12);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 22px; }
+  a { color: var(--cyan); }
+  h2 { font-size: clamp(23px, 3.4vw, 31px); margin: 0 0 10px; letter-spacing: -.02em; }
+  section { padding: 66px 0; border-top: 1px solid var(--line); }
+  .lede { color: var(--muted); max-width: 62ch; margin: 0 0 30px; }
+
+  /* ── Hero ── */
+  header { padding: 74px 0 66px; background:
+    radial-gradient(1100px 460px at 12% -8%, rgba(168,85,247,.20), transparent 60%),
+    radial-gradient(900px 420px at 88% 0%, rgba(56,189,248,.18), transparent 60%); }
+  .brand { display: flex; align-items: center; gap: 13px; margin-bottom: 30px; }
+  .logo {
+    width: 46px; height: 46px; border-radius: 13px; flex: none;
+    background: linear-gradient(135deg, var(--violet), var(--cyan));
+    display: grid; place-items: center; font-weight: 800; color: #fff; font-size: 17px;
+  }
+  .brand b { font-size: 19px; }
+  .brand span { display: block; color: var(--muted); font-size: 13px; font-weight: 400; }
+  h1 { font-size: clamp(30px, 5.4vw, 51px); line-height: 1.1; margin: 0 0 18px; letter-spacing: -.03em; }
+  h1 em { font-style: normal; background: linear-gradient(90deg, var(--cyan), var(--violet));
+          -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .sub { font-size: clamp(16px, 2.2vw, 19px); color: var(--muted); max-width: 60ch; margin: 0 0 30px; }
+  .cta { display: flex; gap: 12px; flex-wrap: wrap; }
+  .btn {
+    display: inline-block; padding: 13px 22px; border-radius: 11px;
+    text-decoration: none; font-weight: 700; border: 1px solid var(--line); font-size: 15px;
+  }
+  .btn.primary { background: linear-gradient(135deg, var(--violet), var(--cyan)); color: #fff; border-color: transparent; }
+  .btn.ghost { color: var(--text); background: rgba(127,127,127,.09); }
+  .live { display: inline-flex; align-items: center; gap: 8px; margin-top: 22px; color: var(--muted); font-size: 14px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--teal); flex: none; }
+
+  /* ── Cards ── */
+  .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(268px, 1fr)); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 15px; padding: 22px; }
+  .card h3 { margin: 0 0 8px; font-size: 16.5px; }
+  .card p { margin: 0; color: var(--muted); font-size: 14.5px; }
+  .tag { display: inline-block; font-size: 11px; letter-spacing: .09em; text-transform: uppercase;
+         color: var(--cyan); font-weight: 800; margin-bottom: 9px; }
+
+  /* ── Numbers ── */
+  .stats { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px; text-align: center; }
+  .stat b { display: block; font-size: 31px; letter-spacing: -.02em;
+            background: linear-gradient(90deg, var(--cyan), var(--violet));
+            -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .stat span { color: var(--muted); font-size: 12.5px; }
+
+  /* ── Pipeline diagram ── */
+  .flow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 22px 0 8px; }
+  .node { background: var(--card); border: 1px solid var(--line); border-radius: 11px;
+          padding: 11px 15px; font-weight: 700; font-size: 14px; }
+  .node.crit { border-color: rgba(245,158,11,.55); color: var(--amber); }
+  .arrow { color: var(--muted); font-size: 18px; }
+
+  /* ── Weight bar ── */
+  .bar { display: flex; height: 34px; border-radius: 9px; overflow: hidden; border: 1px solid var(--line); margin: 18px 0 10px; }
+  .bar i { display: grid; place-items: center; font-style: normal; font-size: 11.5px; font-weight: 800; color: #05070f; }
+  .legend { color: var(--muted); font-size: 13px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 14.5px; }
+  th, td { text-align: left; padding: 11px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 11.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  .scroll { overflow-x: auto; }
+
+  code { background: rgba(127,127,127,.16); padding: 2px 6px; border-radius: 5px; font-size: 13.5px; }
+  pre { background: var(--bg-soft); border: 1px solid var(--line); border-radius: 12px;
+        padding: 17px; overflow-x: auto; font-size: 13.5px; line-height: 1.6; }
+  pre code { background: none; padding: 0; }
+
+  .limits { border-left: 3px solid var(--amber); padding-left: 17px; }
+  .limits li { margin-bottom: 9px; color: var(--muted); }
+
+  footer { padding: 44px 0 60px; color: var(--muted); font-size: 13.5px; border-top: 1px solid var(--line); }
+
+  .video { position: relative; padding-top: 56.25%; border-radius: 14px; overflow: hidden;
+           border: 1px solid var(--line); background: var(--bg-soft); }
+  .video iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  .video .todo { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); text-align: center; padding: 20px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div class="brand">
+      <div class="logo">CA</div>
+      <div><b>CareerAI</b><span>Final-year project · Westfälische Hochschule</span></div>
+    </div>
+
+    <h1>Nine job portals, one search,<br>and a cover letter that <em>corrects itself</em>.</h1>
+    <p class="sub">
+      A job-application assistant for cybersecurity and IT roles on the German market.
+      It reads your CV, searches nine portals at once, scores every posting against your
+      profile with a formula you can inspect, and drafts a cover letter through a
+      multi-agent pipeline where one agent grades another's work.
+    </p>
+
+    <div class="cta">
+      <a class="btn primary" href="https://careerai-jk.duckdns.org">Try the live app</a>
+      <a class="btn ghost" href="https://github.com/Calderon112/cv-skill-advisor">Source code</a>
+      <a class="btn ghost" href="#how">How it works</a>
+    </div>
+
+    <div class="live"><span class="dot"></span> Deployed on AWS over HTTPS — not a mock-up</div>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <div class="stats">
+      <div class="stat"><b>9</b><span>job sources queried at once</span></div>
+      <div class="stat"><b>4</b><span>agents in the writing pipeline</span></div>
+      <div class="stat"><b>~5s</b><span>to search and deduplicate</span></div>
+      <div class="stat"><b>100%</b><span>of the match score explainable</span></div>
+    </div>
+  </div>
+</section>
+
+<section id="problem">
+  <div class="wrap">
+    <h2>The problem</h2>
+    <p class="lede">
+      Looking for a security job in Germany means checking the Bundesagentur, then LinkedIn,
+      then StepStone, then Xing, then the remote boards. Each posting demands a reworked CV
+      and a fresh cover letter. And after all that you still cannot tell whether you actually
+      match the role, or which skill is the one holding you back.
+    </p>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <h2>How it works</h2>
+    <p class="lede">Four steps, each of which you can inspect rather than trust.</p>
+
+    <div class="grid">
+      <div class="card">
+        <span class="tag">Step 1</span>
+        <h3>Read the CV</h3>
+        <p>Upload a PDF and skills, experience, education and photo are extracted automatically.
+           Scanned CVs go through OCR. Manual entry works too.</p>
+      </div>
+      <div class="card">
+        <span class="tag">Step 2</span>
+        <h3>Search everywhere at once</h3>
+        <p>Bundesagentur für Arbeit, LinkedIn, StepStone, Xing, Indeed, Arbeitnow, Remotive,
+           Adzuna and Jooble — queried in parallel, deduplicated, filtered by region and radius.</p>
+      </div>
+      <div class="card">
+        <span class="tag">Step 3</span>
+        <h3>Score every posting</h3>
+        <p>A deterministic percentage, not a black box. Semantic similarity re-ranks the
+           result, and each card names the skills you are missing.</p>
+      </div>
+      <div class="card">
+        <span class="tag">Step 4</span>
+        <h3>Write, then criticise</h3>
+        <p>A Writer drafts the letter. A Critic scores it out of 100 and sends it back until
+           it clears the bar. You see the score and the number of revisions.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="score">
+  <div class="wrap">
+    <h2>A score you can argue with</h2>
+    <p class="lede">
+      Most job boards show a match percentage and never say how it was produced. Ours is a
+      fixed, published weighting — the same inputs always give the same number, and you can
+      check it by hand.
+    </p>
+
+    <div class="bar">
+      <i style="flex:45; background:#38bdf8">Skills 45%</i>
+      <i style="flex:20; background:#a855f7">Role 20%</i>
+      <i style="flex:10; background:#10b981">Location 10%</i>
+      <i style="flex:10; background:#f59e0b">Remote 10%</i>
+      <i style="flex:10; background:#f472b6">Seniority 10%</i>
+      <i style="flex:5;  background:#94a3b8">Pay 5%</i>
+    </div>
+    <p class="legend">Vector embeddings then re-rank the shortlist by meaning, so a
+      “Penetration Tester” posting still surfaces for someone whose CV says “Ethical Hacking”.</p>
+  </div>
+</section>
+
+<section id="agents">
+  <div class="wrap">
+    <h2>The writing pipeline</h2>
+    <p class="lede">
+      A single prompt produces a letter nobody has judged. This pipeline builds in the judgement:
+      the Critic scores the draft against the actual posting and hands it back with specific
+      objections until it passes.
+    </p>
+
+    <div class="flow">
+      <span class="node">Scout</span><span class="arrow">→</span>
+      <span class="node">Matcher</span><span class="arrow">→</span>
+      <span class="node">Writer</span><span class="arrow">⇄</span>
+      <span class="node crit">Critic</span>
+      <span class="arrow">→</span><span class="node">Letter + score</span>
+    </div>
+    <p class="legend">Built on LangGraph. Every run reports its revisions and the final score,
+      so a weak letter is visible rather than silently shipped.</p>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <h2>What else is in it</h2>
+    <div class="grid">
+      <div class="card"><h3>Career pathway</h3><p>Entry, mid and senior roles per domain, with
+        the skills and certifications expected at each stage — and a live count of open
+        positions from the official Bundesagentur API.</p></div>
+      <div class="card"><h3>Skill-gap analysis</h3><p>What is missing for a target role, with
+        concrete resources: TryHackMe, HackTheBox, SANS, Coursera, MITRE ATT&amp;CK, OWASP.</p></div>
+      <div class="card"><h3>Application tracker</h3><p>A kanban board from saved to offer, with
+        every generated document kept alongside its posting.</p></div>
+      <div class="card"><h3>Interview preparation</h3><p>Questions generated from the posting
+        and your own profile, not a generic list.</p></div>
+      <div class="card"><h3>CareerBot</h3><p>A chat assistant grounded in the product
+        documentation, so it answers about the product instead of improvising.</p></div>
+      <div class="card"><h3>Market report</h3><p>Aggregates the postings found: most-demanded
+        skills, cities, remote share, salary statistics.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="architecture">
+  <div class="wrap">
+    <h2>Architecture</h2>
+    <p class="lede">
+      Identity is delegated, TLS is automatic, and nothing but the reverse proxy is exposed.
+    </p>
+<pre><code>                    ┌──────────────── AWS EC2 ────────────────┐
+  browser ──443──►  │  Caddy  ──►  CareerAI (Node)             │
+                    │    │    ──►  Keycloak  ──►  PostgreSQL   │
+                    │    └── Let's Encrypt, auto-renewed       │
+                    └──────────────────────────────────────────┘
+
+  Only Caddy publishes a port. The application and Keycloak are
+  reachable solely on the internal Docker network.</code></pre>
+
+    <div class="grid" style="margin-top:20px">
+      <div class="card"><h3>Delegated identity</h3><p>OpenID Connect with PKCE against Keycloak,
+        which brokers Google, GitHub and others. The app holds no password of its own, and
+        adding a provider is configuration, not code.</p></div>
+      <div class="card"><h3>Hardened containers</h3><p>Read-only root filesystem, every Linux
+        capability dropped, no-new-privileges. Separate database roles for the app and Keycloak.</p></div>
+      <div class="card"><h3>Defence in depth</h3><p>CSP without <code>unsafe-inline</code>,
+        a static allow-list rather than a deny-list, per-route rate limits, body size caps,
+        scrypt password hashing.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="video">
+  <div class="wrap">
+    <h2>See it running</h2>
+    <p class="lede">Two minutes, from an empty profile to a finished application.</p>
+    <div class="video">
+      <!-- Replace this block with the embed once the screencast is uploaded. -->
+      <div class="todo">Product video — coming shortly.<br>
+        Meanwhile, the app is live at
+        <a href="https://careerai-jk.duckdns.org">careerai-jk.duckdns.org</a>.</div>
+    </div>
+  </div>
+</section>
+
+<section id="try">
+  <div class="wrap">
+    <h2>Run it yourself</h2>
+    <p class="lede">No API key is required. Without one the AI features fall back to templates
+      rather than failing.</p>
+<pre><code>git clone https://github.com/Calderon112/cv-skill-advisor.git
+cd cv-skill-advisor
+cp .env.example .env
+docker compose up --build
+
+# then open http://localhost:3000</code></pre>
+    <p class="legend">Needs Docker, or Node.js 22.5+ with <code>npm start</code>.
+      The full production stack — Keycloak, PostgreSQL and TLS — is documented in
+      <a href="https://github.com/Calderon112/cv-skill-advisor/blob/main/docs/DEPLOYMENT.md">DEPLOYMENT.md</a>.</p>
+  </div>
+</section>
+
+<section id="limits">
+  <div class="wrap">
+    <h2>What it does not do</h2>
+    <p class="lede">Measured, not guessed. These are the limits worth knowing before relying on it.</p>
+    <ul class="limits">
+      <li><b>Three sources are fragile.</b> LinkedIn, StepStone and Xing are read by parsing
+        HTML, which breaks whenever those sites change and sits awkwardly with their terms.
+        The other six are official APIs.</li>
+      <li><b>Salaries are mostly unavailable.</b> German postings rarely publish pay — zero of
+        34 ads on a live check. The app measures a band when the data allows and says plainly
+        when it is showing an orientation figure instead.</li>
+      <li><b>CV rewriting is instructed, not verified.</b> The model is told to use only what
+        the source CV contains; nothing yet checks automatically that it obeyed.</li>
+      <li><b>Single instance.</b> Sessions last 24 hours without refresh-token rotation, and
+        PostgreSQL is not replicated. Backups run nightly.</li>
+    </ul>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p><b>CareerAI</b> — final-year project, Westfälische Hochschule Gelsenkirchen.<br>
+      <a href="https://careerai-jk.duckdns.org">Live app</a> ·
+      <a href="https://github.com/Calderon112/cv-skill-advisor">Repository</a> ·
+      <a href="https://github.com/Calderon112/cv-skill-advisor/blob/main/docs/DEPLOYMENT.md">Deployment guide</a> ·
+      <a href="https://github.com/Calderon112/cv-skill-advisor/blob/main/docs/IDENTITY.md">Identity guide</a></p>
+    <p>Node.js · LangGraph · Keycloak · PostgreSQL · Caddy · Docker — no frontend framework.</p>
+  </div>
+</footer>
+
+</body>
+</html>

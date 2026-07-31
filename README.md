@@ -1,254 +1,326 @@
-# CyberCareer — IT Security Job Advisor
-### Sprint 1 · Foundation · May 2025
+# CareerAI — job-application assistant for IT security
 
-> An AI-powered career advisor for IT Security students — analyzes your CV, detects skill gaps, matches you to real job offers from German platforms, and suggests how to acquire missing skills.
+An AI-assisted job-application tool for cybersecurity and IT roles on the German
+market. It reads your CV, searches nine job portals at once, scores every posting
+against your profile with a published formula, and drafts a cover letter through a
+multi-agent pipeline in which one agent grades another's output.
+
+**Live application:** <https://careerai-jk.duckdns.org>
+**Project website:** <https://calderon112.github.io/cv-skill-advisor/>
+
+Final-year project, Westfälische Hochschule Gelsenkirchen.
 
 ---
 
-## 🚀 Quick Start
+## Contents
 
-### With Docker
+- [Quick start](#quick-start)
+- [What it does](#what-it-does)
+- [Match scoring](#match-scoring)
+- [The writing pipeline](#the-writing-pipeline)
+- [Job sources](#job-sources)
+- [Architecture](#architecture)
+- [Configuration](#configuration)
+- [Production deployment](#production-deployment)
+- [Tests](#tests)
+- [Privacy and GDPR](#privacy-and-gdpr)
+- [Known limitations](#known-limitations)
+
+---
+
+## Quick start
+
+No API key is required. Without one, every AI feature falls back to a deterministic
+template rather than failing.
+
+### With Docker Compose (recommended)
 
 ```bash
 git clone https://github.com/Calderon112/cv-skill-advisor.git
 cd cv-skill-advisor
-cp .env.example .env          # required, may stay empty
+cp .env.example .env          # required; the file may stay empty
 docker compose up --build
 ```
 
-### With Node.js 20+
+Open <http://localhost:3000>. A local demo account is seeded: `student` / `security`.
+
+### With Node.js
+
+Requires **Node.js 22.5 or later** — the SQLite and PostgreSQL storage backends use
+`node:sqlite` and modern APIs that older releases do not have.
 
 ```bash
 git clone https://github.com/Calderon112/cv-skill-advisor.git
 cd cv-skill-advisor
 npm install
-cp .env.example .env          # optional — defaults work without any key
+cp .env.example .env
 npm start
 ```
 
-Then open <http://localhost:3000>. **Default login** → `student` / `security`
+### With single sign-on
 
-Full setup, API keys, data locations and troubleshooting: **[INSTALL.md](INSTALL.md)**.
+To run the full identity stack — Keycloak brokering Google, GitHub and others:
+
+```bash
+docker compose --profile identity up keycloak
+```
+
+Name the service. A bare `--profile identity up` also starts the application
+container, which collides with `npm start` on port 3000. Setup is documented in
+[docs/IDENTITY.md](docs/IDENTITY.md).
 
 ---
 
-## 🏗️ Architecture — Sprint 1
+## What it does
+
+**Professional profile.** Upload a CV as PDF and skills, experience, education and
+photo are extracted automatically. Scanned CVs go through OCR. Manual entry is
+available, and the finished profile exports back to a formatted PDF.
+
+**Multi-platform search.** Nine sources queried in parallel, deduplicated across
+them, filtered by region, city, radius, domain and keywords. Roughly five seconds
+end to end.
+
+**Match scoring.** A deterministic percentage with a published weighting, plus
+semantic re-ranking through vector embeddings. Every job card lists the skills you
+are missing for that posting.
+
+**Document generation.** Cover letters through the multi-agent pipeline, tailored
+CVs, interview questions and a pre-composed application email that opens in Gmail.
+Language, tone and length are selectable.
+
+**Career pathway.** Entry, mid-level and senior roles per domain with the skills and
+certifications expected at each stage, a live count of open positions from the
+official Bundesagentur API, and a salary band measured from real postings where the
+data allows it.
+
+**Skill-gap analysis.** What is missing for a target role, with concrete learning
+resources: TryHackMe, HackTheBox, SANS, Coursera, MITRE ATT&CK, OWASP, Splunk.
+
+**Application tracker.** A kanban board from saved through to offer, with drag and
+drop, a status history and a conversion funnel. Generated documents are stored with
+their posting.
+
+**CareerBot.** A chat assistant grounded in the product documentation through RAG,
+so it answers questions about the product rather than improvising.
+
+**Market report.** Aggregates the postings found into skill demand, locations,
+remote share and salary statistics.
+
+---
+
+## Match scoring
+
+The percentage on each job card is deterministic: the same inputs always produce the
+same number, and it can be checked by hand.
+
+| Criterion | Weight |
+|---|---|
+| Skills overlap | 45% |
+| Role match | 20% |
+| Location | 10% |
+| Remote arrangement | 10% |
+| Seniority | 10% |
+| Salary fit | 5% |
+
+Vector embeddings then re-rank the shortlist by meaning, so a posting for
+"Penetration Tester" still surfaces for a CV that says "Ethical Hacking".
+
+The Oracle (`POST /api/job-consult`) performs a deeper LLM analysis of a single
+posting against the profile and returns strengths, gaps and advice. Once a job has
+been analysed, that score becomes the one shown on the card.
+
+---
+
+## The writing pipeline
+
+A single prompt produces a letter that nobody has judged. This pipeline builds the
+judgement in, using LangGraph:
+
+```
+Scout  ->  Matcher  ->  Writer  <->  Critic  ->  letter + score
+                          ^_____________|
+                       revise until the bar is met
+```
+
+The Critic scores the draft out of 100 against the actual posting and returns
+specific objections. The Writer revises. Each run reports how many revisions it took
+and the final score, so a weak letter is visible instead of silently shipped.
+
+Two failure modes are handled explicitly. When the Critic cannot run, the loop
+terminates on a bookkeeping score that is never displayed as a judgement. When a
+source returns a pointer rather than a description — "Full description on LinkedIn"
+— that text is treated as absent so the Critic does not grade a letter against a
+sentence containing no requirements.
+
+---
+
+## Job sources
+
+Official APIs, no token required:
+
+| Source | Notes |
+|---|---|
+| Bundesagentur für Arbeit | Germany's official employment agency |
+| Arbeitnow | Germany-focused |
+| Remotive | Remote roles worldwide |
+
+Official APIs, key required:
+
+| Source | Environment variable |
+|---|---|
+| Adzuna | `ADZUNA_APP_ID`, `ADZUNA_APP_KEY` |
+| Jooble | `JOOBLE_API_KEY` |
+| Apify (StepStone, Indeed) | `APIFY_TOKEN` |
+
+Read by parsing HTML or an undocumented endpoint, and therefore fragile:
+
+| Source | Risk |
+|---|---|
+| LinkedIn | Undocumented guest endpoint |
+| StepStone | HTML parsing |
+| Xing | HTML parsing |
+
+Cross-source deduplication uses Sørensen-Dice similarity on title and company,
+merging near-duplicates such as "(m/w/d)" or GmbH/AG variants and recording where
+else the posting appeared.
+
+---
+
+## Architecture
 
 ```
 cv-skill-advisor/
-├── server.js          ← Node.js backend (HTTP + all API routes)
-├── index.html         ← Main UI shell
-├── app.js             ← Frontend logic (4 agents)
-├── storage.json       ← Local DB (auto-created on first run)
-├── .env               ← API keys (never commit this)
-├── .env.example       ← Template
-├── tests/
-│   └── test.js        ← Unit test suite (42 tests, no framework)
-├── gdpr/
-│   └── gdpr-banner.html ← GDPR consent banner + privacy policy
-└── README.md
+├── server.js                  HTTP server and API routes
+├── app.js                     Frontend logic
+├── index.html                 UI shell
+├── styles.css
+├── server/
+│   ├── http-guards.js         Auth, rate limits, body caps, CSP, static allow-list
+│   ├── oidc.js                Generic OpenID Connect relying party
+│   ├── graph.js               LangGraph pipeline (Scout, Matcher, Writer, Critic)
+│   ├── agents.js              Scout and Matcher
+│   ├── llm.js                 Multi-provider LLM client
+│   ├── rag.js                 Retrieval for CareerBot
+│   ├── embeddings.js          Vector embeddings and cache
+│   ├── salary-band.js         Salary measured from real postings
+│   ├── dedup.js               Cross-source deduplication
+│   ├── report.js              Market report aggregation
+│   ├── storage.js             Storage backend selection
+│   ├── repo-postgres.js       PostgreSQL backend
+│   └── email.js               Outbound mail
+├── docs/
+│   ├── index.html             Project website (GitHub Pages)
+│   ├── DEPLOYMENT.md          Production deployment guide
+│   └── IDENTITY.md            Single sign-on setup
+├── scripts/backup-careerai.sh Nightly backup
+├── docker-compose.yml         Local development
+├── docker-compose.prod.yml    Production stack
+└── Caddyfile                  TLS termination and reverse proxy
 ```
 
-### Multi-Agent System
+No frontend framework and no build step: the interface is served as plain HTML, CSS
+and JavaScript.
 
-| Agent | Role | Status |
-|---|---|---|
-| **Scout** | CV upload, PDF parsing, skill extraction | ✅ Sprint 1 |
-| **Matcher** | Job search, gap analysis, skill comparison | ✅ Sprint 1 |
-| **Writer** | CV, cover letter, email & roadmap generation | ✅ Sprint 2-3 |
-| **Tracker** | Application tracking, status & documents | ✅ Sprint 1-3 |
-
-The agents are explicitly separated and orchestrated — see [ARCHITECTURE.md](ARCHITECTURE.md).
+The LLM client supports Anthropic, Google Gemini, OpenRouter and OpenAI with
+automatic fallback and backoff. Without any key, every AI feature degrades to a
+deterministic template.
 
 ---
 
-## ✨ Sprint 2 & 3 — Features delivered
+## Configuration
 
-### Matching & job discovery
-- **Extended security taxonomy** — 232 IT-Security skills across 14 sub-domains (`security-skills.js`).
-- **Real multi-source scraping** — Bundesagentur, Arbeitnow, Remotive, LinkedIn, **Xing**, free **StepStone** (+ Adzuna / Apify / Jooble when keys are set), run in parallel with a per-source **scrape log** (counts + timing) shown in the UI and server console.
-- **Fuzzy cross-source de-duplication** (`server/dedup.js`) — Sørensen-Dice on title+company; merges near-duplicates ("(m/w/d)", GmbH/AG) and records "also on …".
-- **Weighted scoring engine** (`scorer.js`) — deterministic 6-criteria score (skills 45 · role 20 · location 10 · remote 10 · seniority 10 · salary 5) with a transparent breakdown.
-- **Outcome-based re-ranking** (`rerank.js`) — boosts jobs similar to applications that reached interview/offer.
-- **The Oracle** — `POST /api/job-consult`: the LLM reads a posting + your profile and returns a deep match %, strengths, gaps, certifications and advice. **Its score is the single source of truth** shown on the job card once analysed (cached per job + profile signature, with auto-retry on rate-limits).
-- **Market Report** (`server/report.js`) — aggregates scraped jobs into skill/location/company/salary stats + an LLM summary.
+Every value in `.env` is optional. See [.env.example](.env.example) for the full
+list with explanations.
 
-### Writer (document generation)
-- **AI CV, cover letter, email & learning roadmap** — `POST /api/generate-cv` · `/api/generate-cover` · `/api/generate-roadmap`, each with a deterministic template fallback.
-- **Writer options** — language (DE/EN), tone, length.
-- **PDF export** of any generated document (jsPDF).
-- **One-click documents from the Tracker** — generate CV + cover letter + email for a saved job; **documents are persisted** on the application and survive a refresh.
-- **AI interview prep** — `POST /api/generate-interview`: role-specific questions + tips.
-
-### Tracker
-- Kanban with **drag-and-drop**, deadline urgency, **status-history timeline**, and a **conversion funnel** (Saved → Applied → Interviews → Offers + response rate).
-
-### AI providers
-- Multi-provider LLM client (`server/llm.js`): **Anthropic, Google Gemini (free), OpenRouter (free), OpenAI** — automatic fallback + retry/backoff. Without any key, every AI feature degrades to a deterministic template.
-
-### Quality
-- **75 unit tests** (`npm test`) — pure functions, multi-agent contracts, fuzzy dedup, re-ranking, market report, RAG and LangGraph. No external framework.
+| Variable | Purpose |
+|---|---|
+| `GEMINI_API_KEY` | Free tier, no credit card. Enables all AI features |
+| `ANTHROPIC_API_KEY` | Alternative LLM provider |
+| `PUBLIC_BASE_URL` | Public URL of the deployment; OIDC redirects derive from it |
+| `AUTH_MODE` | `both` (default) or `oidc-only` to disable local passwords |
+| `ADMIN_USERS` | Comma-separated usernames granted the admin page |
+| `STORAGE_BACKEND` | `json` (default) or `postgres` |
+| `RESEND_API_KEY` | Outbound email; falls back to a `mailto:` draft |
 
 ---
 
-## ⚙️ Tech Stack
+## Production deployment
 
-| Layer | Technology | Why |
-|---|---|---|
-| Backend | Node.js (no framework) | Zero dependencies, fast, easy deploy |
-| Frontend | Vanilla JS + HTML/CSS | No build step required |
-| PDF parsing | `pdf-parse` | Handles UTF-16, CMap, modern PDFs |
-| Auth | scrypt (built-in Node.js crypto) | Secure password hashing, no external lib |
-| Job APIs | Bundesagentur, Arbeitnow, Remotive, LinkedIn (guest) | Free, no token required |
-| Storage | JSON file (`storage.json`) | Simple local persistence for Sprint 1 |
-
----
-
-## 🔌 API Integrations
-
-### Free — No token required
-
-| Platform | Endpoint | Notes |
-|---|---|---|
-| **Bundesagentur für Arbeit** | `rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v6/jobs` | Germany's official job board |
-| **Arbeitnow** | `arbeitnow.com/api/job-board-api` | Germany-focused, 100 jobs/page |
-| **Remotive** | `remotive.com/api/remote-jobs` | Remote IT jobs worldwide |
-| **LinkedIn (guest)** | `linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search` | No login, limited results |
-
-### Optional — Token required
-
-| Platform | Env variable | How to get |
-|---|---|---|
-| Apify (StepStone) | `APIFY_TOKEN` | apify.com — free tier available |
-| Apify (Indeed.de) | `APIFY_TOKEN` | Same token as above |
-| Jooble | `JOOBLE_API_KEY` | jooble.org/api — free registration |
-
----
-
-## 🧪 Running Tests
+The production stack runs Keycloak on PostgreSQL behind Caddy, which terminates TLS
+and renews Let's Encrypt certificates automatically. Only Caddy publishes a port;
+the application and Keycloak are reachable solely on the internal Docker network.
 
 ```bash
-npm test                            # or: docker compose exec cybercareer npm test
+cp .env.prod.example .env.prod        # fill in domains and secrets
+chmod 600 .env.prod
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 ```
 
-**75 unit tests** covering:
-- `normalize()` — text preprocessing
-- `findSkills()` — skill detection from CV text
-- `analyzeRoles()` — role matching & scoring
-- `hashPassword()` / `verifyPassword()` — auth security
-- `decodePdfStr()` — PDF text decoding
-- `stripHtml()` — HTML sanitization
-- `kwTokens()` / `matchesKeyword()` — job keyword matching
-- `jobMatchesProfile()` — CV-to-job matching
-- Fuzzy cross-source dedup, outcome-based re-ranking, market report
-- RAG (cosine, calibrated relevance) and the LangGraph Writer⇄Critic loop
-- Edge cases & robustness
+The full procedure — DNS, certificates, realm and client creation, SMTP, backups and
+a pre-launch checklist — is in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
+Container hardening on the application service: read-only root filesystem, all Linux
+capabilities dropped, `no-new-privileges`, and a database role separate from
+Keycloak's so neither can read the other's tables.
 
 ---
 
-## 🔒 GDPR & Data Privacy
+## Tests
 
-This application is **fully local** — all data stays on your machine.
-
-### What is stored
-| Data | Where | How long |
-|---|---|---|
-| Username + hashed password | `storage.json` | Until manually deleted |
-| Session token | `storage.json` + LocalStorage | 24h, then auto-expired |
-| Applications (title, company, status) | `storage.json` | Until manually deleted |
-| CV text | RAM only | Current session only |
-
-### What is NOT stored
-- Raw passwords (scrypt-hashed with unique salt)
-- CV content on disk
-- Any analytics or tracking data
-
-### Delete all your data
 ```bash
-# Option 1: delete the file
-rm storage.json
-
-# Option 2: clear browser storage
-# F12 → Application → LocalStorage → Clear all
+npm test
 ```
 
-See `gdpr/gdpr-banner.html` for the full privacy policy (German/English).
+81 unit tests with no external framework, covering text normalisation, skill
+detection, role analysis, password hashing, PDF decoding, HTML sanitisation, keyword
+matching, CV-to-job matching, fuzzy deduplication, outcome-based re-ranking, the
+market report, RAG relevance calibration, and the LangGraph Writer/Critic loop
+including its failure modes.
 
 ---
 
-## 🔧 Configuration — `.env`
+## Privacy and GDPR
 
-```env
-# Server
-PORT=3000
+Feedback is anonymous by construction: the endpoint records no session, no username
+and no IP address, so a submission cannot be traced back to an account — including by
+an administrator. The admin interface states this rather than leaving it to be
+inferred.
 
-# Optional API keys
-APIFY_TOKEN=your_apify_token_here
-JOOBLE_API_KEY=your_jooble_key_here
+Personal data is minimised: the profile holds what the user enters, and nothing is
+collected for analytics. Consent is requested explicitly before any storage, and the
+consent notice describes where data actually goes.
 
-# Bundesagentur (already works without this)
-BUNDES_API_KEY=jobboerse-jobsuche
-```
-
----
-
-## 🐛 Known Issues & Fixes
-
-### "Could not read file: pdf.js not loaded"
-This error appears with complex PDFs (UTF-16 encoded, generated by Word/Canva/Adobe).
-
-**Fix:**
-```bash
-npm install pdf-parse
-```
-Then in `server.js`, update `extractPdfText()` to use `pdf-parse` as primary parser
-(see fix instructions in the PR or CHANGELOG).
-
-### Port 3000 already in use
-```powershell
-# Windows
-netstat -ano | findstr :3000
-taskkill /PID <PID_NUMBER> /F
-node server.js
-```
+Passwords, where local accounts are enabled, are hashed with scrypt and a per-user
+salt. Sessions can be listed and revoked individually from the account page.
 
 ---
 
-## 📋 Sprint 1 Checklist
+## Known limitations
 
-- [x] Architecture design (multi-agent: Scout / Matcher / Writer / Tracker)
-- [x] Tech stack setup (Node.js, vanilla JS, no build step)
-- [x] Legal & GDPR research → `gdpr/gdpr-banner.html`
-- [x] CV Parser (PDF + text, server-side, no CDN dependency)
-- [x] IT Security skills database (15 skills, 4 roles)
-- [x] Gap analysis engine (score, matched, missing)
-- [x] Bundesagentur API integration (free, no token)
-- [x] Multi-platform job aggregation (Arbeitnow, Remotive, LinkedIn guest)
-- [x] Authentication (register / login / token / scrypt hashing)
-- [x] Application tracker (CRUD)
-- [x] Unit test suite (42 tests — `node tests/test.js`)
-- [x] README documentation
+These are measured rather than assumed.
 
-### Sprint 2 — Planned
-- [ ] Cover letter generation (Writer Agent with LLM API)
-- [ ] Improved skill database (200+ skills)
-- [ ] Jooble & Apify integration with UI toggle
-- [ ] Email notifications for new matching jobs
-- [ ] Export applications to PDF/Excel
+- **Three job sources are fragile.** LinkedIn, StepStone and Xing are read by parsing
+  HTML or an undocumented endpoint. They break when those sites change and sit
+  awkwardly with their terms of service. The other six are official APIs.
+- **Salary data is mostly unavailable.** German postings rarely publish pay: zero of
+  34 advertisements stated a salary on a live check across three role titles. The app
+  measures a band when enough data exists and clearly marks the figure as indicative
+  when it does not.
+- **CV rewriting is grounded by instruction, not verified.** The model is told to use
+  only what the source CV contains; no automated check confirms that it complied.
+- **Descriptions are often pointers.** Several sources return "Full description on
+  LinkedIn" instead of the posting text, so matching sometimes works from the job
+  title alone.
+- **Single instance.** Sessions last 24 hours with no refresh-token rotation, rate
+  limits are per process and in memory, and PostgreSQL is not replicated. Backups run
+  nightly.
 
 ---
 
-## 👨‍🎓 About
+## Documentation
 
-Built as a personal learning project by an IT Security student (Gelsenkirchen, NRW).
-
-The goal: help students and professionals in cybersecurity find relevant jobs in Germany,
-understand what skills they're missing, and get a concrete plan to acquire them.
-
-**Built with:** Node.js · vanilla JavaScript · zero-build frontend
-
----
-
-## 📄 License
-
-MIT License — free to use, modify, and distribute.
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — production deployment, AWS, backups
+- [docs/IDENTITY.md](docs/IDENTITY.md) — single sign-on, Keycloak, social providers
+- [INSTALL.md](INSTALL.md) — local setup, API keys, troubleshooting
+- [ARCHITECTURE.md](ARCHITECTURE.md) — design decisions
