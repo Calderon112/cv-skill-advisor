@@ -1398,6 +1398,99 @@ async function saveProfileText(username, profile) {
   await repo.profiles.set(username, profile);
 }
 
+// ── Bundesagentur job detail ────────────────────────────────────────────────
+//
+// The search endpoint returns a catalogue entry, not a posting: no description, and
+// `beruf` is an occupation category ("Fachinformatiker") rather than the advertised
+// title. Measured on a live search, 0 of 12 Bundesagentur results carried usable
+// description text, which left matching and cover-letter writing working from the
+// job title alone.
+//
+// The official detail endpoint returns the real thing — and, unlike the ads
+// themselves, structured salary fields. This is the same public API and key, one
+// extra call per job.
+const bundesDetailCache = new Map();
+const BUNDES_DETAIL_TTL = 24 * 60 * 60 * 1000;   // a posting's text does not move
+
+async function fetchBundesJobDetail(refnr) {
+  if (!refnr) return null;
+  const hit = bundesDetailCache.get(refnr);
+  if (hit && Date.now() - hit.at < BUNDES_DETAIL_TTL) return hit.data;
+
+  try {
+    // The path segment is the reference number in base64 — not URL-encoding.
+    const id = Buffer.from(String(refnr)).toString('base64');
+    const r = await fetch(
+      `https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4/jobdetails/${id}`,
+      { headers: { 'X-API-Key': BUNDES_API_KEY }, signal: AbortSignal.timeout(8000) }
+    );
+    if (!r.ok) { bundesDetailCache.set(refnr, { at: Date.now(), data: null }); return null; }
+    const d = await r.json();
+
+    // Only annual figures are comparable. The API says which it is, so a monthly or
+    // hourly rate is left out rather than silently mixed into an annual band.
+    const annual = String(d.verguetungsangabe || '').toUpperCase() === 'JAHRESGEHALT';
+    const from = Number(d.gehaltsspanneVon) || null;
+    const to   = Number(d.gehaltsspanneBis) || null;
+
+    const data = {
+      title: d.stellenangebotsTitel || null,
+      company: d.firma || null,
+      description: stripHtml(d.stellenangebotsBeschreibung || '') || null,
+      salary: annual && (from || to)
+        ? [from, to].filter(Boolean).map(n => n.toLocaleString('de-DE')).join(' – ') + ' € '
+        : null,
+      salaryFrom: annual ? from : null,
+      salaryTo:   annual ? to   : null,
+    };
+    bundesDetailCache.set(refnr, { at: Date.now(), data });
+    return data;
+  } catch (_) {
+    // A failed enrichment must never cost the caller the job itself.
+    bundesDetailCache.set(refnr, { at: Date.now(), data: null });
+    return null;
+  }
+}
+
+/**
+ * Fill in descriptions, titles and salaries for Bundesagentur results.
+ *
+ * Bounded concurrency: 12 sequential round trips would add seconds to a search that
+ * currently takes about five, and firing all of them at once is how a public API
+ * starts refusing you.
+ */
+async function enrichBundesJobs(jobs, limit = 25) {
+  // `referenznummer` on the v6 search response; `refnr` is what v4 called it.
+  const targets = jobs
+    .filter(j => j.source === 'bundesapi' && (j.raw?.referenznummer || j.raw?.refnr))
+    .slice(0, limit);
+  if (!targets.length) return jobs;
+
+  const CONCURRENCY = 6;
+  for (let i = 0; i < targets.length; i += CONCURRENCY) {
+    const slice = targets.slice(i, i + CONCURRENCY);
+    const details = await Promise.all(
+      slice.map(j => fetchBundesJobDetail(j.raw.referenznummer || j.raw.refnr))
+    );
+    slice.forEach((job, n) => {
+      const d = details[n];
+      if (!d) return;
+      // The advertised title beats the occupation category the search returns.
+      if (d.title) job.title = d.title;
+      if (d.company) job.company = d.company;
+      if (d.description && d.description.length > (job.description || '').length) {
+        job.description = d.description;
+      }
+      if (d.salary) job.salary = d.salary;
+      if (d.salaryFrom || d.salaryTo) {
+        job.salaryFrom = d.salaryFrom;
+        job.salaryTo = d.salaryTo;
+      }
+    });
+  }
+  return jobs;
+}
+
 function extractBundesJobFields(job, searchParams) {
   // Real API response uses: ergebnisliste, stellenangebotsTitel, firma, stellenlokationen, externeURL
   const loc   = Array.isArray(job.stellenlokationen) ? job.stellenlokationen[0] : null;
@@ -1405,9 +1498,23 @@ function extractBundesJobFields(job, searchParams) {
   const plz   = loc?.adresse?.plz  || '';
   const location = [plz, city].filter(Boolean).join(' ') || 'Deutschland';
 
+  // The search response already carries structured pay — gehaltsspanneVon/Bis with
+  // the period in verguetungsangabe. It was simply never read, which is why the
+  // salary band reported "0 of 34 ads stated pay" while the data sat in `raw`.
+  // Only annual figures are kept: mixing a monthly rate into an annual band would
+  // be worse than having none.
+  const annualPay = String(job.verguetungsangabe || '').toUpperCase() === 'JAHRESGEHALT';
+  const payFrom = annualPay ? (Number(job.gehaltsspanneVon) || null) : null;
+  const payTo   = annualPay ? (Number(job.gehaltsspanneBis) || null) : null;
+
   return {
     platform:      'Bundesagentur',
     source:        'bundesapi',
+    salary:        payFrom || payTo
+      ? [payFrom, payTo].filter(Boolean).map(n => n.toLocaleString('de-DE')).join(' – ') + ' € / Jahr'
+      : null,
+    salaryFrom:    payFrom,
+    salaryTo:      payTo,
     title:         job.stellenangebotsTitel || job.titel || 'Job offer',
     company:       job.firma || job.arbeitgeber?.name || job.arbeitgeber || 'Unbekannt',
     location,
@@ -1637,7 +1744,14 @@ function buildAllPlatformSources({ searchParams, keyword, location, region, dist
   const loc = location
     || (region === 'switzerland' ? 'Switzerland' : region === 'usa' ? 'United States' : 'Germany');
   const sources = [
-    { key: 'Bundesagentur', run: () => fetchBundesJobs(searchParams, depth),    pick: r => r?.jobs || [] },
+    // Enriched inside the source's own run, so the extra round trips overlap with
+    // the other platforms already being queried in parallel rather than adding to
+    // the total. The search is only ever as slow as its slowest source.
+    { key: 'Bundesagentur', run: async () => {
+        const r = await fetchBundesJobs(searchParams, depth);
+        if (r?.jobs?.length) await enrichBundesJobs(r.jobs);
+        return r;
+      }, pick: r => r?.jobs || [] },
     { key: 'Arbeitnow',     run: () => fetchArbeitnowJobs(keyword, depth),       pick: r => r || [] },
     { key: 'LinkedIn',      run: () => fetchLinkedInJobs(keyword, loc, depth),   pick: r => r || [] },
     { key: 'Remotive',      run: () => fetchRemotiveJobs(keyword, depth),        pick: r => r || [] },
@@ -3810,11 +3924,22 @@ const server = http.createServer(async (req, res) => {
       // Failures are per-source: one dead scraper must not blank the whole figure,
       // it must only shrink the sample — which the response then reports honestly.
       const settled = await Promise.allSettled([
-        fetchBundesJobs(new URLSearchParams({ was: keyword, size: '100' }), 1),
+        // Enriched: the search endpoint carries no salary, the detail one does.
+        // Without this the measure sees nothing to measure for German roles.
+        fetchBundesJobs(new URLSearchParams({ was: keyword, size: '100' }), 1)
+          .then(async r => { if (r?.jobs?.length) await enrichBundesJobs(r.jobs, 40); return r; }),
         fetchArbeitnowJobs(keyword, 1),
         fetchRemotiveJobs(keyword, 1),
       ]);
-      const jobs = settled.flatMap(r => (r.status === 'fulfilled' && Array.isArray(r.value) ? r.value : []));
+      // Sources do not agree on a shape: some resolve to an array, fetchBundesJobs
+      // resolves to { jobs }. Only arrays used to be kept, so the one source that
+      // actually publishes structured salaries was dropped without a trace — which
+      // is how "34 ads read, 0 with salary" came about.
+      const jobs = settled.flatMap(r => {
+        if (r.status !== 'fulfilled' || !r.value) return [];
+        if (Array.isArray(r.value)) return r.value;
+        return Array.isArray(r.value.jobs) ? r.value.jobs : [];
+      });
       const sourcesUp = settled.filter(r => r.status === 'fulfilled').length;
 
       const band = salaryBand.measureBand(jobs);

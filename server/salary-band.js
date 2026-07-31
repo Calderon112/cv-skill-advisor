@@ -93,11 +93,21 @@ function measureBand(jobs) {
   const values = [];
 
   for (const j of list) {
-    // The salary field first — when a source fills it, it is the reliable one.
-    // Falling back to the description finds the many ads that only mention pay in
-    // prose, at the cost of the occasional false positive, which the plausibility
-    // window and the quartiles both absorb.
-    const found = extractAnnual(j.salary) .length
+    // Structured fields first, and they need no parsing at all. The Bundesagentur
+    // detail endpoint publishes gehaltsspanneVon/Bis, already known to be annual —
+    // authoritative rather than inferred from prose, and the reason this measure
+    // stopped returning "not enough data" for German roles.
+    const lo = Number(j.salaryFrom) || null;
+    const hi = Number(j.salaryTo) || null;
+    if (lo || hi) {
+      const mid = lo && hi ? (lo + hi) / 2 : (lo || hi);
+      if (mid >= MIN_PLAUSIBLE && mid <= MAX_PLAUSIBLE) { values.push(mid); continue; }
+    }
+
+    // Otherwise the free-text salary field, then the description: many ads mention
+    // pay only in prose, at the cost of the occasional false positive that the
+    // plausibility window and the quartiles both absorb.
+    const found = extractAnnual(j.salary).length
       ? extractAnnual(j.salary)
       : extractAnnual(j.description);
     if (found.length) values.push(found.length === 2 ? (found[0] + found[1]) / 2 : found[0]);
