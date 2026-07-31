@@ -262,36 +262,67 @@ Things you must still do yourself:
 
 ## Backups
 
-Two things carry state. Losing either loses your users.
+Everything that matters lives in one PostgreSQL server: Keycloak's database holds
+the accounts and credentials, the app's holds profiles, saved jobs and generated
+documents. One dump captures both.
 
-```bash
+Create `/usr/local/bin/backup-careerai.sh`:
+
+```sh
 #!/bin/sh
-# /root/backup-careerai.sh  —  crontab: 0 3 * * * /root/backup-careerai.sh
 set -eu
-DEST=/var/backups/careerai/$(date +%F)
+
+DEST=/var/backups/careerai
+STAMP=$(date +%F_%H%M)
 mkdir -p "$DEST"
 
-# Keycloak: accounts, credentials, sessions
-docker exec careerai-postgres pg_dump -U keycloak keycloak | gzip > "$DEST/keycloak.sql.gz"
+# pg_dumpall, not pg_dump: it takes every database in the cluster plus the roles
+# they depend on, so a restore onto an empty server recreates the `careerai` user
+# as well. A per-database dump would restore tables owned by a role that no longer
+# exists, and fail at the last step.
+#
+# POSTGRES_USER is the cluster superuser, which is why this works with one login.
+docker exec careerai-postgres pg_dumpall -U "${KC_DB_USER:-keycloak}" \
+  | gzip > "$DEST/careerai-$STAMP.sql.gz"
 
-# The app: profiles, saved jobs, generated documents.
-# .backup is SQLite's own consistent-snapshot command; copying the file while the
-# app is writing can capture a torn database.
-docker exec cybercareer node -e "
-  const {DatabaseSync}=require('node:sqlite');
-  new DatabaseSync('/app/data/storage.sqlite').exec(\"VACUUM INTO '/app/data/backup.sqlite'\");
-"
-docker cp cybercareer:/app/data/backup.sqlite "$DEST/storage.sqlite"
-docker exec cybercareer rm -f /app/data/backup.sqlite
+# Fail loudly rather than leaving a truncated file that looks like a backup.
+gzip -t "$DEST/careerai-$STAMP.sql.gz"
 
-find /var/backups/careerai -maxdepth 1 -type d -mtime +30 -exec rm -rf {} +
+find "$DEST" -name 'careerai-*.sql.gz' -mtime +30 -delete
+echo "backup ok: $DEST/careerai-$STAMP.sql.gz"
 ```
 
-Restore is the reverse: `gunzip < keycloak.sql.gz | docker exec -i careerai-postgres
-psql -U keycloak keycloak`, and copy `storage.sqlite` back into the volume.
+Install it:
 
-**A backup you have never restored is not a backup.** Try it once, now, while
-nothing depends on it.
+```bash
+sudo install -m 700 backup-careerai.sh /usr/local/bin/
+sudo /usr/local/bin/backup-careerai.sh          # run once, check it prints "backup ok"
+sudo crontab -e
+# 15 3 * * *  /usr/local/bin/backup-careerai.sh >> /var/log/careerai-backup.log 2>&1
+```
+
+### Restoring
+
+```bash
+gunzip -c /var/backups/careerai/careerai-2026-07-31_0315.sql.gz \
+  | docker exec -i careerai-postgres psql -U keycloak postgres
+docker compose -f docker-compose.prod.yml --env-file .env.prod restart keycloak cybercareer
+```
+
+**A backup you have never restored is not a backup.** Do it once now, while nothing
+depends on it: restore into a throwaway container and confirm the accounts are
+there, rather than discovering the dump was empty the day you need it.
+
+### What the dump does *not* cover
+
+- **`.env.prod`** — the client secret and both database passwords. Without it the
+  restored databases are unreachable. Copy it once, somewhere private; it changes
+  rarely. Never into the same public place as the dumps.
+- **Caddy's certificates.** No need: Let's Encrypt reissues them automatically on a
+  fresh server.
+- **The server itself.** These files sit on the same instance they protect. Copy
+  them off it — `scp` to your laptop, or an S3 bucket — or a lost instance takes
+  the backups with it. That includes the day the AWS free plan closes the account.
 
 ## Storage
 
@@ -299,15 +330,28 @@ The development setup rewrote `storage.json` in full on every change with
 `writeFileSync`. A crash or a full disk part-way through truncates the file, and a
 truncated file is every account, session and saved job gone at once.
 
-Production sets `STORAGE_BACKEND=sqlite`. Writes go into a transaction with WAL, so
-a write either lands completely or not at all. It uses `node:sqlite`, built into
-Node since 22.5 — no native module, nothing to compile. That is why the image is
-now `node:24-slim`; on Node 20 the module does not exist and the server refuses to
-start rather than writing somewhere unexpected.
+Production sets `STORAGE_BACKEND=postgres` and points `DATABASE_URL` at the same
+server Keycloak uses. Writes are transactional, so a write either lands completely
+or not at all.
 
-Your existing `storage.json` is imported automatically on first start and then left
-alone as a pre-migration backup. The import is a one-off: it only runs when the
-database is empty, so restarting never re-imports over live data.
+PostgreSQL rather than SQLite: the stack already runs one, so this adds no service
+and no native module to compile into the image, and it is the only option that
+would let a second app instance share state.
+
+The application gets **its own database and role**, created once by
+`db-init/01-app-database.sh` when the volume is first initialised. Keycloak's schema
+holds credentials; the application has no business being able to read it, and a bad
+migration on either side cannot reach the other's tables.
+
+> That init script runs **only on an empty volume**. Changing `APP_DB_PASSWORD` in
+> `.env.prod` afterwards does not change it in PostgreSQL — the app will simply fail
+> to connect. Change it with `ALTER USER` inside the database, or start from a fresh
+> volume.
+
+If `STORAGE_BACKEND=postgres` is set without a `DATABASE_URL`, the server refuses to
+start. That is deliberate: an earlier version fell back to writing JSON files when
+the configured backend was unavailable, which stored accounts in a flat file while
+the configuration claimed a database, and nothing reported the mismatch.
 
 ## Updating
 
