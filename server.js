@@ -1904,6 +1904,13 @@ function buildAllPlatformSources({ searchParams, keyword, location, region, dist
   if (!APIFY_TOKEN) {
     sources.push({ key: 'StepStone', run: () => fetchStepstoneJobs(keyword, loc), pick: r => r || [] });
   }
+  // Jooble had a fetcher, a key check and its own endpoint, but was never listed
+  // here — so setting JOOBLE_API_KEY did nothing for the search everyone actually
+  // uses. Nothing reported the omission: an unused key looks exactly like a
+  // working one.
+  if (JOOBLE_API_KEY) {
+    sources.push({ key: 'Jooble', run: () => fetchJoobleJobs(keyword, loc, distance, depth), pick: r => r?.items || [] });
+  }
   if (ADZUNA_APP_ID && ADZUNA_APP_KEY) {
     sources.push({ key: 'Adzuna', run: () => fetchAdzunaJobs(keyword, loc, region, depth), pick: r => r?.items || [] });
   }
