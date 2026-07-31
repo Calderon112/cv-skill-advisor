@@ -1116,18 +1116,18 @@
   font-family:sans-serif;">
   <div style="font-size:14px;font-weight:600;color:#1e293b;">Privacy & Cookies</div>
   <div style="font-size:13px;color:#64748b;line-height:1.6;">
-    This app runs entirely on <strong>localhost</strong> — your data never leaves your machine.
-    We only store your login token and job applications locally.
-    <a href="#" onclick="showPrivacyModal();return false;" style="color:#2563eb;">Read privacy policy →</a>
+    Your profile, saved jobs and generated documents are stored on this server so they
+    follow you across devices. Sign-in is handled by our identity provider.
+    <a href="#" id="gdpr-policy-link" style="color:#2563eb;">Read privacy policy →</a>
   </div>
   <div style="display:flex;gap:10px;flex-wrap:wrap;">
-    <button onclick="gdprAccept()" style="
+    <button id="gdpr-accept" style="
       padding:9px 18px;border-radius:8px;border:none;
       background:#2563eb;color:#fff;font-size:13px;
       font-weight:500;cursor:pointer;">
       Accept & Continue
     </button>
-    <button onclick="gdprReject()" style="
+    <button id="gdpr-reject" style="
       padding:9px 18px;border-radius:8px;cursor:pointer;
       background:#fff;color:#64748b;font-size:13px;
       border:1px solid #e2e8f0;">
@@ -1156,7 +1156,7 @@
     <h3 style="color:#2563eb;font-size:12px;text-transform:uppercase;margin:14px 0 6px;">Delete your data</h3>
     <p>Delete <code>storage.json</code> + clear LocalStorage (F12 → Application → LocalStorage).</p>
     <p style="color:#94a3b8;font-size:11px;margin-top:16px;">GDPR Art. 6 — May 2025 · Sprint 1</p>
-    <button onclick="closePrivacyModal()" style="
+    <button id="privacy-close" style="
       margin-top:16px;padding:9px 18px;background:#2563eb;color:#fff;
       border:none;border-radius:8px;font-size:13px;cursor:pointer;">
       Close

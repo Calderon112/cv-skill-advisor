@@ -33,6 +33,19 @@ document.getElementById('privacy-modal').addEventListener('click', e => {
   if (e.target === document.getElementById('privacy-modal')) closePrivacyModal();
 });
 
+// Wired here, NOT with onclick="" in the markup. The CSP sets script-src 'self'
+// with no 'unsafe-inline', and an inline handler attribute is inline script: the
+// browser refuses to run it. The buttons stayed visible and did nothing at all,
+// with the consent banner covering the page — the app was unusable in production
+// while working fine locally, where the header is not sent.
+(function wireConsentBanner() {
+  const on = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener('click', fn); };
+  on('gdpr-accept', gdprAccept);
+  on('gdpr-reject', gdprReject);
+  on('privacy-close', closePrivacyModal);
+  on('gdpr-policy-link', e => { e.preventDefault(); showPrivacyModal(); });
+})();
+
 // Lance au chargement
 gdprInit();
 
