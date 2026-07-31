@@ -4141,6 +4141,52 @@ async function loadAdmin() {
           <tbody>${rows || '<tr><td colspan="6" class="hint">No accounts yet.</td></tr>'}</tbody>
         </table>
       </div>
+    </div>
+    <div class="card" id="admin-feedback"><p class="hint">Loading feedback…</p></div>`;
+
+  renderAdminFeedback();
+}
+
+// Feedback is submitted anonymously on purpose: /api/feedback records no session, no
+// username and no IP. It therefore cannot be shown per user, and the table below is
+// deliberately not joinable with the accounts above — saying so in the UI stops
+// anyone assuming the link exists and merely happens to be missing.
+async function renderAdminFeedback() {
+  const box = $('admin-feedback');
+  if (!box) return;
+  let f;
+  try {
+    f = await api.get('/api/admin/feedback');
+  } catch (e) {
+    box.innerHTML = `<p class="hint">${esc(e.message || 'Could not load feedback.')}</p>`;
+    return;
+  }
+
+  const rows = (f.entries || []).map(e => `
+    <tr>
+      <td>${e.rating ? '★'.repeat(e.rating) + '<span class="hint">' + '☆'.repeat(5 - e.rating) + '</span>' : '<span class="hint">—</span>'}</td>
+      <td>${e.area ? `<span class="pill">${esc(e.area)}</span>` : '<span class="hint">—</span>'}</td>
+      <td>${esc(e.liked || '') || '<span class="hint">—</span>'}</td>
+      <td>${esc(e.improve || '') || '<span class="hint">—</span>'}</td>
+      <td>${e.at ? esc(new Date(e.at).toLocaleDateString('en-GB')) : '—'}</td>
+    </tr>`).join('');
+
+  box.innerHTML = `
+    <div class="card-header">
+      <h2>Feedback</h2>
+      <span class="hint">
+        ${f.total} submission(s)${f.averageRating ? ` · average ${f.averageRating}/5` : ''} · anonymous
+      </span>
+    </div>
+    <p class="hint" style="margin-bottom:12px">
+      Submitted without a session, a username or an IP address, so it cannot be traced
+      back to an account — including by you.
+    </p>
+    <div class="admin-table-wrap">
+      <table class="admin-table admin-table-prose">
+        <thead><tr><th>Rating</th><th>Area</th><th>What worked</th><th>What to improve</th><th>Date</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="5" class="hint">No feedback yet.</td></tr>'}</tbody>
+      </table>
     </div>`;
 }
 

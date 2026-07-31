@@ -3366,3 +3366,13 @@ option   { color: var(--text); background: var(--bg-card); }
 /* Free text from strangers: wrap it rather than let a 2000-character word without a
  * space stretch the page sideways. */
 .fb-liked, .fb-improve { overflow-wrap: anywhere; }
+
+/* Free-text columns must wrap. The admin table sets white-space: nowrap so account
+   rows stay on one line; a 2000-character feedback comment under that rule would
+   stretch the table far past the viewport. */
+.admin-table-prose td:nth-child(3),
+.admin-table-prose td:nth-child(4) {
+  white-space: normal;
+  max-width: 340px;
+  line-height: 1.5;
+}
