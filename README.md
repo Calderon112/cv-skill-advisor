@@ -12,6 +12,30 @@ Final-year project, Westfälische Hochschule Gelsenkirchen.
 
 ---
 
+## Demo
+
+<!-- ─────────────────────────────────────────────────────────────────────────
+     TO ADD THE VIDEO — two options, both work on GitHub.
+
+     1. Hosted by GitHub (best: a real player, no third party, nothing to trust)
+        Edit this file on github.com, drag the .mp4 into the editor, and GitHub
+        replaces it with a https://github.com/user-attachments/assets/... URL.
+        Leave that URL ALONE ON ITS OWN LINE, right below this comment. Do not
+        wrap it in markdown link syntax — a bare URL is what becomes a player.
+        Limit: 100 MB.
+
+     2. YouTube, if the file is too large. GitHub will not embed the player, so
+        use a clickable thumbnail:
+        [![Watch the demo](docs/video-thumbnail.png)](https://youtu.be/YOUR_ID)
+
+     Neither <video> nor <iframe> survives: GitHub strips both when rendering.
+     ───────────────────────────────────────────────────────────────────────── -->
+
+*Two minutes, from an empty profile to a finished application. Video coming shortly —
+in the meantime the app is live at <https://careerai-jk.duckdns.org>.*
+
+---
+
 ## Contents
 
 - [Quick start](#quick-start)

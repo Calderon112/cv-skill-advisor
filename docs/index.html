@@ -288,7 +288,25 @@
     <h2>See it running</h2>
     <p class="lede">Two minutes, from an empty profile to a finished application.</p>
     <div class="video">
-      <!-- Replace this block with the embed once the screencast is uploaded. -->
+      <!-- ── TO ADD THE VIDEO ───────────────────────────────────────────────
+           Unlike the README, this page is ours: an iframe or a <video> both work.
+
+           A) The file lives in the repo (keeps the page self-contained):
+              <video controls preload="metadata" poster="video-poster.jpg">
+                <source src="demo.mp4" type="video/mp4">
+              </video>
+              Put demo.mp4 in docs/ next to this file. GitHub Pages serves files
+              up to 100 MB, and nothing leaves the visitor's connection to us.
+
+           B) YouTube, if the file is large:
+              <iframe src="https://www.youtube-nocookie.com/embed/YOUR_ID"
+                      title="CareerAI demo" allowfullscreen loading="lazy"></iframe>
+              Use youtube-nocookie.com, not youtube.com: the standard player sets
+              tracking cookies before the visitor has pressed anything, which is
+              exactly what the consent notice in the app promises not to do.
+
+           Delete the placeholder div below once either is in place.
+           ──────────────────────────────────────────────────────────────────── -->
       <div class="todo">Product video — coming shortly.<br>
         Meanwhile, the app is live at
         <a href="https://careerai-jk.duckdns.org">careerai-jk.duckdns.org</a>.</div>
