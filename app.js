@@ -708,6 +708,46 @@ const PAGE_TITLES = {
   admin:             'Admin',
 };
 
+// ── Mobile navigation drawer ──────────────────────────────────────────────
+// Below 900px the sidebar is off-canvas. Everything here is a no-op on desktop,
+// where the drawer classes are never applied by the stylesheet.
+(function wireNavDrawer() {
+  const app = $('app');
+  const toggle = $('nav-toggle');
+  const backdrop = $('nav-backdrop');
+  if (!app || !toggle || !backdrop) return;
+
+  const isOpen = () => app.classList.contains('nav-open');
+
+  const open = () => {
+    backdrop.hidden = false;
+    // Next frame, so the transition has a starting opacity to animate from.
+    requestAnimationFrame(() => app.classList.add('nav-open'));
+    toggle.setAttribute('aria-expanded', 'true');
+    lockBodyScroll();
+  };
+
+  const close = () => {
+    if (!isOpen()) return;
+    app.classList.remove('nav-open');
+    toggle.setAttribute('aria-expanded', 'false');
+    unlockBodyScroll();
+    // Keep it out of the accessibility tree once faded out, not before.
+    setTimeout(() => { if (!isOpen()) backdrop.hidden = true; }, 250);
+  };
+
+  toggle.addEventListener('click', () => (isOpen() ? close() : open()));
+  backdrop.addEventListener('click', close);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+
+  // Choosing a destination should reveal it, not leave the drawer covering it.
+  document.querySelectorAll('.sidebar .nav-btn').forEach(b => b.addEventListener('click', close));
+
+  // Rotating to landscape can cross the breakpoint with the drawer still open,
+  // which would leave the body scroll-locked on a layout that has no drawer.
+  window.addEventListener('resize', () => { if (window.innerWidth > 900) close(); });
+})();
+
 function navigate(page) {
   document.querySelectorAll('.page').forEach(p   => p.classList.remove('active'));
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));

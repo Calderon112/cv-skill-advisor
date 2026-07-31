@@ -172,8 +172,11 @@
   <!-- App Shell -->
   <div class="app" id="app">
 
+    <!-- Dims the page behind the mobile navigation drawer; also its dismiss target. -->
+    <div id="nav-backdrop" class="nav-backdrop" hidden></div>
+
     <!-- Sidebar -->
-    <aside class="sidebar">
+    <aside class="sidebar" id="sidebar">
       <div class="sidebar-brand">
         <div class="brand-mark">CA</div>
         <div class="brand-text">
@@ -228,6 +231,9 @@
 
       <!-- Topbar -->
       <div class="topbar">
+        <button id="nav-toggle" class="nav-toggle" aria-label="Open menu" aria-expanded="false" aria-controls="sidebar">
+          <span></span><span></span><span></span>
+        </button>
         <h2 class="topbar-title" id="topbar-title">Getting Started</h2>
         <div class="topbar-right">
           <button class="theme-toggle" id="theme-toggle" title="Switch light / dark" aria-label="Switch theme">🌙</button>

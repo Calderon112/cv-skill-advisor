@@ -2057,14 +2057,38 @@ option   { color: var(--text); background: var(--bg-card); }
 }
 
 @media (max-width: 900px) {
-  :root { --sidebar-w: 56px; }
+  /* The sidebar used to shrink to a 56px icon rail here, hiding .nav-label. But the
+     nav buttons carry no icons — only labels — so the rail was a column of blank
+     buttons taking space and doing nothing. It slides off-canvas instead, with the
+     labels kept, and the hamburger in the topbar brings it back. */
+  .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: min(300px, 86vw);
+    min-width: 0;
+    height: 100dvh;          /* dvh, not vh: iOS toolbars make 100vh overflow */
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    z-index: 1200;
+    box-shadow: 8px 0 32px rgba(0,0,0,0.45);
+    overflow-y: auto;
+  }
+  .app.nav-open .sidebar { transform: none; }
 
-  .sidebar { padding: 16px 0; }
-  .sidebar-brand { justify-content: center; padding: 0 0 16px; }
-  .brand-text, .user-info-sm, .nav-label, .nav-section { display: none; }
-  .nav-btn  { justify-content: center; padding: 10px; }
-  .nav-badge { margin: 0; }
-  .status-dot { display: none; }
+  .nav-toggle { display: inline-flex; }
+
+  .nav-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.55);
+    z-index: 1150;
+    opacity: 0;
+    transition: opacity 0.25s ease;
+  }
+  .app.nav-open .nav-backdrop { opacity: 1; }
+
+  /* The drawer is out of flow, so the content takes the full width. */
+  .main-content { width: 100%; min-width: 0; }
 
   .two-col  { grid-template-columns: 1fr; }
   .three-col { grid-template-columns: 1fr; }
@@ -2074,7 +2098,13 @@ option   { color: var(--text); background: var(--bg-card); }
   .pipeline-grid { flex-direction: column; }
   .flow-arrow { transform: rotate(90deg); padding: 4px 0; }
 
-  .kanban { grid-template-columns: repeat(3, minmax(160px, 1fr)); }
+  /* Four columns cannot fit; let the board scroll sideways inside its own box
+     rather than widening the page. */
+  .kanban {
+    grid-template-columns: repeat(4, minmax(190px, 1fr));
+    overflow-x: auto;
+    padding-bottom: 8px;
+  }
 }
 
 @media (max-width: 600px) {
@@ -3375,4 +3405,82 @@ option   { color: var(--text); background: var(--bg-card); }
   white-space: normal;
   max-width: 340px;
   line-height: 1.5;
+}
+
+/* ── Mobile navigation drawer ────────────────────────────────────────────── */
+
+/* Hidden on desktop, where the sidebar is always on screen. */
+.nav-toggle {
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  width: 38px;
+  height: 38px;
+  padding: 0 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.05);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.nav-toggle span {
+  display: block;
+  height: 2px;
+  width: 100%;
+  border-radius: 2px;
+  background: var(--text);
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+/* Three bars fold into a cross while the drawer is open. */
+.app.nav-open .nav-toggle span:nth-child(1) { transform: translateY(6px) rotate(45deg); }
+.app.nav-open .nav-toggle span:nth-child(2) { opacity: 0; }
+.app.nav-open .nav-toggle span:nth-child(3) { transform: translateY(-6px) rotate(-45deg); }
+
+.nav-backdrop[hidden] { display: none; }
+
+/* ── Narrow screens ──────────────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  /* A single long word — a job title, a URL in a description — used to push the
+     whole page wider than the screen, which is what made the cards look cut off
+     on the right. */
+  body { overflow-x: hidden; }
+  .card, .page, .main-content { max-width: 100%; min-width: 0; }
+  .card { overflow-wrap: anywhere; }
+
+  /* Declared here rather than in the earlier 900px block: the base
+     `.nav-toggle { display: none }` above sits later in the file than that block
+     and, at equal specificity, was winning. */
+  .nav-toggle { display: inline-flex; }
+
+  /* Tables stay readable by scrolling inside their own box. */
+  .admin-table-wrap, .jw-docs { overflow-x: auto; }
+
+  .topbar {
+    gap: 10px;
+    padding: 0 12px;
+  }
+  .topbar-title {
+    font-size: 16px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+  }
+  .topbar-right { gap: 8px; min-width: 0; }
+  /* "Online" and the theme emoji are decoration; the actions are not. */
+  .api-indicator { display: none; }
+
+  /* The chat button sat in the same stacking context as the cards and was
+     covered by whatever scrolled under it. */
+  #chat-widget { z-index: 1100; }
+  .chat-panel { width: min(94vw, 400px); max-height: 74dvh; }
+}
+
+@media (max-width: 600px) {
+  .page { padding: 14px; }
+  .stats-row { grid-template-columns: 1fr 1fr; }
+  /* Full-width so the label is not truncated mid-word. */
+  #add-job-btn { font-size: 12px; padding: 7px 10px; }
+  .topbar-avatar { width: 30px; height: 30px; font-size: 12px; }
 }
