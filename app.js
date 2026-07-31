@@ -1547,7 +1547,11 @@ function renderJobResults(jobs, sourceLabel) {
 
   grid.querySelectorAll('.track-btn').forEach(btn =>
     btn.addEventListener('click', e => {
-      const job = ranked[Number(e.target.dataset.jobIdx)]?.job;
+      // currentTarget, not target. An automatic page translation wraps the button's
+      // text in a <font> element, so the tap lands on that instead of the button and
+      // e.target.dataset is empty — the button then does nothing at all, silently.
+      // Reported from a phone reading the app through Safari's translation.
+      const job = ranked[Number(e.currentTarget.dataset.jobIdx)]?.job;
       if (job) prefillTracker(job);
     })
   );
@@ -2438,7 +2442,9 @@ function renderKanban() {
       btn.addEventListener('click', e => prepInterviewForJob(e.currentTarget.dataset.prep)));
 
     col.querySelectorAll('.move-btn').forEach(btn =>
-      btn.addEventListener('click', e => moveApplication(e.target.dataset.id, e.target.dataset.to))
+      // Same reason as the tracker button: a translated page puts a <font> between
+      // the tap and the element carrying the data attributes.
+      btn.addEventListener('click', e => moveApplication(e.currentTarget.dataset.id, e.currentTarget.dataset.to))
     );
 
     // Click a card body (not a button/link) → open its job workspace.
@@ -3729,7 +3735,7 @@ function renderSkillTags() {
     : '<span class="hint">No skills yet. Add some, or import from your CV.</span>';
   wrap.querySelectorAll('.skill-tag button').forEach(b =>
     b.addEventListener('click', e => {
-      state.profile.skills.splice(Number(e.target.dataset.i), 1);
+      state.profile.skills.splice(Number(e.currentTarget.dataset.i), 1);
       saveProfileToStorage(); renderSkillTags();
     })
   );
