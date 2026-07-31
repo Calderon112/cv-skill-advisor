@@ -708,6 +708,133 @@ const PAGE_TITLES = {
   admin:             'Admin',
 };
 
+// ── Inline help ───────────────────────────────────────────────────────────
+//
+// The figures this app shows are the result of steps the reader cannot see: a
+// search returns 1000 postings, deduplication takes it to 145, a sector filter to
+// 5. Each number is correct and the sequence is baffling without an explanation.
+//
+// Those explanations were already written — as title="" attributes. A title needs
+// a hover, and a phone has none, so on the device most people use the app the
+// explanation simply did not exist. This is the same text, reachable by tapping.
+//
+// One delegated listener rather than per-element wiring: most of these figures are
+// rendered after a search, so anything bound at startup would miss them.
+const HELP_TEXTS = {
+  dedup: `<strong>Same job, several boards</strong><br>
+    Employers post to many platforms at once. We compare titles and companies and
+    keep one card per posting, noting where else it appeared. This number is what
+    remains after that merge — nothing was discarded for being unsuitable.`,
+
+  domain: `<strong>Filtered by sector</strong><br>
+    Only postings whose title or description mentions your chosen sector are kept.
+    This is usually the biggest drop, and it is reversible: set the sector to
+    <strong>All</strong> and every deduplicated result comes back.`,
+
+  matchScore: `<strong>How the percentage is built</strong><br>
+    A fixed weighting, identical for every job, so the same CV and posting always
+    give the same number: skills 45%, role 20%, location 10%, remote 10%,
+    seniority 10%, pay 5%.<br><br>
+    Meaning-based re-ranking then reorders the shortlist, so "Ethical Hacking" on
+    your CV still matches a "Penetration Tester" posting.`,
+
+  salaryMeasured: `<strong>Measured, not estimated</strong><br>
+    The middle half of the salaries actually stated in the job ads we read — the
+    25th to 75th percentile, which ignores one unpaid internship and one director
+    role at the extremes.<br><br>
+    Most German postings publish no salary at all, so the count of ads that did is
+    shown beside it. Below five, no range is displayed.`,
+
+  salaryReference: `<strong>Orientation figure, not a measurement</strong><br>
+    Too few job ads stated a salary to calculate anything honest, so this is a
+    typical band for this career stage. It is the same figure for every role at
+    this level, and it is not evidence.`,
+
+  criticScore: `<strong>The letter was graded before you saw it</strong><br>
+    One agent writes the letter, a second scores it out of 100 against the actual
+    posting and sends it back with specific objections. The loop repeats until it
+    clears the bar.<br><br>
+    The score and the number of revisions are shown so a weak letter is visible
+    rather than quietly handed over.`,
+
+  liveCount: `<strong>Counted live, right now</strong><br>
+    Queried from the official Bundesagentur für Arbeit API for the whole of
+    Germany when this page opened. A low number usually means the exact job title
+    is uncommon, not that the career is closed.`,
+};
+
+let _helpAnchor = null;
+
+function closeHelpPopover() {
+  _helpAnchor = null;
+  document.querySelectorAll('.help-pop').forEach(p => p.remove());
+  document.querySelectorAll('.help-dot[aria-expanded="true"]')
+    .forEach(b => b.setAttribute('aria-expanded', 'false'));
+}
+
+// Fixed positioning means the panel does not travel with its button, so it has to
+// be moved by hand. Repositioned rather than closed: someone scrolls to read a long
+// explanation, and closing on the first scroll would snatch it away exactly as they
+// started reading.
+function positionHelpPopover() {
+  const pop = document.querySelector('.help-pop');
+  if (!pop || !_helpAnchor || !_helpAnchor.isConnected) return;
+  const r = _helpAnchor.getBoundingClientRect();
+  if (r.bottom < 0 || r.top > window.innerHeight) { closeHelpPopover(); return; }
+  const w = pop.offsetWidth, h = pop.offsetHeight;
+  const left = Math.min(Math.max(10, r.left + r.width / 2 - w / 2), window.innerWidth - w - 10);
+  let top = r.bottom + 8;
+  if (top + h > window.innerHeight - 10) top = Math.max(10, r.top - h - 8);
+  pop.style.left = `${left}px`;
+  pop.style.top = `${top}px`;
+}
+
+function openHelpPopover(btn) {
+  // data-help-text wins: callers use it to append the figures for the search on
+  // screen, and it already contains the general text.
+  const key = btn.dataset.help;
+  const text = btn.dataset.helpText || HELP_TEXTS[key] || '';
+  if (!text) return;
+  closeHelpPopover();
+
+  const pop = document.createElement('div');
+  pop.className = 'help-pop';
+  pop.setAttribute('role', 'dialog');
+  pop.innerHTML = text + '<button type="button" class="help-close">Got it</button>';
+  document.body.appendChild(pop);
+
+  // Positioned after insertion so the real height is known, and clamped to the
+  // viewport because these buttons sit near the right edge on a phone.
+  _helpAnchor = btn;
+  positionHelpPopover();
+
+  btn.setAttribute('aria-expanded', 'true');
+  pop.querySelector('.help-close').addEventListener('click', closeHelpPopover);
+}
+
+document.addEventListener('click', e => {
+  const btn = e.target.closest('.help-dot');
+  if (btn) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (btn.getAttribute('aria-expanded') === 'true') closeHelpPopover(); else openHelpPopover(btn);
+    return;
+  }
+  if (!e.target.closest('.help-pop')) closeHelpPopover();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeHelpPopover(); });
+// Follow the button instead of closing. Fixed coordinates do not travel with the
+// page, and dismissing on the first scroll would take the explanation away from
+// anyone who scrolled in order to read it.
+window.addEventListener('resize', positionHelpPopover);
+window.addEventListener('scroll', positionHelpPopover, true);
+
+/** Markup for a help button. `key` indexes HELP_TEXTS. */
+function helpDot(key, label) {
+  return `<button type="button" class="help-dot" data-help="${esc(key)}"
+    aria-expanded="false" aria-label="${esc(label || 'What does this mean?')}">?</button>`;
+}
+
 // ── Mobile navigation drawer ──────────────────────────────────────────────
 // Below 900px the sidebar is off-canvas. Everything here is a no-op on desktop,
 // where the drawer classes are never applied by the stylesheet.
@@ -1573,19 +1700,28 @@ async function scrapeAllPlatforms() {
       const dedup = data.dedupTotal ?? raw;
       const kept = fresh.length;
 
-      const chip = (count, name, colour, title) => `
-          <div class="pb-chip"${title ? ` title="${esc(title)}"` : ''}>
+      // The help button carries the numbers for THIS search, appended to the
+      // general explanation — "140 were dropped" says more than any static text.
+      const chip = (count, name, colour, help) => `
+          <div class="pb-chip">
             <div class="pb-chip-count"${colour ? ` style="color:${colour}"` : ''}>${count}</div>
-            <div class="pb-chip-name">${esc(name)}</div>
+            <div class="pb-chip-name">${esc(name)}${help || ''}</div>
           </div>`;
+
+      const withNumbers = (key, extra) =>
+        `<button type="button" class="help-dot" data-help="${key}"
+           data-help-text="${esc(HELP_TEXTS[key] + '<br><br>' + extra)}"
+           aria-expanded="false" aria-label="What does this mean?">?</button>`;
 
       breakdown.innerHTML =
         Object.entries(data.platformBreakdown)
           .map(([name, count]) => chip(count, name)).join('')
         + chip(dedup, 'After dedup', 'var(--text-muted)',
-            `${raw} results from all sources, ${raw - dedup} of them the same job posted on more than one platform`)
+            withNumbers('dedup',
+              `<strong>This search:</strong> ${raw} results from all sources, ${raw - dedup} of them the same posting on more than one platform.`))
         + chip(kept, 'In this domain', 'var(--orange)',
-            `${dedup - kept} dropped because neither title nor description mentions this sector — choose sector "All" to keep them.`);
+            withNumbers('domain',
+              `<strong>This search:</strong> ${dedup - kept} of ${dedup} dropped by the sector filter. Set the sector to "All" to see them.`));
       breakdown.classList.remove('hidden');
     }
 
@@ -2516,7 +2652,7 @@ function renderJobConsult(c) {
   const pct = Math.max(0, Math.min(100, Math.round(Number(c.matchPercent) || 0)));
   const color = pct >= 75 ? 'var(--teal)' : pct >= 40 ? 'var(--cyan)' : 'var(--orange)';
   $('jw-match').innerHTML =
-    `<span class="jw-match-score" style="color:${color}">${pct}%</span> match`
+    `<span class="jw-match-score" style="color:${color}">${pct}%</span> match${helpDot('matchScore')}`
     + `<div class="jw-bar"><div style="width:${pct}%;background:${color}"></div></div>`
     + (c.matchSummary ? `<p style="font-size:13px;color:var(--text-muted);margin-top:8px">${esc(c.matchSummary)}</p>` : '');
 
@@ -2576,7 +2712,7 @@ function renderJobWorkspace() {
     const pct = profileSkills.length ? Math.round(matched / total * 100) : 0;
     const color = pct >= 70 ? 'var(--teal)' : pct >= 40 ? 'var(--cyan)' : 'var(--orange)';
     $('jw-match').innerHTML =
-      `<span class="jw-match-score" style="color:${color}">${pct}%</span> skills match`
+      `<span class="jw-match-score" style="color:${color}">${pct}%</span> skills match${helpDot('matchScore')}`
       + `<div class="jw-bar"><div style="width:${pct}%;background:${color}"></div></div>`
       + `<span style="font-size:12px;color:var(--text-muted)">${matched}/${total} of the job's skills are in your profile`
       + `${profileSkills.length ? '' : ' — import/analyze your CV first'}</span>`;
@@ -2778,7 +2914,7 @@ async function runAgentGraph() {
     const scored = d.scored !== false && d.score != null;
     const pass = scored && d.score >= d.qualityBar;
     const verdict = scored
-      ? `Critic <strong style="color:${pass ? 'var(--teal)' : 'var(--orange)'}">${d.score}/100</strong> (bar ${d.qualityBar})`
+      ? `Critic <strong style="color:${pass ? 'var(--teal)' : 'var(--orange)'}">${d.score}/100</strong> (bar ${d.qualityBar})${helpDot('criticScore')}`
       : `Critic <strong style="color:var(--orange)">not evaluated</strong> — the judge could not run`;
 
     panel.querySelector('.jw-graph-head').innerHTML =
@@ -4805,7 +4941,7 @@ function cpRenderStart(role) {
           `<li class="${cpOwnedSkills().has(String(s).toLowerCase()) ? 'has' : ''}">${esc(s)}</li>`).join('')}</ul>
          ${target.certs?.length ? `<div class="cp-stat"><div class="cp-figure-sub">Usual first certification<br>${esc(target.certs[0])}</div></div>` : ''}`) : ''}
 
-      ${cpPanel('Open positions', 'Live count from Bundesagentur für Arbeit, all of Germany.',
+      ${cpPanel('Open positions', 'Live count from Bundesagentur für Arbeit, all of Germany.' + helpDot('liveCount'),
         `<div class="cp-figure" id="cp-count">…</div>
          <div class="cp-figure-sub">${feeders[0] ? `listings for ${esc(feeders[0].title)}` : 'listings'}</div>
          <div class="cp-stat"><div class="cp-figure-sub">A feeder role is easier to land than a security role, and it is
@@ -4851,7 +4987,7 @@ function cpRenderFeeder(role) {
         `<ul class="cp-list">${next.map(r => `<li>${esc(r.title)}${r.domainLabel
           ? ` <span class="cp-figure-sub" style="display:inline">— ${esc(r.domainLabel)}</span>` : ''}</li>`).join('')}</ul>`) : ''}
 
-      ${cpPanel('Open positions', 'Live count from Bundesagentur für Arbeit, all of Germany.',
+      ${cpPanel('Open positions', 'Live count from Bundesagentur für Arbeit, all of Germany.' + helpDot('liveCount'),
         `<div class="cp-figure" id="cp-count">…</div>
          <div class="cp-figure-sub">listings matching this title</div>`)}
 
@@ -4901,7 +5037,7 @@ function cpRenderDetail(role) {
         'Commonly held at this level — not a requirement.',
         `<ul class="cp-list">${role.certs.map(t => li(t, true)).join('')}</ul>`) : ''}
 
-      ${panel('Open positions', 'Live count from Bundesagentur für Arbeit, all of Germany.',
+      ${panel('Open positions', 'Live count from Bundesagentur für Arbeit, all of Germany.' + helpDot('liveCount'),
         `<div class="cp-figure" id="cp-count">…</div>
          <div class="cp-figure-sub" id="cp-count-note">counting…</div>
          <div class="cp-stat" id="cp-salary-box">
@@ -4975,8 +5111,7 @@ async function cpLoadSalary(query, referenceSalary) {
     }
     el.textContent = referenceSalary;
     el.classList.add('cp-salary-reference');
-    note.textContent = `orientation only, NOT measured — typical for this level, same figure for every `
-      + `role at this stage. ${reason}`;
+    note.innerHTML = esc(`orientation only, not measured — typical for this level, same figure for every role at this stage. ${reason}`) + helpDot('salaryReference');
   };
 
   try {
@@ -4986,8 +5121,7 @@ async function cpLoadSalary(query, referenceSalary) {
     if (d.display) {
       el.textContent = d.display;
       el.classList.remove('cp-salary-reference', 'cp-salary-none');
-      note.textContent = `gross per year — middle half of the ${d.withSalary} ad(s) that stated pay, `
-        + `out of ${d.read} read for “${query}”`;
+      note.innerHTML = esc(`gross per year — middle half of the ${d.withSalary} ad(s) that stated pay, out of ${d.read} read for “${query}”`) + helpDot('salaryMeasured');
       return;
     }
     showReference(d.read

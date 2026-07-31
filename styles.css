@@ -3499,3 +3499,64 @@ option   { color: var(--text); background: var(--bg-card); }
 
 /* An orientation figure must not wear the same clothes as a measured one. */
 .cp-salary-reference { color: var(--text-muted); font-weight: 700; }
+
+/* ── Inline help ──────────────────────────────────────────────────────────
+   Replaces title="" tooltips. Those need a hover, which a phone does not have:
+   the explanation of why 145 results became 5 existed all along and was
+   unreachable on the device most people used. This works on tap. */
+.help-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  margin-left: 5px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border, rgba(255,255,255,.28));
+  background: rgba(127,127,127,.16);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  cursor: pointer;
+  vertical-align: middle;
+  flex: none;
+}
+.help-dot:hover, .help-dot[aria-expanded="true"] {
+  background: var(--cyan, #38bdf8);
+  border-color: transparent;
+  color: #04121f;
+}
+
+/* Fixed, not absolute: these sit inside chips and cards that clip their
+   overflow, which would cut the panel in half. */
+.help-pop {
+  position: fixed;
+  z-index: 3000;
+  max-width: min(330px, calc(100vw - 28px));
+  background: var(--bg-card, #151b38);
+  color: var(--text, #e8ecf8);
+  border: 1px solid var(--border, rgba(255,255,255,.16));
+  border-radius: 12px;
+  padding: 13px 15px;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.55;
+  text-align: left;
+  text-transform: none;
+  letter-spacing: normal;
+  box-shadow: 0 18px 48px rgba(0,0,0,.5);
+}
+.help-pop strong { color: var(--cyan, #38bdf8); }
+.help-pop .help-close {
+  display: block;
+  margin: 10px 0 0 auto;
+  padding: 5px 11px;
+  border-radius: 7px;
+  border: 1px solid var(--border, rgba(255,255,255,.18));
+  background: rgba(127,127,127,.14);
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
