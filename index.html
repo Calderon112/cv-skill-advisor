@@ -391,7 +391,10 @@
             <div class="scrape-platform" id="sp-linkedin"><span class="sp-dot spinning"></span> LinkedIn</div>
             <div class="scrape-platform" id="sp-remotive"><span class="sp-dot spinning"></span> Remotive</div>
           </div>
-          <div class="scrape-hint">Querying 4 sources in parallel — results in ~5s</div>
+          <!-- No hard-coded count: how many sources run depends on which API keys
+               are configured, and the figure was left at 4 while ten were being
+               queried. The per-source tally below reports the truth anyway. -->
+          <div class="scrape-hint">Querying every configured platform in parallel — results in ~5s</div>
         </div>
 
         <!-- Platform breakdown after scrape-all -->

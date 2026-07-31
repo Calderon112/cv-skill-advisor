@@ -2878,7 +2878,7 @@ const chatKnowledge = [
     match: msg => /\bjob\b|search|offer|position|vacanc/.test(msg),
     reply: () => state.jobs.length
       ? `I found **${state.jobs.length} jobs** for you!\n\nEach one shows a **match score** if your profile is complete. Open **Job Search** to review them.`
-      : `Go to **Job Search**.\nPick your region and platform, then click **Search Jobs** or **Scrape All Platforms** to query 4 sources at once.`
+      : `Go to **Job Search**.\nPick your region and platform, then click **Search Jobs** or **Scrape All Platforms** to query every configured platform at once.`
   },
   {
     match: msg => /match|score|fit/.test(msg),
