@@ -138,8 +138,19 @@ services:
     restart: unless-stopped
     # `start`, not `start-dev`. Dev mode uses an in-memory H2 database and turns
     # off hostname checks — losing accounts on restart and accepting any Host
-    # header. --optimized skips the build step, which the image already ran.
-    command: start --optimized
+    # header.
+    #
+    # NOT `--optimized`. That flag promises a server already built for this exact
+    # configuration, and the stock image is built for H2 — KC_DB is a build-time
+    # option, not a runtime one. On a fresh volume Keycloak refuses outright:
+    #   "The '--optimized' flag was used for first ever server start."
+    # and the container restart-loops while Caddy answers 502.
+    #
+    # Plain `start` runs the build itself whenever the build options changed. It
+    # costs 30-60 s on the first start and nothing afterwards. Baking `kc.sh build
+    # --db=postgres` into a custom image would buy that time back, at the price of
+    # another image to maintain.
+    command: start
     environment:
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://postgres:5432/${KC_DB_NAME:-keycloak}
