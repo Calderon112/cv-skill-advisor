@@ -805,6 +805,87 @@ async function fetchRemotiveJobs(keyword, depth = DEFAULT_PAGE_DEPTH) {
   }
 }
 
+// ── Careerjet — aggregator with real German coverage ─────────────────────
+//
+// Added because it is the only source tested that brings German volume at scale:
+// 14,774 hits for "security" against the Bundesagentur's few hundred, and 41 of 50
+// results in German locations. It aggregates the boards this project cannot query
+// directly, LinkedIn and StepStone among them, through a channel they permit.
+//
+// What it does not give is full text. Descriptions are snippets of 116-300
+// characters, so a Careerjet posting supports matching but is thinner material for
+// the Writer than a Bundesagentur or Adzuna one.
+//
+// Two constraints worth knowing: the API refuses any request without a Referer
+// header, and it is HTTP only — there is no TLS endpoint. The affiliate id is a
+// tracking identifier rather than a secret, but it does travel in clear.
+const CAREERJET_AFFID = process.env.CAREERJET_AFFID || '';
+
+// "&euro;85000 per year" — the currency arrives HTML-encoded and the period is
+// free text. Only annual euro figures may reach the salary band; an hourly rate
+// folded into an annual band would corrupt it.
+function parseCareerjetSalary(raw) {
+  const s = String(raw || '').replace(/&euro;/gi, '€').replace(/&nbsp;/gi, ' ');
+  if (!s) return { display: null, from: null, to: null };
+  const annualEur = /€/.test(s) && /per\s*year|pro\s*jahr|j(ä|a)hrlich/i.test(s);
+  if (!annualEur) return { display: s.trim(), from: null, to: null };
+
+  const nums = (s.replace(/[.\s](?=\d{3}\b)/g, '').match(/\d{4,6}/g) || []).map(Number);
+  const ok = nums.filter(n => n >= 18000 && n <= 250000);
+  return { display: s.trim(), from: ok[0] ?? null, to: ok[1] ?? null };
+}
+
+async function fetchCareerjetJobs(keyword, location, depth = DEFAULT_PAGE_DEPTH) {
+  if (!CAREERJET_AFFID) return [];
+  const out = [];
+  const pages = Math.min(depth, 3);
+  try {
+    for (let page = 1; page <= pages; page++) {
+      const params = new URLSearchParams({
+        keywords: keyword || '',
+        location: location || 'Germany',
+        locale_code: 'de_DE',
+        pagesize: '50',
+        page: String(page),
+        affid: CAREERJET_AFFID,
+        // Both are required by the API. They identify the end user for their
+        // analytics; we send the server's own values rather than forwarding a
+        // visitor's address, which would leak it to a third party for no benefit.
+        user_ip: '127.0.0.1',
+        user_agent: 'CareerAI/3.0',
+      });
+      const r = await fetch(`http://public.api.careerjet.net/search?${params}`, {
+        headers: { Referer: publicBaseUrl() + '/', Accept: 'application/json' },
+        signal: AbortSignal.timeout(9000),
+      });
+      if (!r.ok) break;
+      const data = await r.json();
+      if (data.type !== 'JOBS' || !Array.isArray(data.jobs)) break;
+
+      for (const j of data.jobs) {
+        const pay = parseCareerjetSalary(j.salary);
+        out.push({
+          platform:      'Careerjet',
+          source:        'careerjet',
+          title:         stripHtml(j.title || '') || 'Job offer',
+          company:       stripHtml(j.company || '') || 'Unbekannt',
+          location:      stripHtml(j.locations || '') || 'Deutschland',
+          description:   stripHtml(j.description || ''),
+          jobUrl:        j.url || null,
+          publishedDate: j.date ? String(j.date).slice(0, 10) : null,
+          board:         j.site || 'Careerjet',
+          salary:        pay.display,
+          salaryFrom:    pay.from,
+          salaryTo:      pay.to,
+          raw:           j,
+        });
+      }
+      if (data.jobs.length < 50) break;   // last page
+    }
+  } catch (_) { /* one dead source must not fail the search */ }
+  return out;
+}
+
 // ── Jobicy — free public API, no key ─────────────────────────────────────
 //
 // Added for two things the German sources do not give: a full description on every
@@ -1816,6 +1897,7 @@ function buildAllPlatformSources({ searchParams, keyword, location, region, dist
     { key: 'LinkedIn',      run: () => fetchLinkedInJobs(keyword, loc, depth),   pick: r => r || [] },
     { key: 'Remotive',      run: () => fetchRemotiveJobs(keyword, depth),        pick: r => r || [] },
     { key: 'Jobicy',        run: () => fetchJobicyJobs(keyword, depth),          pick: r => r || [] },
+    { key: 'Careerjet',     run: () => fetchCareerjetJobs(keyword, loc, depth),   pick: r => r || [] },
     { key: 'Xing',          run: () => fetchXingJobs(keyword, loc),              pick: r => r || [] },
   ];
   // Free HTML StepStone scraper when no paid Apify token is configured.
