@@ -2121,16 +2121,23 @@ async function addApplication(app) {
   state.apps.push(newApp);
   saveAppsLocally();
 
-  if (state.token && state.online) {
-    try {
-      const data = await api.post('/api/applications', newApp);
-      if (data.applications) { state.apps = data.applications; saveAppsLocally(); }
-    } catch (_) {}
-  }
-
+  // Paint before talking to the server. The local list is already correct, so the
+  // round trip decides nothing about what to draw — it only delayed it. On a phone
+  // reaching Stockholm that was several hundred milliseconds of a button that
+  // looked broken.
   renderKanban();
   updateStats();
   toast(`${newApp.title} @ ${newApp.company} added to tracker!`, 'success');
+
+  if (state.token && state.online) {
+    try {
+      const data = await api.post('/api/applications', newApp);
+      // The server owns the ids, so redraw once its version arrives.
+      if (data.applications) { state.apps = data.applications; saveAppsLocally(); renderKanban(); updateStats(); }
+    } catch (_) {
+      toast('Saved on this device — the server could not be reached.', 'info');
+    }
+  }
 }
 
 async function moveApplication(id, newStatus) {
@@ -2142,11 +2149,19 @@ async function moveApplication(id, newStatus) {
   });
   saveAppsLocally();
   if (jwCurrentApp && jwCurrentApp.id === id) jwCurrentApp = state.apps.find(a => a.id === id);
-  if (state.token && state.online) {
-    try { await api.put(`/api/applications/${id}`, { status: newStatus, history: state.apps.find(a => a.id === id)?.history }); } catch (_) {}
-  }
+
+  // Same reason as addApplication: the card's new column is already decided
+  // locally. Waiting for the PUT before moving it made every drag feel laggy.
   renderKanban();
   toast(`Moved to ${esc(STATUS_LABELS[newStatus] || newStatus)}.`, 'info');
+
+  if (state.token && state.online) {
+    try {
+      await api.put(`/api/applications/${id}`, { status: newStatus, history: state.apps.find(a => a.id === id)?.history });
+    } catch (_) {
+      toast('Moved on this device — the server could not be reached.', 'info');
+    }
+  }
 }
 
 // Patch an application's data (e.g. saved documents) + persist locally and server-side.
