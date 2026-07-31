@@ -247,7 +247,7 @@ Security posture, verified against the running code rather than assumed:
 - [x] **Rate limits** on credentials, LLM calls, scrapers and outbound email.
 - [x] **Body size limits** enforced before reading the payload.
 - [x] **Passwords are scrypt with a per-user salt** (when local accounts are enabled).
-- [x] **SQLite instead of the JSON file** — see below.
+- [x] **PostgreSQL instead of the JSON file**, on its own database and role — see below.
 
 Things you must still do yourself:
 
@@ -384,6 +384,6 @@ docker compose -f docker-compose.prod.yml logs --tail=100 keycloak
 - Sessions last 24 h with no refresh-token rotation.
 - Rate limits are per process and in memory; they reset on restart and are not
   shared if you ever run more than one instance.
-- SQLite suits a single instance. Running several app containers against one file
-  would need PostgreSQL for the app too.
+- One PostgreSQL server backs both Keycloak and the app. It is a single point of
+  failure and is not replicated: if the volume goes, the backups are what you have.
 - No log aggregation or uptime alerting. `docker compose logs` is what you have.
