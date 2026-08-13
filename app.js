@@ -437,11 +437,63 @@ function setModalTab(tab) {
   );
   $('modal-login').classList.toggle('active',    tab === 'login');
   $('modal-register').classList.toggle('active', tab === 'register');
+  // Reset panels have no tab of their own; the two tabs above take you back out.
+  $('modal-forgot')?.classList.toggle('active', tab === 'forgot');
+  $('modal-reset')?.classList.toggle('active',  tab === 'reset');
+  // Hiding the tabs while resetting stops someone wandering off mid-flow and
+  // losing a single-use link they cannot get back.
+  document.querySelector('.modal-tabs')?.classList.toggle('hidden', tab === 'reset');
 }
 
 document.querySelectorAll('.modal-tab').forEach(b =>
   b.addEventListener('click', () => setModalTab(b.dataset.modalTab))
 );
+
+// ── Password reset ────────────────────────────────────────────────────────
+$('forgot-link')?.addEventListener('click', () => setModalTab('forgot'));
+$('forgot-back')?.addEventListener('click', () => setModalTab('login'));
+
+$('modal-forgot')?.addEventListener('submit', async e => {
+  e.preventDefault();
+  const msg = $('forgot-msg');
+  const btn = $('forgot-btn'); const orig = btn.textContent;
+  msg.className = 'form-msg'; msg.textContent = '';
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    const r = await api.post('/api/auth/forgot-password', { email: $('forgot-email').value.trim() });
+    msg.className = 'form-msg ok';
+    // The server answers the same way whether or not the account exists, and so
+    // does this. Confirming which addresses are registered would turn the form
+    // into a way to enumerate the users of a job-seeking app.
+    msg.textContent = r.message || 'If an account exists for that address, a reset link is on its way.';
+  } catch (err) {
+    msg.textContent = err.message || 'Could not send the reset link.';
+  } finally { btn.disabled = false; btn.textContent = orig; }
+});
+
+let _resetToken = null;
+
+$('modal-reset')?.addEventListener('submit', async e => {
+  e.preventDefault();
+  const msg = $('reset-msg');
+  const btn = $('reset-btn'); const orig = btn.textContent;
+  msg.className = 'form-msg'; msg.textContent = '';
+  const pw = $('reset-password').value;
+  if (pw.length < 6) { msg.textContent = 'Password must be at least 6 characters.'; return; }
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    const r = await api.post('/api/auth/reset-password', { token: _resetToken, newPassword: pw });
+    msg.className = 'form-msg ok';
+    msg.textContent = r.revoked
+      ? `Password changed — ${r.revoked} session(s) signed out. You can sign in now.`
+      : 'Password changed. You can sign in now.';
+    _resetToken = null;
+    $('reset-password').value = '';
+    setTimeout(() => setModalTab('login'), 1800);
+  } catch (err) {
+    msg.textContent = err.message || 'Could not set the new password.';
+  } finally { btn.disabled = false; btn.textContent = orig; }
+});
 
 // Bound on submit, not on the button's click: that way Enter in either field
 // confirms too, and the browser's password manager sees a real login form.
@@ -567,9 +619,20 @@ function consumeAuthFragment() {
   const linked = p.get('linked');
   const confirmed = p.get('confirmed');
   const confirmError = p.get('confirm_error');
-  if (!token && !error && !linked && !confirmed && !confirmError) return false;
+  const resetTok = p.get('reset');
+  if (!token && !error && !linked && !confirmed && !confirmError && !resetTok) return false;
 
   history.replaceState(null, '', window.location.pathname + window.location.search);
+
+  // Held in memory only, and the fragment was already scrubbed above: a reset
+  // token in the address bar would survive in history and in a shared screenshot.
+  if (resetTok) {
+    _resetToken = resetTok;
+    showAuthModal();
+    setModalTab('reset');
+    setTimeout(() => $('reset-password')?.focus(), 80);
+    return true;
+  }
 
   if (error)  { toast(error, 'error'); showAuthModal(); return true; }
   if (linked) { toast(`${linked} linked to your account.`, 'success'); return true; }

@@ -149,7 +149,27 @@
           <input id="login-username" type="text" class="field" placeholder="Email or username" autocomplete="username" />
           <input id="login-password" type="password" class="field" placeholder="Password" autocomplete="current-password" />
           <button id="login-btn" type="submit" class="btn btn-primary btn-full">Sign In</button>
+          <button type="button" id="forgot-link" class="link-btn forgot-link">Forgot your password?</button>
           <p id="login-msg" class="form-msg"></p>
+        </form>
+
+        <!-- Shown by the "Forgot your password?" link, and again when the emailed
+             link brings the user back with a token in the fragment. -->
+        <form id="modal-forgot" class="modal-panel">
+          <p class="reg-hint">Enter your email address and we will send you a link to
+            choose a new password. The link is valid for one hour.</p>
+          <input id="forgot-email" type="email" class="field" placeholder="Email address" autocomplete="email" />
+          <button id="forgot-btn" type="submit" class="btn btn-primary btn-full">Send reset link</button>
+          <button type="button" id="forgot-back" class="link-btn forgot-link">Back to sign in</button>
+          <p id="forgot-msg" class="form-msg"></p>
+        </form>
+
+        <form id="modal-reset" class="modal-panel">
+          <p class="reg-hint">Choose a new password. Every device currently signed in
+            to this account will be signed out.</p>
+          <input id="reset-password" type="password" class="field" placeholder="New password (min. 6 characters)" autocomplete="new-password" />
+          <button id="reset-btn" type="submit" class="btn btn-primary btn-full">Set new password</button>
+          <p id="reset-msg" class="form-msg"></p>
         </form>
         <form id="modal-register" class="modal-panel">
           <div class="reg-row">

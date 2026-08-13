@@ -356,6 +356,55 @@ async function createEmailToken(username, address) {
   return token;
 }
 
+// ── Password reset ──────────────────────────────────────────────────────────
+//
+// A separate token kind from the confirmation one. They must not be
+// interchangeable: a confirmation link sits in an inbox for a day and only proves
+// an address is reachable, while a reset link grants control of the account. Using
+// one token store for both would let an old confirmation mail be replayed to
+// change a password.
+//
+// One hour, not the confirmation's twenty-four. The user asked for this link
+// seconds ago and is waiting for it.
+async function createResetToken(username) {
+  await repo.emailTokens.deleteForUser(username);
+  const token = 'r' + crypto.randomBytes(24).toString('hex');
+  await repo.emailTokens.create(token, {
+    username,
+    kind: 'reset',
+    expires: Date.now() + 60 * 60 * 1000,
+  });
+  return token;
+}
+
+async function sendResetEmail(user) {
+  if (!email.isAvailable()) return { sent: false, reason: 'No email provider configured.' };
+  const token = await createResetToken(user.username);
+  const link = `${publicBaseUrl()}/api/auth/reset?token=${token}`;
+  try {
+    await email.sendEmail({
+      to: user.email,
+      subject: 'Reset your CareerAI password',
+      text: [
+        `Hello ${user.name || ''},`.trim(),
+        '',
+        'Someone asked to reset the password for your CareerAI account.',
+        'If that was you, open this link within the next hour:',
+        '',
+        link,
+        '',
+        'If it was not you, ignore this message. Your password is unchanged and',
+        'nobody can act on this link without opening it from your inbox.',
+        '',
+        '— CareerAI',
+      ].join('\n'),
+    });
+    return { sent: true };
+  } catch (e) {
+    return { sent: false, reason: e.message };
+  }
+}
+
 // Best-effort by design: the account is already created when this runs, so a mail
 // failure must never turn into a failed registration. The caller reports whether
 // it went out, and the account page offers a resend.
@@ -2835,6 +2884,82 @@ const server = http.createServer(async (req, res) => {
 
   // Clicked from the confirmation email. A GET from a mail client, so it answers
   // with a redirect into the app rather than JSON.
+  // ── Password reset ────────────────────────────────────────────────────────
+  //
+  // Off entirely under oidc-only: there is no local password to reset, and an
+  // endpoint that pretends otherwise would send people a link that cannot help.
+  if (parsedUrl.pathname === '/api/auth/forgot-password' && req.method === 'POST') {
+    (async () => {
+      if (!localAuthEnabled()) { rejectLocalAuth(res); return; }
+      const body = await readJsonBody(req);
+      const address = String((body && body.email) || '').trim().toLowerCase();
+
+      // The same answer whatever happens. Saying "no account with that address"
+      // turns this endpoint into a way to test which addresses are registered —
+      // and this is a job-seeking app, where that list is worth having.
+      const reply = () => sendJson(res, 200, {
+        ok: true,
+        message: 'If an account exists for that address, a reset link is on its way.',
+      });
+
+      if (!EMAIL_RE.test(address)) { reply(); return; }
+      const user = await findUserByEmail(address);
+      // No password means the account signs in through a provider; a reset link
+      // would set a credential the user never asked for.
+      if (!user || !user.password) { reply(); return; }
+
+      await sendResetEmail(user);   // failures are not reported back, by design
+      reply();
+    })();
+    return;
+  }
+
+  // Clicked from the reset email. Hands the token to the SPA in the fragment, so
+  // it never reaches a server log or a Referer header.
+  if (parsedUrl.pathname === '/api/auth/reset' && req.method === 'GET') {
+    const token = parsedUrl.searchParams.get('token') || '';
+    res.writeHead(302, { Location: `/#reset=${encodeURIComponent(token)}` });
+    res.end();
+    return;
+  }
+
+  if (parsedUrl.pathname === '/api/auth/reset-password' && req.method === 'POST') {
+    (async () => {
+      if (!localAuthEnabled()) { rejectLocalAuth(res); return; }
+      const body = await readJsonBody(req);
+      if (!body) { sendJson(res, 400, { error: 'Invalid request payload' }); return; }
+
+      const token = String(body.token || '');
+      const next = String(body.newPassword || '');
+      if (next.length < 6) { sendJson(res, 400, { error: 'New password must be at least 6 characters.' }); return; }
+
+      const entry = await repo.emailTokens.get(token);
+      // Consume first, whatever happens next: a link that fails validation must
+      // not remain usable for a second attempt.
+      if (entry) await repo.emailTokens.delete(token);
+
+      if (!entry || entry.kind !== 'reset') {
+        sendJson(res, 400, { error: 'This reset link is invalid or has already been used.' });
+        return;
+      }
+      if (entry.expires < Date.now()) {
+        sendJson(res, 400, { error: 'This reset link has expired. Request a new one.' });
+        return;
+      }
+      const user = normalizeUser(await getUser(entry.username));
+      if (!user) { sendJson(res, 400, { error: 'That account no longer exists.' }); return; }
+
+      await patchUser(entry.username, { password: hashPassword(next) });
+
+      // Every existing session dies — no `except`, unlike a password change made
+      // from inside the app. Someone resetting a forgotten password may be doing
+      // it because somebody else has one, and leaving those alive defeats the act.
+      const revoked = await repo.sessions.revokeForUser(entry.username);
+      sendJson(res, 200, { ok: true, revoked });
+    })();
+    return;
+  }
+
   if (parsedUrl.pathname === '/api/auth/confirm' && req.method === 'GET') {
     const token = parsedUrl.searchParams.get('token') || '';
     const back = (frag) => { res.writeHead(302, { Location: `/#${frag}` }); res.end(); };
