@@ -261,6 +261,49 @@ async function authenticate(token) {
 // ── Registration validation ─────────────────────────────────────────────────
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// Does this domain accept mail at all?
+//
+// The pattern above proves an address is well-formed, not that it exists.
+// "jardel@gmial.com" passes it, and the confirmation mail then goes nowhere: the
+// account is created, the user waits for a message that will never arrive, and
+// nothing in the system knows anything is wrong. A DNS lookup catches the typo
+// before an account exists.
+//
+// Fails OPEN. A DNS timeout must not stop someone registering — a mistyped domain
+// is a nuisance, a registration form that rejects valid users because a resolver
+// was slow is a broken product. Only a definitive "this domain has no mail
+// exchanger" rejects.
+const dnsPromises = require('node:dns').promises;
+const mxCache = new Map();
+const MX_TTL = 60 * 60 * 1000;
+
+async function domainAcceptsMail(address) {
+  const domain = String(address || '').split('@')[1];
+  if (!domain) return { ok: false, reason: 'no domain' };
+
+  const hit = mxCache.get(domain);
+  if (hit && Date.now() - hit.at < MX_TTL) return hit.result;
+
+  let result;
+  try {
+    const mx = await Promise.race([
+      dnsPromises.resolveMx(domain),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 3000)),
+    ]);
+    result = (mx && mx.length)
+      ? { ok: true }
+      : { ok: false, reason: 'no mail exchanger' };
+  } catch (e) {
+    // ENOTFOUND / NXDOMAIN is definitive: the domain does not exist.
+    // Anything else — timeout, SERVFAIL, no network — is our problem, not theirs.
+    result = (e.code === 'ENOTFOUND' || e.code === 'ENODATA')
+      ? { ok: false, reason: 'domain not found' }
+      : { ok: true, unverified: true };
+  }
+  mxCache.set(domain, { at: Date.now(), result });
+  return result;
+}
+
 // Deliberately permissive: real phone numbers carry +, spaces, dots, dashes and
 // parentheses, and rejecting a valid foreign number is worse than accepting an
 // odd-looking one. We only insist on enough digits to be a number at all.
@@ -1822,6 +1865,55 @@ const DOMAIN_MATCH_TERMS = {
 //
 // Applied only to the IT domains below: a positive match on one of their terms is
 // not enough if one of these also appears.
+// ── Position type ───────────────────────────────────────────────────────────
+//
+// Applied to the results rather than to each source's query. The ten sources do
+// not agree on how to express "working student" — the Bundesagentur has
+// angebotsart and arbeitszeit codes, Adzuna has contract_type, Careerjet has
+// neither — so a per-source parameter would work on two of them and silently
+// return full-time roles from the rest.
+//
+// A vocabulary check on title and description works everywhere, at the cost of
+// depending on the posting saying what it is. In practice German postings are
+// explicit about this: "Werkstudent (m/w/d)" is in the title, because that is what
+// the applicant is searching for.
+const EMPLOYMENT_TERMS = {
+  werkstudent: [
+    'werkstudent', 'working student', 'studentische hilfskraft', 'studentischer mitarbeiter',
+    'shk', 'hiwi', 'wissenschaftliche hilfskraft', 'student assistant', 'studentenjob',
+  ],
+  praktikum: [
+    'praktikum', 'praktikant', 'internship', 'intern ', 'trainee', 'pflichtpraktikum',
+    'praxissemester', 'volontariat',
+  ],
+  ausbildung: [
+    'ausbildung', 'auszubildende', 'azubi', 'duales studium', 'dualer student',
+    'apprentice', 'apprenticeship', 'berufsausbildung', 'lehrstelle',
+  ],
+  entry: [
+    'junior', 'einsteiger', 'berufseinsteiger', 'entry level', 'entry-level',
+    'absolvent', 'graduate', 'trainee', 'nachwuchs', 'einstieg',
+  ],
+};
+
+// Keyword hints appended to the query so the sources return these postings at all.
+// Filtering a result set that never contained a single working-student role would
+// simply return nothing.
+const EMPLOYMENT_QUERY_HINT = {
+  werkstudent: 'Werkstudent',
+  praktikum:   'Praktikum',
+  ausbildung:  'Ausbildung',
+  entry:       'Junior',
+};
+
+function jobMatchesEmployment(job, employment) {
+  if (!employment || employment === 'all') return true;
+  const terms = EMPLOYMENT_TERMS[employment];
+  if (!terms) return true;
+  const hay = `${job.title || ''} ${job.description || ''}`.toLowerCase();
+  return terms.some(t => hay.includes(t));
+}
+
 // Unambiguous: these words belong to the guarding trade and to nothing else, so
 // they disqualify wherever they appear, title or description.
 const PHYSICAL_SECURITY_TERMS = [
@@ -2696,6 +2788,14 @@ const server = http.createServer(async (req, res) => {
 
       if (!firstName || !lastName) { sendJson(res, 400, { error: 'First name and last name are required.' }); return; }
       if (!EMAIL_RE.test(address)) { sendJson(res, 400, { error: 'Please enter a valid email address.' }); return; }
+
+      // Catch the typo before an account exists and a confirmation mail is sent
+      // into the void.
+      const mx = await domainAcceptsMail(address);
+      if (!mx.ok) {
+        sendJson(res, 400, { error: `That email domain does not accept mail (${mx.reason}). Please check the address.` });
+        return;
+      }
       if (password.length < 6)     { sendJson(res, 400, { error: 'Password must be at least 6 characters.' }); return; }
 
       const birth = validateBirthDate(body.birthDate);
@@ -3142,6 +3242,14 @@ const server = http.createServer(async (req, res) => {
         if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
           sendJson(res, 400, { error: 'That does not look like an email address' }); return;
         }
+        if (email) {
+          const mx = await domainAcceptsMail(email);
+          if (!mx.ok) {
+            sendJson(res, 400, { error: `That email domain does not accept mail (${mx.reason}). Please check the address.` });
+            return;
+          }
+        }
+
         // Emails identify accounts for provider auto-linking, so they must be unique.
         const holder = await findUserByEmail(email);
         if (email && holder && holder.username !== username) {
@@ -4048,13 +4156,17 @@ const server = http.createServer(async (req, res) => {
     req.on('data', chunk => { body += chunk; });
     req.on('end', async () => {
       try {
-        const { keyword, location, region, sector, distance, pages } = JSON.parse(body || '{}');
+        const { keyword, location, region, sector, distance, pages, employment } = JSON.parse(body || '{}');
         const searchLocation = location || (region === 'germany' ? 'Germany' : region === 'switzerland' ? 'Switzerland' : 'United States');
         const searchDist     = distance || 'all';
 
         // Build searchParams for Bundesagentur helper (includes keyword + location)
         const sp = new URLSearchParams({ region: region || 'germany', sector: sector || 'all', keyword: keyword || '', location: searchLocation });
         if (pages) sp.set('pages', String(pages));
+        // Filtering a result set that never contained a working-student role would
+        // return nothing, so the hint goes into the query as well as the filter.
+        const empHint = EMPLOYMENT_QUERY_HINT[employment] || '';
+        if (empHint) sp.set('keyword', `${empHint} ${sp.get('keyword') || ''}`.trim());
         const searchKeyword  = buildSearchKeyword(sp);
         const depth          = pageDepth(sp);
 
@@ -4086,11 +4198,13 @@ const server = http.createServer(async (req, res) => {
         // Domain relevance filter — only keep on-topic jobs for the chosen sector.
         const before = jobs.length;
         if (sector && sector !== 'all') jobs = jobs.filter(j => jobMatchesSector(j, sector));
+        const afterSector = jobs.length;
+        if (employment && employment !== 'all') jobs = jobs.filter(j => jobMatchesEmployment(j, employment));
 
-        logScrape(`■ SCRAPE-ALL done | ${merged.length} raw → ${before} dedup → ${jobs.length} after "${sector || 'all'}" filter`);
+        logScrape(`■ SCRAPE-ALL done | ${merged.length} raw → ${before} dedup → ${afterSector} after "${sector || 'all'}" → ${jobs.length} after "${employment || 'all'}"`);
         sendJson(res, 200, {
           jobs, platformBreakdown, source: 'all-platforms', total: jobs.length,
-          scrapeLog, rawTotal: merged.length, dedupTotal: before,
+          scrapeLog, rawTotal: merged.length, dedupTotal: before, sectorTotal: afterSector, employment: employment || 'all',
         });
       } catch (err) {
         sendJson(res, 500, { error: 'Scrape-all failed', detail: err.message });

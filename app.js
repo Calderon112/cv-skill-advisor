@@ -757,6 +757,14 @@ const HELP_TEXTS = {
     The score and the number of revisions are shown so a weak letter is visible
     rather than quietly handed over.`,
 
+  employment: `<strong>Filtered by position type</strong><br>
+    Only postings whose title or description names the type you chose — Werkstudent,
+    internship, apprenticeship or junior. The words are looked for in German and in
+    English.<br><br>
+    German postings are usually explicit about this, because it is what the
+    applicant searches for. A posting that does not say so is dropped, so set this
+    back to <strong>Any position</strong> if the list looks too short.`,
+
   liveCount: `<strong>Counted live, right now</strong><br>
     Queried from the official Bundesagentur für Arbeit API for the whole of
     Germany when this page opened. A low number usually means the exact job title
@@ -1354,6 +1362,7 @@ async function searchJobs() {
   // No platform dropdown in the current UI → default to the all-platforms scrape.
   const platform = $('platform-select')?.value || 'all';
   const sector   = $('sector-select').value;
+  const employment = $('employment-select')?.value || 'all';
   const distance = $('distance-select').value;
   const location = $('search-location-input').value.trim();
   const keyword  = ($('job-keyword-input')?.value || '').trim();
@@ -1637,6 +1646,7 @@ $('current-location-button').addEventListener('click', () => {
 async function scrapeAllPlatforms() {
   const region   = $('region-select').value;
   const sector   = $('sector-select').value;
+  const employment = $('employment-select')?.value || 'all';
   const distance = $('distance-select').value;
   const location = $('search-location-input').value.trim();
   const keyword  = ($('job-keyword-input')?.value || '').trim();
@@ -1677,7 +1687,7 @@ async function scrapeAllPlatforms() {
     const r = await fetch(`${baseUrl}/api/scrape-all`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ region, sector, distance, location, keyword, pages })
+      body: JSON.stringify({ region, sector, distance, location, keyword, pages, employment })
     });
     const data = await r.json();
 
@@ -1703,6 +1713,7 @@ async function scrapeAllPlatforms() {
       const raw   = data.rawTotal   ?? Object.values(data.platformBreakdown).reduce((a, b) => a + b, 0);
       const dedup = data.dedupTotal ?? raw;
       const kept = fresh.length;
+      const sectorKept = data.sectorTotal ?? kept;
 
       // The help button carries the numbers for THIS search, appended to the
       // general explanation — "140 were dropped" says more than any static text.
@@ -1723,9 +1734,14 @@ async function scrapeAllPlatforms() {
         + chip(dedup, 'After dedup', 'var(--text-muted)',
             withNumbers('dedup',
               `<strong>This search:</strong> ${raw} results from all sources, ${raw - dedup} of them the same posting on more than one platform.`))
-        + chip(kept, 'In this domain', 'var(--orange)',
+        + chip(sectorKept, 'In this domain', 'var(--orange)',
             withNumbers('domain',
-              `<strong>This search:</strong> ${dedup - kept} of ${dedup} dropped by the sector filter. Set the sector to "All" to see them.`));
+              `<strong>This search:</strong> ${dedup - sectorKept} of ${dedup} dropped by the sector filter. Set the sector to "All" to see them.`))
+        + (data.employment && data.employment !== 'all'
+            ? chip(kept, 'This position type', 'var(--cyan)',
+                withNumbers('employment',
+                  `<strong>This search:</strong> ${sectorKept - kept} of ${sectorKept} dropped because they are not ${esc(data.employment)} postings.`))
+            : '');
       breakdown.classList.remove('hidden');
     }
 
