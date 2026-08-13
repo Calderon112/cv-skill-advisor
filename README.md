@@ -226,8 +226,8 @@ source in the repository is exactly what runs in the browser.
 
 | Item | Value |
 |---|---|
-| **Providers supported** | Anthropic, Google Gemini, OpenRouter, OpenAI |
-| **Selection** | First configured key wins, or forced with `LLM_PROVIDER` |
+| **Providers supported** | GWDG Chat AI, Anthropic, Google Gemini, OpenRouter, OpenAI |
+| **Selection** | GWDG first when configured, then the rest; forced with `LLM_PROVIDER` |
 | **Fallback** | Without any key every AI feature degrades to a deterministic template |
 | **Embeddings** | Gemini or OpenAI, cached on disk |
 | **Authentication** | Environment variable, never committed |

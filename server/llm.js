@@ -26,6 +26,7 @@ const ANTHROPIC_MODEL = () => process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6'
 const OPENAI_MODEL = () => process.env.OPENAI_MODEL || 'gpt-4o';
 const OPENROUTER_MODEL = () => process.env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct:free';
 const GEMINI_MODEL = () => process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const GWDG_MODEL = () => process.env.GWDG_MODEL || 'qwen3-coder-next';
 
 // Which env var holds the API key for each provider.
 const KEY_ENV = {
@@ -33,10 +34,17 @@ const KEY_ENV = {
   gemini: 'GEMINI_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
   openai: 'OPENAI_API_KEY',
+  gwdg: 'GWDG_API_KEY',
 };
 
 // Default order when several providers have keys (and none/one is preferred).
-const AUTO_ORDER = ['anthropic', 'gemini', 'openrouter', 'openai'];
+//
+// GWDG first when it has a key. This application sends CVs to the model — names,
+// addresses, employment history, all personal data under the GDPR. Every other
+// provider here is a commercial service outside the EU. GWDG Chat AI runs on
+// German academic infrastructure, which is a materially different answer to the
+// question "where does the applicant's CV end up".
+const AUTO_ORDER = ['gwdg', 'anthropic', 'gemini', 'openrouter', 'openai'];
 
 // Retry tuning for transient failures.
 const MAX_ATTEMPTS_PER_PROVIDER = 3;
@@ -218,6 +226,23 @@ function callProvider(name, args) {
       path: '/v1/chat/completions',
       apiKey: process.env.OPENAI_API_KEY,
       model: OPENAI_MODEL(),
+    });
+  }
+
+  // GWDG Chat AI — the Göttingen academic computing centre's LLM service, free to
+  // members of participating German universities. The API is OpenAI-compatible, so
+  // it needs no client of its own: only a different host and key.
+  //
+  // Available models change; qwen3-coder-next is the default because it handles the
+  // structured JSON these prompts ask for. Override with GWDG_MODEL.
+  if (name === 'gwdg') {
+    return chatOpenAICompatible({
+      ...args,
+      label: 'GWDG Chat AI',
+      hostname: 'chat-ai.academiccloud.de',
+      path: '/v1/chat/completions',
+      apiKey: process.env.GWDG_API_KEY,
+      model: GWDG_MODEL(),
     });
   }
 
