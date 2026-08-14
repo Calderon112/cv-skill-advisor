@@ -26,7 +26,7 @@ const ANTHROPIC_MODEL = () => process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6'
 const OPENAI_MODEL = () => process.env.OPENAI_MODEL || 'gpt-4o';
 const OPENROUTER_MODEL = () => process.env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct:free';
 const GEMINI_MODEL = () => process.env.GEMINI_MODEL || 'gemini-2.5-flash';
-const GWDG_MODEL = () => process.env.GWDG_MODEL || 'qwen3-coder-next';
+const GWDG_MODEL = () => process.env.GWDG_MODEL || 'mistral-medium-3.5-128b';
 
 // Which env var holds the API key for each provider.
 const KEY_ENV = {
@@ -233,8 +233,18 @@ function callProvider(name, args) {
   // members of participating German universities. The API is OpenAI-compatible, so
   // it needs no client of its own: only a different host and key.
   //
-  // Available models change; qwen3-coder-next is the default because it handles the
-  // structured JSON these prompts ask for. Override with GWDG_MODEL.
+  // Sixteen models are exposed; the default is chosen for cover letters, which is
+  // what this app actually generates. Measured 2026-08-14 on the production prompt:
+  //
+  //   qwen3-coder-next             left "[Unternehmensname]" unfilled in the letter
+  //   qwen3.5-397b-a17b            returned empty — spends the budget on reasoning
+  //   qwen3-30b-a3b-instruct-2507  3x faster, but upgraded "Grundlagen SIEM" into
+  //                                "meine Erfahrung mit der Erkennung von Anomalien"
+  //   mistral-medium-3.5-128b      kept it as "das mir den Einstieg erleichtern wird"
+  //
+  // The last one is the only distinction that matters here: an applicant has to
+  // defend this letter in an interview, so a model that inflates the CV costs more
+  // than the six seconds it saves. Override with GWDG_MODEL.
   if (name === 'gwdg') {
     return chatOpenAICompatible({
       ...args,
