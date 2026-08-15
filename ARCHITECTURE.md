@@ -75,3 +75,29 @@ Implementation: [`server/agents.js`](server/agents.js). Orchestrated by the
 |--------|----------|---------|
 | GET | `/api/agents` | Machine-readable registry of the 4 agents |
 | POST | `/api/pipeline` | Run Scout → Matcher; returns `{ analysis, matching, agentLog, errors, ok }` |
+| POST | `/api/analyze` | CV → skills / gaps / role-fit |
+| POST | `/api/scrape-all` | Parallel multi-source scrape → fuzzy-deduped jobs + `scrapeLog` |
+| POST | `/api/job-consult` | **Oracle** — deep AI match (%, strengths, gaps, advice) |
+| POST | `/api/generate-cv` · `/api/generate-cover` · `/api/generate-roadmap` · `/api/generate-interview` | Writer / Interview generation (LLM + template fallback) |
+| POST | `/api/market-report` | Aggregated job-market stats + LLM summary |
+| GET | `/api/ai-status` | Which LLM provider + email provider are configured |
+
+## Engine modules (deterministic, unit-tested)
+
+| Module | Responsibility |
+|--------|----------------|
+| `security-skills.js` | 232-skill IT-Security taxonomy |
+| `scorer.js` | Weighted 6-criteria match score + breakdown |
+| `server/dedup.js` | Fuzzy cross-source de-duplication (Sørensen-Dice) |
+| `rerank.js` | Outcome-based re-ranking from past interview/offer outcomes |
+| `server/report.js` | Market-trend report |
+| `server/agents.js` | The 4-agent orchestration layer |
+| `server/llm.js` | Multi-provider LLM client (Anthropic/Gemini/OpenRouter/OpenAI) with fallback |
+
+> The deterministic match score is a fast estimate used for ranking; once the **Oracle**
+> (LLM) has assessed a job, its score becomes authoritative and is shown everywhere.
+
+## Tests
+
+`node tests/test.js` → **70 unit tests** (pure functions, multi-agent contracts,
+fuzzy dedup, outcome re-ranking, market report). No external framework.

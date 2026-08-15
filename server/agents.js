@@ -67,6 +67,50 @@ const ScoutAgent = {
 
     return { foundSkills, foundKeys, missingSkills, roles, recommendations };
   },
+
+  /**
+   * Deliberative pass, run after `run()` and never instead of it.
+   *
+   * Kept as a separate method rather than folded into `run()` so the deterministic
+   * extraction stays synchronous, side-effect free and testable without a model —
+   * and so a reader can see exactly where judgement starts.
+   *
+   * Returns a NEW analysis; the input is not mutated. Falls back to the input
+   * unchanged whenever reasoning is unavailable or produces nothing usable.
+   */
+  async reason(analysis, input, deps) {
+    if (!deps || !deps.reasoning || !deps.llm) return analysis;
+    const vocabulary = typeof deps.allSkills === 'function'
+      ? deps.allSkills().map(s => ({ key: s.key, label: s.label }))
+      : [];
+
+    const out = await deps.reasoning.inferSkills({
+      cvText: (input && input.cvText) || '',
+      foundKeys: analysis.foundKeys,
+      vocabulary,
+    }, deps.llm);
+    if (!out || !out.inferred.length) {
+      return { ...analysis, inferred: [], rejected: (out && out.rejected) || [] };
+    }
+
+    // Inferred skills join foundSkills so everything downstream — the Matcher's
+    // score, the gap list, the Writer's evidence — sees one coherent skill set.
+    // They stay flagged: a skill the model deduced is not the same claim as one
+    // the CV spelled out, and the UI has to be able to say which is which.
+    const added = out.inferred.map(i => ({
+      key: i.key, label: i.label, inferred: true, evidence: i.evidence, confidence: i.confidence,
+    }));
+    const foundSkills = [...analysis.foundSkills, ...added];
+    const foundKeys = foundSkills.map(s => s.key);
+    const missingSkills = (analysis.missingSkills || []).filter(s => !foundKeys.includes(s.key));
+    // Roles are re-derived: adding skills can change which role fits best, and a
+    // stale role ranking would contradict the skill list shown beside it.
+    const roles = typeof deps.analyzeRoles === 'function' ? deps.analyzeRoles(foundKeys) : analysis.roles;
+    const recommendations = typeof deps.recommend === 'function' ? deps.recommend(roles) : analysis.recommendations;
+
+    return { foundSkills, foundKeys, missingSkills, roles, recommendations,
+             inferred: out.inferred, rejected: out.rejected };
+  },
 };
 
 // ── 02 · Matcher Agent — analysis + jobs → ranked matches with gap breakdown ─
@@ -86,6 +130,54 @@ const MatcherAgent = {
       .sort((a, b) => b.score - a.score);
 
     return { matches, highCount: matches.filter(m => m.score >= 0.7).length };
+  },
+
+  /**
+   * Deliberative pass: eligibility, which the weighted sum cannot express.
+   *
+   * Only the top of the ranking is examined — that is what a user reads — and only
+   * postings that carry a real description. The scores are NOT recomputed. A
+   * blocked match keeps its number and its breakdown, and moves below the eligible
+   * ones with the requirement that excluded it attached.
+   */
+  async reason(matching, input, deps) {
+    if (!deps || !deps.reasoning || !deps.llm) return matching;
+    const matches = Array.isArray(matching.matches) ? matching.matches : [];
+    if (!matches.length) return matching;
+
+    const topN = deps.reasoning.ADJUDICATE_TOP_N || 3;
+    const head = matches.slice(0, topN);
+    const foundKeys = (input && input.analysis && input.analysis.foundKeys) || [];
+
+    const verdicts = await Promise.all(head.map(m =>
+      deps.reasoning.adjudicate({
+        job: m.job,
+        // The posting text lives under different keys depending on the source.
+        jobDescription: m.job?.description || m.job?.snippet || '',
+        foundKeys,
+        score: m.score,
+      }, deps.llm).catch(() => null)));
+
+    let blockedCount = 0;
+    const judged = matches.map((m, i) => {
+      const v = i < head.length ? verdicts[i] : null;
+      if (!v) return m;
+      if (v.verdict === 'blocked') blockedCount += 1;
+      return { ...m, verdict: v.verdict, blockers: v.blockers, verdictReason: v.reason };
+    });
+
+    // A stable demotion: eligible matches keep their relative order, blocked ones
+    // keep theirs, and every blocked match sits below every eligible one. Sorting
+    // on the score again here would undo the deterministic ranking.
+    const eligible = judged.filter(m => m.verdict !== 'blocked');
+    const blocked = judged.filter(m => m.verdict === 'blocked');
+
+    return {
+      matches: [...eligible, ...blocked],
+      highCount: eligible.filter(m => m.score >= 0.7).length,
+      adjudicated: head.length,
+      blockedCount,
+    };
   },
 };
 

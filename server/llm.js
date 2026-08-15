@@ -16,11 +16,17 @@
  * to deterministic templates.
  */
 const https = require('https');
+const usage = require('./usage.js');
 
-const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
-const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
-const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct:free';
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+// Resolved at call time, not at import time. server.js loads .env *after* it
+// requires this module, so a constant captured here freezes the default and
+// silently ignores ANTHROPIC_MODEL / OPENROUTER_MODEL / GEMINI_MODEL from .env.
+// The API keys already work this way — see KEY_ENV below.
+const ANTHROPIC_MODEL = () => process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
+const OPENAI_MODEL = () => process.env.OPENAI_MODEL || 'gpt-4o';
+const OPENROUTER_MODEL = () => process.env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct:free';
+const GEMINI_MODEL = () => process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const GWDG_MODEL = () => process.env.GWDG_MODEL || 'mistral-medium-3.5-128b';
 
 // Which env var holds the API key for each provider.
 const KEY_ENV = {
@@ -28,10 +34,17 @@ const KEY_ENV = {
   gemini: 'GEMINI_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
   openai: 'OPENAI_API_KEY',
+  gwdg: 'GWDG_API_KEY',
 };
 
 // Default order when several providers have keys (and none/one is preferred).
-const AUTO_ORDER = ['anthropic', 'gemini', 'openrouter', 'openai'];
+//
+// GWDG first when it has a key. This application sends CVs to the model — names,
+// addresses, employment history, all personal data under the GDPR. Every other
+// provider here is a commercial service outside the EU. GWDG Chat AI runs on
+// German academic infrastructure, which is a materially different answer to the
+// question "where does the applicant's CV end up".
+const AUTO_ORDER = ['gwdg', 'anthropic', 'gemini', 'openrouter', 'openai'];
 
 // Retry tuning for transient failures.
 const MAX_ATTEMPTS_PER_PROVIDER = 3;
@@ -91,7 +104,7 @@ function httpsJson(options, payload) {
 
 async function chatAnthropic({ system, user, maxTokens, temperature }) {
   const body = JSON.stringify({
-    model: ANTHROPIC_MODEL,
+    model: ANTHROPIC_MODEL(),
     max_tokens: maxTokens || 1500,
     temperature: temperature == null ? 0.5 : temperature,
     system,
@@ -110,6 +123,7 @@ async function chatAnthropic({ system, user, maxTokens, temperature }) {
   }, body);
   const text = (data.content || []).map((p) => p.text || '').join('').trim();
   if (!text) throw new Error('Empty response from Anthropic');
+  usage.record({ provider: 'anthropic', model: ANTHROPIC_MODEL(), inputTokens: data.usage?.input_tokens, outputTokens: data.usage?.output_tokens, kind: 'chat' });
   return text;
 }
 
@@ -117,11 +131,18 @@ async function chatAnthropic({ system, user, maxTokens, temperature }) {
  * Generic caller for any OpenAI "chat/completions"-compatible endpoint
  * (OpenAI, OpenRouter, Gemini's OpenAI-compatible layer).
  */
-async function chatOpenAICompatible({ label, hostname, path, apiKey, model, extraHeaders, system, user, maxTokens, temperature }) {
+async function chatOpenAICompatible({ label, hostname, path, apiKey, model, extraHeaders, system, user, maxTokens, temperature, reasoningEffort }) {
   const body = JSON.stringify({
     model,
     max_tokens: maxTokens || 1500,
     temperature: temperature == null ? 0.5 : temperature,
+    // Gemini 2.5 models spend part of the OUTPUT budget on internal reasoning, and
+    // that share is invisible in completion_tokens. A 3000-token ceiling left ~300
+    // tokens of actual text, so long structured answers came back cut mid-string and
+    // failed to parse — which silently demoted the career ladders to the hardcoded
+    // template. Asking for low effort on a formatting task returns the budget to the
+    // answer. Only sent when a caller asks: not every provider accepts the field.
+    ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
     messages: [
       { role: 'system', content: system },
       { role: 'user', content: user },
@@ -140,6 +161,7 @@ async function chatOpenAICompatible({ label, hostname, path, apiKey, model, extr
   }, body);
   const text = (((data.choices || [])[0] || {}).message || {}).content || '';
   if (!text.trim()) throw new Error(`Empty response from ${label || 'provider'}`);
+  usage.record({ provider: label || 'openai-compatible', model, inputTokens: data.usage?.prompt_tokens, outputTokens: data.usage?.completion_tokens, kind: 'chat' });
   return text.trim();
 }
 
@@ -149,25 +171,32 @@ function callProvider(name, args) {
 
   if (name === 'gemini') {
     return chatOpenAICompatible({
+      // Callers can override with reasoningEffort; 'low' is the right default for the
+      // extract-and-format work this app asks for, and it stops thinking tokens from
+      // eating the output budget on the long JSON answers.
+      reasoningEffort: 'low',
       ...args,
       label: 'Gemini',
       hostname: 'generativelanguage.googleapis.com',
       path: '/v1beta/openai/chat/completions',
       apiKey: process.env.GEMINI_API_KEY,
-      model: GEMINI_MODEL,
+      model: GEMINI_MODEL(),
     });
   }
 
   if (name === 'openrouter') {
-    // Try several free models — any single one can be rate-limited upstream, so
-    // we fall through the list and use the first that answers.
-    const models = [...new Set([
-      OPENROUTER_MODEL,
-      'meta-llama/llama-3.3-70b-instruct:free',
-      'deepseek/deepseek-chat-v3-0324:free',
-      'google/gemini-2.0-flash-exp:free',
-      'mistralai/mistral-small-3.1-24b-instruct:free',
-    ])];
+    // Try each model in turn — any single one can be rate-limited upstream.
+    //
+    // Probed 2026-07-30 against a real account: every ":free" slug this list used to
+    // carry now answers HTTP 404 "This model is unavailable for free". OpenRouter
+    // keeps withdrawing free tiers, so hard-coding more of them just rebuilds a dead
+    // list. Only OPENROUTER_MODEL is tried now, and the error says plainly that the
+    // slug is gone rather than burying it under four more 404s.
+    //
+    // A paid slug works if you want a real safety net behind Gemini's daily quota —
+    // deepseek/deepseek-chat-v3-0324 (no ":free") answered. Set OPENROUTER_MODEL to it
+    // knowing it bills per token.
+    const models = [...new Set([OPENROUTER_MODEL()].filter(Boolean))];
     return (async () => {
       let lastErr;
       for (const model of models) {
@@ -196,7 +225,34 @@ function callProvider(name, args) {
       hostname: 'api.openai.com',
       path: '/v1/chat/completions',
       apiKey: process.env.OPENAI_API_KEY,
-      model: OPENAI_MODEL,
+      model: OPENAI_MODEL(),
+    });
+  }
+
+  // GWDG Chat AI — the Göttingen academic computing centre's LLM service, free to
+  // members of participating German universities. The API is OpenAI-compatible, so
+  // it needs no client of its own: only a different host and key.
+  //
+  // Sixteen models are exposed; the default is chosen for cover letters, which is
+  // what this app actually generates. Measured 2026-08-14 on the production prompt:
+  //
+  //   qwen3-coder-next             left "[Unternehmensname]" unfilled in the letter
+  //   qwen3.5-397b-a17b            returned empty — spends the budget on reasoning
+  //   qwen3-30b-a3b-instruct-2507  3x faster, but upgraded "Grundlagen SIEM" into
+  //                                "meine Erfahrung mit der Erkennung von Anomalien"
+  //   mistral-medium-3.5-128b      kept it as "das mir den Einstieg erleichtern wird"
+  //
+  // The last one is the only distinction that matters here: an applicant has to
+  // defend this letter in an interview, so a model that inflates the CV costs more
+  // than the six seconds it saves. Override with GWDG_MODEL.
+  if (name === 'gwdg') {
+    return chatOpenAICompatible({
+      ...args,
+      label: 'GWDG Chat AI',
+      hostname: 'chat-ai.academiccloud.de',
+      path: '/v1/chat/completions',
+      apiKey: process.env.GWDG_API_KEY,
+      model: GWDG_MODEL(),
     });
   }
 

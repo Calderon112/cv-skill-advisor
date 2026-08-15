@@ -291,6 +291,22 @@ const TOKEN_KEY = 'careerai-token';
 const USER_KEY  = 'careerai-user';
 const APPS_KEY  = 'careerai-apps';
 
+// Which account the cached profile and application list on this device belong to.
+//
+// Without this, careerai-profile and careerai-apps were plain device-wide keys that
+// no sign-out ever removed: signing in as a second user showed the first user's CV,
+// photo, email, phone and nationality. Same browser, so the server never saw
+// anything wrong — the data never left the machine, it just outlived the session
+// that owned it. On a shared computer that is a personal-data leak.
+//
+// The username, not the display name: two accounts can share "Jardel Kenne".
+const CACHE_OWNER_KEY = 'careerai-cache-owner';
+
+// Device preferences, deliberately NOT cleared on sign-out: they belong to the
+// browser, not the account. Everything else keyed per user must be listed in
+// clearUserData below.
+const PER_USER_KEYS = [APPS_KEY, 'careerai-profile'];
+
 const state = {
   token:     localStorage.getItem(TOKEN_KEY) || null,
   user:      localStorage.getItem(USER_KEY)  || null,
@@ -307,6 +323,11 @@ const state = {
 const $   = id => document.getElementById(id);
 const esc = s  => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const normalize = t => t.toLowerCase().replace(/[.,;:()\-\/]/g, ' ');
+
+// Pages fetched per job board. Deeper searches return more offers but the boards
+// rate-limit us: at 20 pages Arbeitnow starts refusing the second search of a
+// session. 10 keeps the extra coverage without losing a source.
+const SCRAPE_PAGE_DEPTH = 10;
 
 function authHeaders() {
   return state.token ? { Authorization: `Bearer ${state.token}` } : {};
@@ -330,13 +351,7 @@ function toast(msg, type = 'info') {
 
 // ── Skill detection (multilingual) ────────────────────────────────────────
 function findSkillsLocal(text) {
-  const norm = normalize(text);
-  const found = [];
-  skillGroups.forEach(g => g.skills.forEach(s => {
-    const keys = [s.key, ...(s.aliases || [])];
-    if (keys.some(k => norm.includes(normalize(k)))) found.push(s);
-  }));
-  return found;
+  return SkillMatcher.findSkills(text, skillGroups);
 }
 
 function analyzeRolesLocal(foundKeys) {
@@ -374,15 +389,41 @@ async function apiRequest(method, path, body) {
   const r = await fetch(baseUrl + path, opts);
   if (!r.ok) {
     const err = await r.json().catch(() => ({}));
+
+    // The server refuses irreversible actions on a session that authenticated a while
+    // ago. Send the user back through the provider with reauth=1, which re-prompts
+    // even though the provider's own session is still valid. Handled centrally so no
+    // individual caller has to remember this exists.
+    if (r.status === 403 && err.code === 'reauth_required') {
+      const providerId = await firstProviderId();
+      if (providerId) {
+        toast('Confirm it is you — signing in again.', 'info');
+        setTimeout(() => { window.location.href = `${baseUrl}/api/auth/${providerId}/start?reauth=1`; }, 900);
+        throw new Error(err.error || 'Re-authentication required.');
+      }
+    }
     throw new Error(err.error || `HTTP ${r.status}`);
   }
   return r.json();
+}
+
+// Cached: the provider list does not change while the page is open, and this runs on
+// an error path where a second round trip would delay the redirect.
+let _providerIdCache;
+async function firstProviderId() {
+  if (_providerIdCache !== undefined) return _providerIdCache;
+  try {
+    const d = await (await fetch(`${baseUrl}/api/auth/providers`)).json();
+    _providerIdCache = (d.providers && d.providers[0] && d.providers[0].id) || null;
+  } catch (_) { _providerIdCache = null; }
+  return _providerIdCache;
 }
 
 const api = {
   get:    path        => apiRequest('GET',    path),
   post:   (path, b)   => apiRequest('POST',   path, b),
   put:    (path, b)   => apiRequest('PUT',    path, b),
+  patch:  (path, b)   => apiRequest('PATCH',  path, b),
   delete: path        => apiRequest('DELETE', path)
 };
 
@@ -396,13 +437,68 @@ function setModalTab(tab) {
   );
   $('modal-login').classList.toggle('active',    tab === 'login');
   $('modal-register').classList.toggle('active', tab === 'register');
+  // Reset panels have no tab of their own; the two tabs above take you back out.
+  $('modal-forgot')?.classList.toggle('active', tab === 'forgot');
+  $('modal-reset')?.classList.toggle('active',  tab === 'reset');
+  // Hiding the tabs while resetting stops someone wandering off mid-flow and
+  // losing a single-use link they cannot get back.
+  document.querySelector('.modal-tabs')?.classList.toggle('hidden', tab === 'reset');
 }
 
 document.querySelectorAll('.modal-tab').forEach(b =>
   b.addEventListener('click', () => setModalTab(b.dataset.modalTab))
 );
 
-$('login-btn').addEventListener('click', async () => {
+// ── Password reset ────────────────────────────────────────────────────────
+$('forgot-link')?.addEventListener('click', () => setModalTab('forgot'));
+$('forgot-back')?.addEventListener('click', () => setModalTab('login'));
+
+$('modal-forgot')?.addEventListener('submit', async e => {
+  e.preventDefault();
+  const msg = $('forgot-msg');
+  const btn = $('forgot-btn'); const orig = btn.textContent;
+  msg.className = 'form-msg'; msg.textContent = '';
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    const r = await api.post('/api/auth/forgot-password', { email: $('forgot-email').value.trim() });
+    msg.className = 'form-msg ok';
+    // The server answers the same way whether or not the account exists, and so
+    // does this. Confirming which addresses are registered would turn the form
+    // into a way to enumerate the users of a job-seeking app.
+    msg.textContent = r.message || 'If an account exists for that address, a reset link is on its way.';
+  } catch (err) {
+    msg.textContent = err.message || 'Could not send the reset link.';
+  } finally { btn.disabled = false; btn.textContent = orig; }
+});
+
+let _resetToken = null;
+
+$('modal-reset')?.addEventListener('submit', async e => {
+  e.preventDefault();
+  const msg = $('reset-msg');
+  const btn = $('reset-btn'); const orig = btn.textContent;
+  msg.className = 'form-msg'; msg.textContent = '';
+  const pw = $('reset-password').value;
+  if (pw.length < 6) { msg.textContent = 'Password must be at least 6 characters.'; return; }
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    const r = await api.post('/api/auth/reset-password', { token: _resetToken, newPassword: pw });
+    msg.className = 'form-msg ok';
+    msg.textContent = r.revoked
+      ? `Password changed — ${r.revoked} session(s) signed out. You can sign in now.`
+      : 'Password changed. You can sign in now.';
+    _resetToken = null;
+    $('reset-password').value = '';
+    setTimeout(() => setModalTab('login'), 1800);
+  } catch (err) {
+    msg.textContent = err.message || 'Could not set the new password.';
+  } finally { btn.disabled = false; btn.textContent = orig; }
+});
+
+// Bound on submit, not on the button's click: that way Enter in either field
+// confirms too, and the browser's password manager sees a real login form.
+$('modal-login').addEventListener('submit', async e => {
+  e.preventDefault();
   const username = $('login-username').value.trim();
   const password = $('login-password').value.trim();
   const msg = $('login-msg');
@@ -410,7 +506,7 @@ $('login-btn').addEventListener('click', async () => {
   if (!username || !password) { msg.textContent = 'Enter username and password.'; return; }
   try {
     const data = await api.post('/api/login', { username, password });
-    persistAuth(data.token, data.user.name);
+    persistAuth(data.token, data.user.name, data.user.username);
     hideAuthModal();
     loadApplications();
     toast(`Welcome back, ${data.user.name}!`, 'success');
@@ -419,32 +515,198 @@ $('login-btn').addEventListener('click', async () => {
   }
 });
 
-$('register-btn').addEventListener('click', async () => {
-  const name     = $('reg-name').value.trim();
-  const username = $('reg-username').value.trim();
-  const password = $('reg-password').value.trim();
+$('modal-register').addEventListener('submit', async e => {
+  e.preventDefault();
+  const payload = {
+    firstName: $('reg-firstname').value.trim(),
+    lastName:  $('reg-lastname').value.trim(),
+    birthDate: $('reg-birthdate').value,
+    email:     $('reg-email').value.trim(),
+    phone:     $('reg-phone').value.trim(),
+    password:  $('reg-password').value,
+  };
   const msg = $('register-msg');
   msg.className = 'form-msg';
   msg.textContent = '';
-  if (!name || !username || !password) { msg.textContent = 'All fields are required.'; return; }
-  if (password.length < 6) { msg.textContent = 'Password must be at least 6 characters.'; return; }
+
+  // Cheap client-side checks for immediate feedback; the server re-validates all
+  // of this, including the date and phone rules, and is the authority.
+  if (!payload.firstName || !payload.lastName) { msg.textContent = 'First and last name are required.'; return; }
+  if (!payload.birthDate) { msg.textContent = 'Please enter your date of birth.'; return; }
+  if (!payload.email)     { msg.textContent = 'Please enter your email address.'; return; }
+  if (!payload.phone)     { msg.textContent = 'Please enter your phone number.'; return; }
+  if (payload.password.length < 6) { msg.textContent = 'Password must be at least 6 characters.'; return; }
+
+  const btn = $('register-btn'); const orig = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Creating account…';
   try {
-    const data = await api.post('/api/register', { name, username, password });
-    persistAuth(data.token, data.user.name);
+    const data = await api.post('/api/register', payload);
+    persistAuth(data.token, data.user.name, data.user.username);
     msg.className = 'form-msg ok';
-    msg.textContent = 'Account created! Welcome.';
-    setTimeout(hideAuthModal, 800);
+    // The account exists either way — say plainly whether the email actually went
+    // out rather than promising one that failed to send.
+    msg.textContent = data.confirmationSent
+      ? `Account created. Confirmation email sent to ${data.user.email}.`
+      : 'Account created. Confirmation email could not be sent — you can resend it from My Account.';
+    toast(data.confirmationSent
+      ? `Welcome! Check ${data.user.email} to confirm your address.`
+      : 'Welcome! Your email is not confirmed yet.', data.confirmationSent ? 'success' : 'info');
+    setTimeout(hideAuthModal, data.confirmationSent ? 1400 : 2600);
     loadApplications();
   } catch (e) {
     msg.textContent = e.message || 'Registration failed.';
+  } finally {
+    btn.disabled = false; btn.textContent = orig;
   }
 });
 
-function persistAuth(token, name) {
+// ── Identity providers (OIDC) ─────────────────────────────────────────────
+// Render one button per configured provider. With a self-hosted IdP this is a
+// single button, and Google/GitHub/… are chosen on the provider's own page.
+async function loadAuthProviders() {
+  const wrap = $('auth-providers');
+  const sep  = $('auth-providers-sep');
+  if (!wrap) return;
+  try {
+    const r = await fetch(`${baseUrl}/api/auth/providers`);
+    const d = await r.json();
+    if (!d.available || !d.providers.length) return;   // block stays hidden
+
+    // Two buttons per provider: sign in, and — when the provider can host a sign-up
+    // form — create an account. Both are plain navigations, never fetch: the
+    // provider's page has to own the tab, and its form must be served by it, not
+    // reproduced here.
+    //
+    // With a single provider the buttons say just "Sign in" / "Create an account".
+    // Naming it would leak plumbing the user does not care about — and it would be
+    // actively misleading once that provider brokers Google and GitHub, because the
+    // choice the user actually makes happens on the next page. Which provider is
+    // used stays visible in the link the button navigates to.
+    const solo = d.providers.length === 1;
+    wrap.innerHTML = d.providers.map(p => `
+      <button type="button" class="btn btn-primary btn-full provider-btn"
+              data-auth-url="/api/auth/${esc(p.id)}/start">${solo ? 'Sign in' : `Sign in with ${esc(p.label)}`}</button>
+      ${p.canRegister ? `
+      <button type="button" class="btn btn-ghost btn-full provider-btn"
+              data-auth-url="/api/auth/${esc(p.id)}/register">${solo ? 'Create an account' : `Create an account with ${esc(p.label)}`}</button>` : ''}
+    `).join('');
+    wrap.querySelectorAll('[data-auth-url]').forEach(b =>
+      b.addEventListener('click', () => { window.location.href = baseUrl + b.dataset.authUrl; }));
+    wrap.classList.remove('hidden');
+
+    // oidc-only: the provider is the only way in. Remove the local tabs and both
+    // password panels rather than leaving forms the server answers with 403.
+    // oidc-only: the two buttons are the whole screen. No explanatory note — where
+    // sign-in is handled is plumbing, and the user has no decision to make about it.
+    if (d.localAuth === false) {
+      document.querySelector('.modal-tabs')?.classList.add('hidden');
+      document.querySelectorAll('.modal-panel').forEach(el => el.classList.add('hidden'));
+      sep?.classList.add('hidden');
+    } else {
+      sep?.classList.remove('hidden');
+    }
+  } catch (_) { /* offline or no server — password login still works */ }
+}
+
+// The callback hands us the token in the URL fragment (never a query string, so it
+// stays out of server logs and Referer headers). Consume it and scrub the URL.
+function consumeAuthFragment() {
+  const raw = window.location.hash.replace(/^#/, '');
+  if (!raw) return false;
+  const p = new URLSearchParams(raw);
+  const token = p.get('auth_token');
+  const error = p.get('auth_error');
+  const linked = p.get('linked');
+  const confirmed = p.get('confirmed');
+  const confirmError = p.get('confirm_error');
+  const resetTok = p.get('reset');
+  if (!token && !error && !linked && !confirmed && !confirmError && !resetTok) return false;
+
+  history.replaceState(null, '', window.location.pathname + window.location.search);
+
+  // Held in memory only, and the fragment was already scrubbed above: a reset
+  // token in the address bar would survive in history and in a shared screenshot.
+  if (resetTok) {
+    _resetToken = resetTok;
+    showAuthModal();
+    setModalTab('reset');
+    setTimeout(() => $('reset-password')?.focus(), 80);
+    return true;
+  }
+
+  if (error)  { toast(error, 'error'); showAuthModal(); return true; }
+  if (linked) { toast(`${linked} linked to your account.`, 'success'); return true; }
+  if (confirmError) { toast(confirmError, 'error'); return true; }
+  if (confirmed) {
+    toast(`${confirmed} confirmed. Thank you!`, 'success');
+    // Refresh the badge if the account page is already open behind the redirect.
+    if ($('page-account')?.classList.contains('active')) loadAccount();
+    return true;
+  }
+
+  persistAuth(token, p.get('auth_name') || 'You', p.get('auth_user') || '');
+  hideAuthModal();
+  loadApplications();
+  toast('Signed in.', 'success');
+  return true;
+}
+
+// Wipe everything on this device that belonged to whoever was signed in. Both the
+// stored copy and the in-memory copy: dropping only localStorage would leave the
+// previous user's CV on screen until a reload.
+function clearUserData() {
+  PER_USER_KEYS.forEach(k => localStorage.removeItem(k));
+  localStorage.removeItem(CACHE_OWNER_KEY);
+  state.apps     = [];
+  state.cvText   = '';
+  state.analysis = null;
+  state.matches  = [];
+  if (typeof emptyProfile === 'function') state.profile = emptyProfile();
+}
+
+// Update only the name shown in the UI, for the account already signed in. Separate
+// from persistAuth so that renaming yourself never looks like a change of user.
+function setDisplayName(name) {
+  state.user = name;
+  localStorage.setItem(USER_KEY, name);
+  updateAuthUI();
+}
+
+// One-off migration for a cache that predates CACHE_OWNER_KEY: ask the server who
+// the open session belongs to and stamp that, so the guard has something to compare
+// against on the next sign-in. Silent on failure — the cache simply stays
+// unattributed and gets cleared the next time a sign-in cannot match it.
+async function adoptCacheOwner() {
+  try {
+    const d = await api.get('/api/account');
+    if (d && d.username) localStorage.setItem(CACHE_OWNER_KEY, d.username);
+  } catch (_) { /* offline or expired token — nothing to attribute */ }
+}
+
+/**
+ * @param username the account identifier from the server. Used to decide whether the
+ *   cached profile/applications on this device belong to the person signing in.
+ *   Absent (an older caller) is treated as "not the same person" — clearing a cache
+ *   we cannot attribute is the safe direction, the server refills it.
+ */
+function persistAuth(token, name, username) {
+  const owner = localStorage.getItem(CACHE_OWNER_KEY);
+  const id    = username || '';
+  if (!id || owner !== id) {
+    clearUserData();
+    if (id) localStorage.setItem(CACHE_OWNER_KEY, id);
+  }
+
   state.token = token;
   state.user  = name;
   localStorage.setItem(TOKEN_KEY, token);
   localStorage.setItem(USER_KEY,  name);
+  // The profile is read from localStorage at startup, so after a wipe the in-memory
+  // copy has to be re-read and the already-rendered form redrawn — otherwise the
+  // previous user's values sit in the inputs until a reload.
+  if (typeof loadProfile === 'function')          loadProfile();
+  if (typeof renderProfileForm === 'function')    renderProfileForm();
+  if (typeof updateProfileSummary === 'function') updateProfileSummary();
   updateAuthUI();
 }
 
@@ -459,18 +721,39 @@ function updateAuthUI() {
   if (typeof refreshGettingStarted === 'function') refreshGettingStarted();
 }
 
-$('sidebar-auth-btn').addEventListener('click', () => {
-  if (state.user) {
-    state.token = null;
-    state.user  = null;
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(USER_KEY);
-    updateAuthUI();
-    showAuthModal();
-    toast('Signed out. See you soon!', 'info');
-  } else {
-    showAuthModal();
-  }
+$('sidebar-auth-btn').addEventListener('click', async () => {
+  if (!state.user) { showAuthModal(); return; }
+
+  const token = state.token;
+
+  // Ask the server to end the session before we throw the token away — afterwards we
+  // could not prove which session to close. It also tells us whether the identity
+  // provider needs a visit to close its own session.
+  let providerLogout = null;
+  try {
+    const r = await fetch(`${baseUrl}/api/auth/logout`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (r.ok) providerLogout = (await r.json()).url || null;
+  } catch (_) { /* offline: still sign out locally below */ }
+
+  state.token = null;
+  state.user  = null;
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(USER_KEY);
+  // The CV, photo and application list must go with the session. Leaving them was
+  // how the next person to sign in on this browser ended up looking at them.
+  clearUserData();
+  if (typeof renderProfileForm === 'function') renderProfileForm();
+  updateAuthUI();
+
+  // The provider ends its session and redirects back to the app, which reloads at
+  // the sign-in screen — so no toast or modal here, the navigation replaces them.
+  if (providerLogout) { window.location.href = providerLogout; return; }
+
+  showAuthModal();
+  toast('Signed out. See you soon!', 'info');
 });
 
 // ── Navigation ────────────────────────────────────────────────────────────
@@ -482,7 +765,186 @@ const PAGE_TITLES = {
   letters:           'Cover Letters',
   interviews:        'Interviews',
   profile:           'Professional Profile',
+  career:            'Career Pathway',
+  account:           'My Account',
+  feedback:          'Feedback',
+  admin:             'Admin',
 };
+
+// ── Inline help ───────────────────────────────────────────────────────────
+//
+// The figures this app shows are the result of steps the reader cannot see: a
+// search returns 1000 postings, deduplication takes it to 145, a sector filter to
+// 5. Each number is correct and the sequence is baffling without an explanation.
+//
+// Those explanations were already written — as title="" attributes. A title needs
+// a hover, and a phone has none, so on the device most people use the app the
+// explanation simply did not exist. This is the same text, reachable by tapping.
+//
+// One delegated listener rather than per-element wiring: most of these figures are
+// rendered after a search, so anything bound at startup would miss them.
+const HELP_TEXTS = {
+  dedup: `<strong>Same job, several boards</strong><br>
+    Employers post to many platforms at once. We compare titles and companies and
+    keep one card per posting, noting where else it appeared. This number is what
+    remains after that merge — nothing was discarded for being unsuitable.`,
+
+  domain: `<strong>Filtered by sector</strong><br>
+    Only postings whose title or description mentions your chosen sector are kept.
+    This is usually the biggest drop, and it is reversible: set the sector to
+    <strong>All</strong> and every deduplicated result comes back.`,
+
+  matchScore: `<strong>How the percentage is built</strong><br>
+    A fixed weighting, identical for every job, so the same CV and posting always
+    give the same number: skills 45%, role 20%, location 10%, remote 10%,
+    seniority 10%, pay 5%.<br><br>
+    Meaning-based re-ranking then reorders the shortlist, so "Ethical Hacking" on
+    your CV still matches a "Penetration Tester" posting.`,
+
+  salaryMeasured: `<strong>Measured, not estimated</strong><br>
+    The middle half of the salaries actually stated in the job ads we read — the
+    25th to 75th percentile, which ignores one unpaid internship and one director
+    role at the extremes.<br><br>
+    Most German postings publish no salary at all, so the count of ads that did is
+    shown beside it. Below five, no range is displayed.`,
+
+  salaryReference: `<strong>Orientation figure, not a measurement</strong><br>
+    Too few job ads stated a salary to calculate anything honest, so this is a
+    typical band for this career stage. It is the same figure for every role at
+    this level, and it is not evidence.`,
+
+  criticScore: `<strong>The letter was graded before you saw it</strong><br>
+    One agent writes the letter, a second scores it out of 100 against the actual
+    posting and sends it back with specific objections. The loop repeats until it
+    clears the bar.<br><br>
+    The score and the number of revisions are shown so a weak letter is visible
+    rather than quietly handed over.`,
+
+  employment: `<strong>Filtered by position type</strong><br>
+    Only postings whose title or description names the type you chose — Werkstudent,
+    internship, apprenticeship or junior. The words are looked for in German and in
+    English.<br><br>
+    German postings are usually explicit about this, because it is what the
+    applicant searches for. A posting that does not say so is dropped, so set this
+    back to <strong>Any position</strong> if the list looks too short.`,
+
+  liveCount: `<strong>Counted live, right now</strong><br>
+    Queried from the official Bundesagentur für Arbeit API for the whole of
+    Germany when this page opened. A low number usually means the exact job title
+    is uncommon, not that the career is closed.`,
+};
+
+let _helpAnchor = null;
+
+function closeHelpPopover() {
+  _helpAnchor = null;
+  document.querySelectorAll('.help-pop').forEach(p => p.remove());
+  document.querySelectorAll('.help-dot[aria-expanded="true"]')
+    .forEach(b => b.setAttribute('aria-expanded', 'false'));
+}
+
+// Fixed positioning means the panel does not travel with its button, so it has to
+// be moved by hand. Repositioned rather than closed: someone scrolls to read a long
+// explanation, and closing on the first scroll would snatch it away exactly as they
+// started reading.
+function positionHelpPopover() {
+  const pop = document.querySelector('.help-pop');
+  if (!pop || !_helpAnchor || !_helpAnchor.isConnected) return;
+  const r = _helpAnchor.getBoundingClientRect();
+  if (r.bottom < 0 || r.top > window.innerHeight) { closeHelpPopover(); return; }
+  const w = pop.offsetWidth, h = pop.offsetHeight;
+  const left = Math.min(Math.max(10, r.left + r.width / 2 - w / 2), window.innerWidth - w - 10);
+  let top = r.bottom + 8;
+  if (top + h > window.innerHeight - 10) top = Math.max(10, r.top - h - 8);
+  pop.style.left = `${left}px`;
+  pop.style.top = `${top}px`;
+}
+
+function openHelpPopover(btn) {
+  // data-help-text wins: callers use it to append the figures for the search on
+  // screen, and it already contains the general text.
+  const key = btn.dataset.help;
+  const text = btn.dataset.helpText || HELP_TEXTS[key] || '';
+  if (!text) return;
+  closeHelpPopover();
+
+  const pop = document.createElement('div');
+  pop.className = 'help-pop';
+  pop.setAttribute('role', 'dialog');
+  pop.innerHTML = text + '<button type="button" class="help-close">Got it</button>';
+  document.body.appendChild(pop);
+
+  // Positioned after insertion so the real height is known, and clamped to the
+  // viewport because these buttons sit near the right edge on a phone.
+  _helpAnchor = btn;
+  positionHelpPopover();
+
+  btn.setAttribute('aria-expanded', 'true');
+  pop.querySelector('.help-close').addEventListener('click', closeHelpPopover);
+}
+
+document.addEventListener('click', e => {
+  const btn = e.target.closest('.help-dot');
+  if (btn) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (btn.getAttribute('aria-expanded') === 'true') closeHelpPopover(); else openHelpPopover(btn);
+    return;
+  }
+  if (!e.target.closest('.help-pop')) closeHelpPopover();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeHelpPopover(); });
+// Follow the button instead of closing. Fixed coordinates do not travel with the
+// page, and dismissing on the first scroll would take the explanation away from
+// anyone who scrolled in order to read it.
+window.addEventListener('resize', positionHelpPopover);
+window.addEventListener('scroll', positionHelpPopover, true);
+
+/** Markup for a help button. `key` indexes HELP_TEXTS. */
+function helpDot(key, label) {
+  return `<button type="button" class="help-dot" data-help="${esc(key)}"
+    aria-expanded="false" aria-label="${esc(label || 'What does this mean?')}">?</button>`;
+}
+
+// ── Mobile navigation drawer ──────────────────────────────────────────────
+// Below 900px the sidebar is off-canvas. Everything here is a no-op on desktop,
+// where the drawer classes are never applied by the stylesheet.
+(function wireNavDrawer() {
+  const app = $('app');
+  const toggle = $('nav-toggle');
+  const backdrop = $('nav-backdrop');
+  if (!app || !toggle || !backdrop) return;
+
+  const isOpen = () => app.classList.contains('nav-open');
+
+  const open = () => {
+    backdrop.hidden = false;
+    // Next frame, so the transition has a starting opacity to animate from.
+    requestAnimationFrame(() => app.classList.add('nav-open'));
+    toggle.setAttribute('aria-expanded', 'true');
+    lockBodyScroll();
+  };
+
+  const close = () => {
+    if (!isOpen()) return;
+    app.classList.remove('nav-open');
+    toggle.setAttribute('aria-expanded', 'false');
+    unlockBodyScroll();
+    // Keep it out of the accessibility tree once faded out, not before.
+    setTimeout(() => { if (!isOpen()) backdrop.hidden = true; }, 250);
+  };
+
+  toggle.addEventListener('click', () => (isOpen() ? close() : open()));
+  backdrop.addEventListener('click', close);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+
+  // Choosing a destination should reveal it, not leave the drawer covering it.
+  document.querySelectorAll('.sidebar .nav-btn').forEach(b => b.addEventListener('click', close));
+
+  // Rotating to landscape can cross the breakpoint with the drawer still open,
+  // which would leave the body scroll-locked on a layout that has no drawer.
+  window.addEventListener('resize', () => { if (window.innerWidth > 900) close(); });
+})();
 
 function navigate(page) {
   document.querySelectorAll('.page').forEach(p   => p.classList.remove('active'));
@@ -500,6 +962,10 @@ function navigate(page) {
   if (page === 'resumes')         syncWriterCv();
   if (page === 'profile')         renderProfileForm();
   if (page === 'getting-started') refreshGettingStarted();
+  if (page === 'career')          initCareerPath();
+  if (page === 'account')         loadAccount();
+  if (page === 'feedback')        loadFeedbackAdmin();
+  if (page === 'admin')           loadAdmin();
 
   // scroll main content to top on page change
   const main = document.querySelector('.main-content');
@@ -544,12 +1010,71 @@ async function extractPdfText(file) {
   const b64 = btoa(binary);
   const r = await fetch(`${baseUrl}/api/parse-pdf`, {
     method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body:    JSON.stringify({ pdf: b64 })
   });
   const data = await r.json();
   if (!r.ok) throw new Error(data.error || 'PDF parse failed');
-  return data.text || '';
+  return { text: data.text || '', photo: data.photo || '', images: data.images || [] };
+}
+
+// ── OCR (image-based CVs) ───────────────────────────────────────────────────
+// Some CV templates bake the name/contact/skills column into a graphic, so that
+// text is invisible to any PDF text parser. We OCR those image panels with
+// tesseract.js (German + English), loaded lazily from CDN only when needed.
+let _tesseractLoading = null;
+function loadTesseract() {
+  if (window.Tesseract) return Promise.resolve(window.Tesseract);
+  if (_tesseractLoading) return _tesseractLoading;
+  _tesseractLoading = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+    s.onload = () => resolve(window.Tesseract);
+    s.onerror = () => reject(new Error('Could not load the OCR library (are you offline?)'));
+    document.head.appendChild(s);
+  });
+  return _tesseractLoading;
+}
+
+async function ocrImages(images, onProgress) {
+  if (!images || !images.length) return '';
+  const T = await loadTesseract();
+  const worker = await T.createWorker(['deu', 'eng']);
+  let all = '';
+  try {
+    for (let i = 0; i < images.length; i++) {
+      if (onProgress) onProgress(i + 1, images.length);
+      const { data: { text } } = await worker.recognize(images[i]);
+      if (text && text.trim()) all += '\n' + text.trim();
+    }
+  } finally {
+    await worker.terminate();
+  }
+  return all.trim();
+}
+
+// Downscale any image data URL to a compact JPEG (keeps localStorage small) and
+// store it as the profile photo. Shared by the manual upload and PDF extraction.
+function setProfilePhoto(dataUrl) {
+  return new Promise(resolve => {
+    if (!dataUrl) { resolve(false); return; }
+    const img = new Image();
+    img.onload = () => {
+      const max = 320;
+      let { width, height } = img;
+      if (width > height && width > max) { height = height * max / width; width = max; }
+      else if (height > max) { width = width * max / height; height = max; }
+      const canvas = document.createElement('canvas');
+      canvas.width = width; canvas.height = height;
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      if (!state.profile) state.profile = emptyProfile();
+      state.profile.photo = canvas.toDataURL('image/jpeg', 0.82);
+      saveProfileToStorage();
+      resolve(true);
+    };
+    img.onerror = () => resolve(false);
+    img.src = dataUrl;
+  });
 }
 
 // ── Drop zone ─────────────────────────────────────────────────────────────
@@ -575,25 +1100,122 @@ function setupDropZone() {
 
 async function handleCvFile(file) {
   const ta = $('cv-input');
+  setCvProgressStep('parsing');
+
+  // Keep a handle on the original file so "Open original PDF" can show it next to the
+  // extracted text. Object URL, not a copy: the bytes never leave the browser and are
+  // never uploaded. Revoke the previous one first — each createObjectURL pins its blob
+  // in memory until revoked, so dropping several CVs in a row would leak all of them.
+  if (state.cvFileUrl) { try { URL.revokeObjectURL(state.cvFileUrl); } catch (_) {} }
+  state.cvFileUrl  = null;
+  state.cvFileName = file.name || '';
+  state.cvFileSize = file.size || 0;
+  state.cvFileIsPdf = file.name.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf';
+  if (state.cvFileIsPdf) {
+    try { state.cvFileUrl = URL.createObjectURL(file); } catch (_) { /* non-fatal */ }
+  }
+
   try {
-    const isPdf = file.name.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf';
+    const isPdf = state.cvFileIsPdf;
     if (isPdf) {
       $('cv-status-pill').textContent = 'Reading PDF…';
-      const text = await extractPdfText(file);
-      if (!text) { toast('No selectable text in PDF. Paste your CV manually.', 'error'); return; }
-      ta.value = text;
-      toast('PDF loaded successfully.', 'success');
+      const { text, photo, images } = await extractPdfText(file);
+      let fullText = text || '';
+      let gotPhoto = false;
+      if (photo) gotPhoto = await setProfilePhoto(photo);
+
+      // Image-based CV: OCR the graphic panels to recover hidden name/contact/skills.
+      let ocrText = '';
+      if (images && images.length) {
+        $('cv-status-pill').textContent = 'Reading image (OCR)…';
+        toast('Image-based CV detected — running OCR…', 'info');
+        try {
+          ocrText = await ocrImages(images, (i, n) => {
+            $('cv-status-pill').textContent = `OCR ${i}/${n}…`;
+          });
+        } catch (e) {
+          toast('OCR unavailable: ' + e.message, 'error');
+        }
+        if (ocrText) fullText = (fullText + '\n\n' + ocrText).trim();
+      }
+
+      if (!fullText) { toast('No readable text in PDF. Paste your CV manually.', 'error'); return; }
+      ta.value = fullText;
+      if (gotPhoto && typeof renderProfileForm === 'function') renderProfileForm();
+      const bits = [];
+      if (gotPhoto) bits.push('photo extracted');
+      if (ocrText) bits.push('text recovered via OCR');
+      toast(bits.length ? `PDF loaded — ${bits.join(' + ')}.` : 'PDF loaded successfully.', 'success');
     } else {
       ta.value = await file.text();
       toast('File loaded.', 'success');
     }
     state.cvText = ta.value;
     $('cv-status-pill').textContent = 'Ready';
+    setCvProgressStep('done');
   } catch (e) {
     toast('Could not read file: ' + e.message, 'error');
     $('cv-status-pill').textContent = 'Error';
   }
 }
+
+// ── Viewing what the parser actually read ──────────────────────────────────
+//
+// The analysis is only ever as good as this text. When a PDF extracts badly — a
+// two-column layout interleaved, an image-only CV that needed OCR — the skills panel
+// looks wrong for no visible reason. Showing the raw text makes the difference
+// between "the parser mis-read the file" and "the file says something else" obvious.
+function renderExtractedView() {
+  const pre  = $('cv-extracted-text');
+  const meta = $('cv-extracted-meta');
+  const open = $('cv-open-original');
+  if (!pre) return;
+
+  const text = state.cvText || $('cv-input')?.value || '';
+  pre.textContent = text || 'Nothing extracted yet.';
+
+  if (meta) {
+    const chars = text.length;
+    const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+    const from  = state.cvFileName
+      ? `${state.cvFileName}${state.cvFileSize ? ` · ${Math.round(state.cvFileSize / 1024)} KB` : ''}`
+      : 'pasted text';
+    meta.textContent = `${from} — ${words} words, ${chars} characters extracted`;
+  }
+
+  // Only offered for a PDF dropped in this session: the object URL dies with the page,
+  // and nothing is stored server-side to rebuild it from.
+  if (open) {
+    if (state.cvFileUrl) {
+      open.href = state.cvFileUrl;
+      open.classList.remove('hidden');
+    } else {
+      open.removeAttribute('href');
+      open.classList.add('hidden');
+    }
+  }
+}
+
+$('cv-view-extracted')?.addEventListener('click', () => {
+  const view = $('cv-extracted-view');
+  const btn  = $('cv-view-extracted');
+  if (!view) return;
+  const willShow = view.classList.contains('hidden');
+  if (willShow) renderExtractedView();
+  view.classList.toggle('hidden', !willShow);
+  btn.textContent = willShow ? 'Hide extracted text' : 'View extracted text';
+});
+
+$('cv-copy-extracted')?.addEventListener('click', async () => {
+  const text = state.cvText || $('cv-input')?.value || '';
+  if (!text) { toast('Nothing to copy yet.', 'error'); return; }
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Extracted text copied.', 'success');
+  } catch (_) {
+    toast('Your browser blocked clipboard access — select the text and copy manually.', 'error');
+  }
+});
 
 // ── CV analysis + profile extraction ───────────────────────────────────────
 async function analyzeCV() {
@@ -601,7 +1223,11 @@ async function analyzeCV() {
   if (!text) { toast('Please paste or drop your CV first.', 'error'); return; }
 
   state.cvText = text;
+  // Keep an open viewer in step with the text just analysed, instead of showing the
+  // previous CV's extraction.
+  if (!$('cv-extracted-view')?.classList.contains('hidden')) renderExtractedView();
   $('cv-status-pill').textContent = 'Analyzing…';
+  setCvProgressStep('analyzing');
 
   // Local multilingual analysis (covers all domains + DE/EN aliases)
   const result = localAnalyze(text);
@@ -615,9 +1241,10 @@ async function analyzeCV() {
   let llmProfile = null;
   try {
     $('cv-status-pill').textContent = 'AI extracting…';
+    setCvProgressStep('building');
     const r = await fetch(`${baseUrl}/api/extract-profile`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ text })
     });
     const d = await r.json();
@@ -632,6 +1259,9 @@ async function analyzeCV() {
   refreshGettingStarted();
   updateStats();
   toast(`Profile built — ${result.foundSkills.length} skills detected${llmProfile ? ' (AI-parsed)' : ''}.`, 'success');
+  setCvProgressStep('done');
+  refreshGettingStarted();
+  updateStats();
 }
 
 function localAnalyze(text) {
@@ -645,6 +1275,33 @@ function localAnalyze(text) {
     domain:        detectDomain(foundKeys)
   };
 }
+
+// Guarantee we have a CV-based analysis to score & rank jobs against. If the user
+// hasn't run "Analyze CV" yet, derive one from their saved profile skills (or CV
+// text) so matching always reflects the CV — high-fit jobs end up on top.
+function ensureAnalysis() {
+  if (state.analysis && state.analysis.foundSkills && state.analysis.foundSkills.length) {
+    return state.analysis;
+  }
+  const p = state.profile || {};
+  if (p.skills && p.skills.length) {
+    const foundKeys = p.skills.map(s => s.key || normalize(s.label || s));
+    const allSkills = skillGroups.flatMap(g => g.skills);
+    state.analysis = {
+      foundSkills:   p.skills.map(s => ({ key: s.key || normalize(s.label || s), label: s.label || s })),
+      missingSkills: allSkills.filter(s => !foundKeys.includes(s.key)),
+      roles:         analyzeRolesLocal(foundKeys),
+      domain:        detectDomain(foundKeys),
+    };
+    return state.analysis;
+  }
+  const cv = state.cvText || (typeof profileToText === 'function' ? profileToText() : '');
+  if (cv && cv.trim()) { state.analysis = localAnalyze(cv); return state.analysis; }
+  return null;
+}
+
+// Minimum match to consider a job a "strong fit" (used for ranking emphasis + email).
+const HIGH_MATCH_THRESHOLD = 0.75;
 
 function renderAnalysisResults(result) {
   const panel   = $('analysis-results-panel');
@@ -765,8 +1422,10 @@ async function generateAIRoadmap() {
 // ── Scout Agent: Job Search ───────────────────────────────────────────────
 async function searchJobs() {
   const region   = $('region-select').value;
-  const platform = $('platform-select').value;
+  // No platform dropdown in the current UI → default to the all-platforms scrape.
+  const platform = $('platform-select')?.value || 'all';
   const sector   = $('sector-select').value;
+  const employment = $('employment-select')?.value || 'all';
   const distance = $('distance-select').value;
   const location = $('search-location-input').value.trim();
   const keyword  = ($('job-keyword-input')?.value || '').trim();
@@ -789,8 +1448,7 @@ async function searchJobs() {
     url.searchParams.set('distance', distance);
     if (keyword)  url.searchParams.set('keyword',  keyword);
     if (location) url.searchParams.set('location', location);
-    const pages = Number($('depth-select')?.value) || 5;
-    url.searchParams.set('pages', String(pages));
+    url.searchParams.set('pages', String(SCRAPE_PAGE_DEPTH));
 
     const r    = await fetch(url, { headers: authHeaders() });
     if (!r.ok) throw new Error(`Server error ${r.status}`);
@@ -816,12 +1474,13 @@ async function searchJobs() {
     jooble: 'Jooble', adzuna: 'Adzuna'
   };
 
+  state.semanticSims = null;                 // fresh search → drop stale relevance
   renderJobResults(state.jobs, platformLabels[platform] || platform);
   setAgentStatus('scout', state.jobs.length > 0 ? 'done' : 'error');
   $('search-status-pill').textContent = `${state.jobs.length} found`;
   if (state.jobs.length > 0) toast(`${state.jobs.length} jobs found!`, 'success');
   updateStats();
-  notifyHighMatches(state.jobs);
+  fetchSemanticScores(state.jobs);           // RAG re-rank (no-op without a key)
 }
 
 // Detect whether a job is remote — uses explicit flags first, then keyword
@@ -847,17 +1506,61 @@ function rerenderJobs() {
   renderJobResults(filterByWorkMode(state.jobs || []), state.jobsLabel || 'Jobs');
 }
 
+// Stable key for matching a job to its semantic score.
+function jobKey(job) {
+  return `${(job.title || '').toLowerCase().trim()}|${(job.company || '').toLowerCase().trim()}`;
+}
+
+// RAG semantic matching: embed the profile + each job server-side, get a cosine
+// similarity per job, then re-rank. Gracefully no-ops when no embeddings key is
+// set (server replies available:false) so the keyword flow is unaffected.
+async function fetchSemanticScores(jobs) {
+  try {
+    const profileText = (typeof profileToText === 'function' ? profileToText() : '') || state.cvText || '';
+    if (!profileText || !Array.isArray(jobs) || !jobs.length) return;
+    const payload = jobs.slice(0, 300).map(j => ({ id: jobKey(j), text: `${j.title || ''} — ${j.description || ''}` }));
+    const r = await fetch(`${baseUrl}/api/semantic-match`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ profile: profileText, jobs: payload }),
+    });
+    const d = await r.json();
+    if (!d || !d.available || !Array.isArray(d.scores) || !d.scores.length) return;
+    state.semanticSims = {};
+    // Use the calibrated relevance (rel) for display/ranking; fall back to raw sim.
+    d.scores.forEach(s => { state.semanticSims[s.id] = (typeof s.rel === 'number' ? s.rel : s.sim); });
+    rerenderJobs();
+    $('search-status-pill').textContent = `${(state.jobs || []).length} found · AI-ranked`;
+  } catch (_) { /* embeddings unavailable → keep keyword order */ }
+}
+
 function renderJobResults(jobs, sourceLabel) {
   const panel = $('jobs-results-panel');
   const grid  = $('job-results');
 
-  // Pre-compute the match score once per job, then rank surest → least sure so the
-  // strongest fits (your ≥70% jobs) always sit at the top of the list.
-  let ranked = jobs.map(job => ({
-    job,
-    detail: state.analysis ? scoreJobDetailed(job, state.analysis) : null,
-  }));
-  if (state.analysis) ranked.sort((a, b) => b.detail.score - a.detail.score);
+  // Make sure we have a CV-based analysis (from profile/CV) so jobs get scored.
+  ensureAnalysis();
+
+  // No keyword ranking on the cards. We only float jobs the Oracle has actually
+  // assessed to the top (by their real AI score); everything else keeps the order
+  // it was scraped in.
+  let ranked = jobs.map(job => {
+    const detail = state.analysis ? scoreJobDetailed(job, state.analysis) : null;
+    const sem = state.semanticSims ? state.semanticSims[jobKey(job)] : undefined;
+    return { job, detail, sem, hybrid: hybridRelevance(detail, sem) };
+  });
+  ranked.sort((a, b) => {
+    const aAi = a.detail && a.detail.breakdown && a.detail.breakdown.aiAssessed;
+    const bAi = b.detail && b.detail.breakdown && b.detail.breakdown.aiAssessed;
+    if (aAi && bAi) return (b.detail.score || 0) - (a.detail.score || 0);
+    if (aAi) return -1;
+    if (bAi) return 1;
+    // Neither AI-assessed → float up by HYBRID relevance (keyword + semantic);
+    // when embeddings are off, hybrid is undefined and scrape order is preserved.
+    const ah = typeof a.hybrid === 'number' ? a.hybrid : -1;
+    const bh = typeof b.hybrid === 'number' ? b.hybrid : -1;
+    return bh - ah;
+  });
 
   $('job-count-badge').textContent = ranked.length;
   panel.classList.remove('hidden');
@@ -867,33 +1570,26 @@ function renderJobResults(jobs, sourceLabel) {
     return;
   }
 
-  grid.innerHTML = ranked.map(({ job, detail }, i) => {
+  grid.innerHTML = ranked.map(({ job, detail, sem, hybrid }, i) => {
     const date    = job.publishedDate ? String(job.publishedDate).slice(0, 10) : null;
     const isNew   = date && (Date.now() - new Date(date).getTime()) < 7 * 86400000;
     const salary  = job.salary ? `${esc(job.salary)}` : '';
     const remote  = job.remote ? `<span class="chip remote">Remote</span>` : '';
     const jobType = job.jobType ? `<span class="chip">${esc(job.jobType)}</span>` : '';
 
-    // Weighted score + breakdown tooltip, plus the skills this job wants that
-    // you don't have yet ("what you're missing").
+    // No keyword "match %" on cards — the Oracle (open a job) gives the real match.
+    // We only surface a score chip once the AI consultant has assessed this job.
     let scoreHtml = '';
-    let gapHtml   = '';
-    if (detail) {
-      const { score, breakdown } = detail;
-      const pct   = Math.round(score * 100);
-      const color = pct >= 70 ? 'var(--teal)' : pct >= 40 ? 'var(--cyan)' : 'var(--text-dim)';
-      const tip = breakdown
-        ? 'Score breakdown — ' + Object.entries(breakdown.points)
-            .map(([k, v]) => `${k}: ${v}/${breakdown.weights[k]}`).join(' · ')
-        : '';
-      scoreHtml = `<span class="chip" title="${esc(tip)}" style="color:${color};border-color:${color}33">${pct}% match</span>`;
-
-      const missing = (breakdown && breakdown.skillsMissing) || [];
-      if (missing.length) {
-        const shown = missing.slice(0, 6).map(k => `<span class="gap-chip">${esc(skillLabel(k))}</span>`).join('');
-        const more  = missing.length > 6 ? `<span class="gap-more">+${missing.length - 6} more</span>` : '';
-        gapHtml = `<div class="job-card-gaps"><span class="gap-label">You're missing:</span> ${shown}${more}</div>`;
-      }
+    const gapHtml  = '';
+    if (detail && detail.breakdown && detail.breakdown.aiAssessed) {
+      const pct   = Math.round(detail.score * 100);
+      const color = pct >= 75 ? 'var(--teal)' : pct >= 40 ? 'var(--cyan)' : 'var(--text-dim)';
+      scoreHtml = `<span class="chip" title="AI consultant's match for this job" style="color:${color};border-color:${color}33">${pct}% match <span style="font-size:9px;font-weight:800">AI</span></span>`;
+    } else if (typeof hybrid === 'number') {
+      // Hybrid relevance = keyword (scorer.js) fused with semantic (RAG embeddings),
+      // shown until the Oracle assesses the job.
+      const rp = Math.round(hybrid * 100);
+      scoreHtml = `<span class="chip" title="Hybrid relevance: keyword score + semantic embeddings" style="color:var(--blue-neon);border-color:rgba(6,182,212,0.3)">🧠 ${rp}% relevant</span>`;
     }
 
     return `
@@ -923,7 +1619,11 @@ function renderJobResults(jobs, sourceLabel) {
 
   grid.querySelectorAll('.track-btn').forEach(btn =>
     btn.addEventListener('click', e => {
-      const job = ranked[Number(e.target.dataset.jobIdx)]?.job;
+      // currentTarget, not target. An automatic page translation wraps the button's
+      // text in a <font> element, so the tap lands on that instead of the button and
+      // e.target.dataset is empty — the button then does nothing at all, silently.
+      // Reported from a phone reading the app through Safari's translation.
+      const job = ranked[Number(e.currentTarget.dataset.jobIdx)]?.job;
       if (job) prefillTracker(job);
     })
   );
@@ -950,68 +1650,10 @@ function prefillTracker(job) {
   toast('Job details pre-filled. Add deadline and save!', 'info');
 }
 
-// ── Auto email notification for high-match jobs (≥70%) ──────────────────────
-const NOTIFY_KEY = 'careerai-notify-jobs';
-const NOTIFY_EMAIL_KEY = 'careerai-notify-email';
-
-function setupNotifyToggle() {
-  const cb = $('notify-jobs-toggle');
-  if (!cb) return;
-  const row = $('notify-email-row');
-  const input = $('notify-email-input');
-
-  cb.checked = localStorage.getItem(NOTIFY_KEY) === '1';
-  if (input) input.value = localStorage.getItem(NOTIFY_EMAIL_KEY) || (state.profile && state.profile.email) || '';
-  if (row) row.classList.toggle('hidden', !cb.checked);
-
-  cb.addEventListener('change', () => {
-    localStorage.setItem(NOTIFY_KEY, cb.checked ? '1' : '0');
-    if (row) row.classList.toggle('hidden', !cb.checked);
-    if (cb.checked) {
-      if (input && !input.value) input.value = (state.profile && state.profile.email) || '';
-      const mail = ((input && input.value) || '').trim();
-      if (mail) { localStorage.setItem(NOTIFY_EMAIL_KEY, mail); toast(`High-match jobs will be emailed to ${mail}.`, 'success'); }
-      else if (input) input.focus();
-    }
-  });
-
-  if (input) input.addEventListener('change', () => {
-    const mail = input.value.trim();
-    if (mail) localStorage.setItem(NOTIFY_EMAIL_KEY, mail);
-  });
-}
-
-async function notifyHighMatches(jobs) {
-  const cb = $('notify-jobs-toggle');
-  if (!cb || !cb.checked || !state.analysis) return;
-
-  const high = (jobs || [])
-    .map(j => ({ ...j, score: calculateMatchScore(j, state.analysis) }))
-    .filter(j => j.score >= 0.7)
-    .sort((a, b) => b.score - a.score);
-  if (!high.length) return;
-
-  const to = (($('notify-email-input') && $('notify-email-input').value) || '').trim()
-    || localStorage.getItem(NOTIFY_EMAIL_KEY) || (state.profile && state.profile.email) || '';
-  if (!to) return;
-
-  const payload = high.slice(0, 15).map(j => ({
-    title: j.title, company: j.company, score: j.score, url: j.jobUrl || j.url || ''
-  }));
-
-  try {
-    const r = await api.post('/api/notify-jobs', { to, jobs: payload });
-    if (r && r.ok && r.sent) toast(`Emailed ${r.count} high-match job(s) to ${to}.`, 'success');
-    else toast(`${high.length} high-match job(s) found — add RESEND_API_KEY to receive them by email.`, 'info');
-  } catch (_) {
-    toast(`${high.length} high-match job(s) found (email not sent).`, 'info');
-  }
-}
-
 // ── Geolocation ───────────────────────────────────────────────────────────
 $('current-location-button').addEventListener('click', () => {
   const status = $('location-status');
-  if (!navigator.geolocation) { status.textContent = 'Geolocation not supported by this browser — type your city below.'; return; }
+  if (!navigator.geolocation) { status.textContent = 'Geolocation not supported by this browser — type your city in the Location field above.'; return; }
   status.textContent = 'Getting location…';
   navigator.geolocation.getCurrentPosition(
     async (pos) => {
@@ -1029,12 +1671,34 @@ $('current-location-button').addEventListener('click', () => {
       $('search-location-input').value = `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
       status.textContent = 'Location set (coordinates — city lookup unavailable).';
     },
-    (err) => {
-      status.textContent = err.code === err.PERMISSION_DENIED
-        ? 'Location blocked. Click the location/🔒 icon in your browser\'s address bar → Allow, then retry — or just type your city below.'
-        : err.code === err.POSITION_UNAVAILABLE
-          ? 'Location unavailable on this device — type your city below instead.'
-          : 'Location request timed out — type your city below instead.';
+    async (err) => {
+      // A denied permission is the user's decision — asking the network instead would
+      // route around it, so that one case only gets instructions.
+      if (err.code === err.PERMISSION_DENIED) {
+        status.textContent = 'Location blocked. Click the location/🔒 icon in your browser\'s address bar → Allow, then retry — or just type your city in the Location field above.';
+        return;
+      }
+
+      // POSITION_UNAVAILABLE and TIMEOUT both mean the browser has no position source
+      // it can use — the normal state of a desktop PC with no Wi-Fi scanning. Rather
+      // than dead-ending, fall back to placing the network itself.
+      status.textContent = 'No location sensor available — checking your network…';
+      try {
+        const r = await fetch(`${baseUrl}/api/geolocate-by-ip`);
+        const d = await r.json();
+        if (d.city) {
+          $('search-location-input').value = d.city;
+          // No message on success. The city appearing in the Location field is the
+          // feedback, and this status line sits directly above the Job Title field —
+          // anything written here reads as a note about the wrong input.
+          status.textContent = '';
+          return;
+        }
+      } catch (_) { /* offline, or the lookup service is unreachable */ }
+
+      status.textContent = err.code === err.POSITION_UNAVAILABLE
+        ? 'Location unavailable on this device, and the network lookup failed — type your city in the Location field above.'
+        : 'Location request timed out — type your city in the Location field above.';
     },
     { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 }
   );
@@ -1045,87 +1709,120 @@ $('current-location-button').addEventListener('click', () => {
 async function scrapeAllPlatforms() {
   const region   = $('region-select').value;
   const sector   = $('sector-select').value;
+  const employment = $('employment-select')?.value || 'all';
   const distance = $('distance-select').value;
   const location = $('search-location-input').value.trim();
   const keyword  = ($('job-keyword-input')?.value || '').trim();
-  const pages    = Number($('depth-select')?.value) || 5;
+  const pages    = SCRAPE_PAGE_DEPTH;
   const progress = $('scrape-all-progress');
   const breakdown= $('platform-breakdown');
 
   const scrapeBtn = $('scrape-all-btn');
   if (scrapeBtn) { scrapeBtn.innerHTML = 'Scraping…'; scrapeBtn.disabled = true; }
 
-  progress.classList.remove('hidden');
-  breakdown.classList.add('hidden');
-  $('jobs-results-panel').classList.add('hidden');
-
   const platforms = ['bundesagentur', 'arbeitnow', 'linkedin', 'remotive'];
-  platforms.forEach(p => {
+  const PLATFORM_NAMES = { bundesagentur: 'Bundesagentur', arbeitnow: 'Arbeitnow', linkedin: 'LinkedIn', remotive: 'Remotive' };
+
+  // Rebuilds the whole chip, dot included, so calling it any number of times gives
+  // the same result. The previous code set el.textContent on the success path, which
+  // DELETES the child <span class="sp-dot">. The next scrape then read that span
+  // back as null and threw — and because that happened before the try block, the
+  // finally never ran and the button stayed disabled. That, not any upstream job
+  // board, is why a second scrape did nothing until the page was reloaded.
+  const setPlatformChip = (p, state_, label) => {
     const el = $(`sp-${p}`);
     if (!el) return;
-    el.className = 'scrape-platform';
-    el.querySelector('.sp-dot').className = 'sp-dot spinning';
-  });
+    el.className = `scrape-platform${state_ === 'spinning' ? '' : ' ' + state_}`;
+    el.innerHTML = `<span class="sp-dot ${state_}"></span> ${esc(label)}`;
+  };
 
-  setAgentStatus('scout', 'running');
-  $('search-status-pill').textContent = 'Scraping all…';
-
+  // Everything that touches the DOM now sits inside the try, so any failure still
+  // reaches the finally that re-enables the button.
   try {
+    progress?.classList.remove('hidden');
+    breakdown?.classList.add('hidden');
+    $('jobs-results-panel')?.classList.add('hidden');
+    platforms.forEach(p => setPlatformChip(p, 'spinning', PLATFORM_NAMES[p]));
+    setAgentStatus('scout', 'running');
+    const pill = $('search-status-pill');
+    if (pill) pill.textContent = 'Scraping all…';
+
     const r = await fetch(`${baseUrl}/api/scrape-all`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ region, sector, distance, location, keyword, pages })
+      body: JSON.stringify({ region, sector, distance, location, keyword, pages, employment })
     });
     const data = await r.json();
-    state.jobs  = data.jobs || [];
+
+    // Every click replaces the list with the results of THIS run. Accumulating across
+    // runs was worse in practice: because LinkedIn's guest endpoint returns a different
+    // slice of ~10 cards each call, a second scrape often added nothing, the list did
+    // not visibly change, and the button looked dead. A search control has to answer
+    // the query you just pressed it with.
+    const fresh = data.jobs || [];
+    state.jobs = fresh;
 
     platforms.forEach(p => {
-      const el = $(`sp-${p}`);
-      if (!el) return;
-      const nameMap = { bundesagentur: 'Bundesagentur', arbeitnow: 'Arbeitnow', linkedin: 'LinkedIn', remotive: 'Remotive' };
-      const name  = nameMap[p] || p;
+      const name  = PLATFORM_NAMES[p] || p;
       const count = data.platformBreakdown?.[name] ?? 0;
-      const done  = count > 0;
-      el.className = `scrape-platform ${done ? 'done' : 'error'}`;
-      el.querySelector('.sp-dot').className = `sp-dot ${done ? 'done' : 'error'}`;
-      el.textContent = `${name}: ${count}`;
+      setPlatformChip(p, count > 0 ? 'done' : 'error', `${name}: ${count}`);
     });
 
     if (data.platformBreakdown) {
-      breakdown.innerHTML = Object.entries(data.platformBreakdown)
-        .map(([name, count]) => `
+      // Per-source counts, then the two steps that shrink them. Without the middle
+      // steps the last tile looks broken: the sources add up to ~1000 and the final
+      // number is 22, with nothing on screen explaining where the rest went. The
+      // server already returns rawTotal and dedupTotal — they were simply unused.
+      const raw   = data.rawTotal   ?? Object.values(data.platformBreakdown).reduce((a, b) => a + b, 0);
+      const dedup = data.dedupTotal ?? raw;
+      const kept = fresh.length;
+      const sectorKept = data.sectorTotal ?? kept;
+
+      // The help button carries the numbers for THIS search, appended to the
+      // general explanation — "140 were dropped" says more than any static text.
+      const chip = (count, name, colour, help) => `
           <div class="pb-chip">
-            <div class="pb-chip-count">${count}</div>
-            <div class="pb-chip-name">${esc(name)}</div>
-          </div>
-        `).join('') + `
-          <div class="pb-chip">
-            <div class="pb-chip-count" style="color:var(--orange)">${state.jobs.length}</div>
-            <div class="pb-chip-name">Total (deduped)</div>
-          </div>
-        `;
+            <div class="pb-chip-count"${colour ? ` style="color:${colour}"` : ''}>${count}</div>
+            <div class="pb-chip-name">${esc(name)}${help || ''}</div>
+          </div>`;
+
+      const withNumbers = (key, extra) =>
+        `<button type="button" class="help-dot" data-help="${key}"
+           data-help-text="${esc(HELP_TEXTS[key] + '<br><br>' + extra)}"
+           aria-expanded="false" aria-label="What does this mean?">?</button>`;
+
+      breakdown.innerHTML =
+        Object.entries(data.platformBreakdown)
+          .map(([name, count]) => chip(count, name)).join('')
+        + chip(dedup, 'After dedup', 'var(--text-muted)',
+            withNumbers('dedup',
+              `<strong>This search:</strong> ${raw} results from all sources, ${raw - dedup} of them the same posting on more than one platform.`))
+        + chip(sectorKept, 'In this domain', 'var(--orange)',
+            withNumbers('domain',
+              `<strong>This search:</strong> ${dedup - sectorKept} of ${dedup} dropped by the sector filter. Set the sector to "All" to see them.`))
+        + (data.employment && data.employment !== 'all'
+            ? chip(kept, 'This position type', 'var(--cyan)',
+                withNumbers('employment',
+                  `<strong>This search:</strong> ${sectorKept - kept} of ${sectorKept} dropped because they are not ${esc(data.employment)} postings.`))
+            : '');
       breakdown.classList.remove('hidden');
     }
 
     state.jobsLabel = 'All Platforms';
+    state.semanticSims = null;                // fresh search → drop stale relevance
     rerenderJobs();
     setAgentStatus('scout', state.jobs.length > 0 ? 'done' : 'error');
     $('search-status-pill').textContent = `${state.jobs.length} found`;
     if (state.jobs.length > 0) toast(`${state.jobs.length} jobs collected from all platforms!`, 'success');
     updateStats();
-    notifyHighMatches(state.jobs);
+    fetchSemanticScores(state.jobs);          // RAG re-rank (no-op without a key)
 
   } catch (err) {
     console.error('scrapeAll error:', err);
-    platforms.forEach(p => {
-      const el = $(`sp-${p}`);
-      if (!el) return;
-      el.className = 'scrape-platform error';
-      const dot = el.querySelector('.sp-dot');
-      if (dot) dot.className = 'sp-dot error';
-    });
+    platforms.forEach(p => setPlatformChip(p, 'error', PLATFORM_NAMES[p]));
     setAgentStatus('scout', 'error');
-    $('search-status-pill').textContent = 'Error';
+    const pill = $('search-status-pill');
+    if (pill) pill.textContent = 'Error';
     toast('Scrape failed: ' + err.message, 'error');
   } finally {
     const btn = $('scrape-all-btn');
@@ -1134,8 +1831,60 @@ async function scrapeAllPlatforms() {
 }
 
 $('scrape-all-btn').addEventListener('click', scrapeAllPlatforms);
+
+// Enter in the location or keyword field runs the search, same as the button.
+['search-location-input', 'job-keyword-input'].forEach(id => {
+  $(id).addEventListener('keydown', e => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    if (!$('scrape-all-btn').disabled) scrapeAllPlatforms();
+  });
+});
 $('analyze-btn').addEventListener('click', analyzeCV);
 $('workmode-filter').addEventListener('change', rerenderJobs);
+
+// ── Market report (aggregate trend stats + LLM summary) ─────────────────────
+const _marketBtn = $('market-report-btn');
+if (_marketBtn) _marketBtn.addEventListener('click', async () => {
+  if (!state.jobs.length) { toast('Search for jobs first.', 'error'); return; }
+  const out = $('market-report');
+  const orig = _marketBtn.innerHTML;
+  _marketBtn.disabled = true; _marketBtn.innerHTML = 'Analyzing…';
+  try {
+    const keyword = ($('job-keyword-input')?.value || '').trim();
+    const report = await api.post('/api/market-report', { jobs: state.jobs, query: keyword });
+    renderMarketReport(report);
+    out.classList.remove('hidden');
+    out.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  } catch (e) {
+    toast('Could not build report: ' + e.message, 'error');
+  }
+  _marketBtn.disabled = false; _marketBtn.innerHTML = orig;
+});
+
+function renderMarketReport(r) {
+  const out = $('market-report');
+  const bars = (items, color) => items.map(it => {
+    const max = items[0]?.count || 1;
+    const w = Math.round((it.count / max) * 100);
+    return `<div class="mr-row"><span class="mr-label">${esc(it.name)}</span>`
+      + `<span class="mr-bar"><span class="mr-fill" style="width:${w}%;background:${color}"></span></span>`
+      + `<span class="mr-count">${it.count}</span></div>`;
+  }).join('');
+  const remote = Object.entries(r.remote_split || {}).map(([k, v]) => `${esc(k)}: ${v}`).join(' · ');
+  const sal = r.salary && r.salary.min
+    ? `${r.salary.min.toLocaleString()}–${(r.salary.max || r.salary.min).toLocaleString()} € (from ${r.salary.count} listings)`
+    : 'not enough salary data';
+  out.innerHTML = `
+    <div class="card-header"><h2>Market Report <span class="count-badge">${r.total_jobs}</span></h2></div>
+    <p style="font-size:13px;line-height:1.55;margin-bottom:14px">${esc(r.summary || '')}</p>
+    <div class="three-col">
+      <div><h3 class="col-label">Most requested skills</h3>${bars(r.top_skills, 'var(--cyan)')}</div>
+      <div><h3 class="col-label">Top locations</h3>${bars(r.top_locations, 'var(--teal)')}</div>
+      <div><h3 class="col-label">Top companies</h3>${bars(r.top_companies, 'var(--orange)')}</div>
+    </div>
+    <p class="hint" style="margin-top:12px">Work mode — ${esc(remote)} &nbsp;·&nbsp; Salary range — ${esc(sal)}</p>`;
+}
 
 // ── Match scoring (used inline on job cards) ────────────────────────────────
 // Weighted 6-criteria scoring (skills/role/location/remote/seniority/salary)
@@ -1149,8 +1898,36 @@ function skillLabel(key) {
   return key;
 }
 
+// Authoritative AI match scores, keyed by job identity. Once the Oracle has
+// deeply analysed a job, its score becomes the single source of truth shown
+// everywhere (card + workspace), so the same job never shows two numbers.
+const aiMatchByJob = {};
+// title|company alone collides when the same employer posts the same title in two
+// cities. Add location as a discriminant — it is present on both search results and
+// saved applications, so the Oracle score still carries over between them.
+function jobKey(job) {
+  return `${normalize(job.title || '')}|${normalize(job.company || '')}|${normalize(job.location || '')}`.trim();
+}
+
+// Hybrid relevance for a non-Oracle job: fuse the deterministic keyword score
+// (scorer.js) with the calibrated semantic similarity (RAG). Only defined when
+// embeddings are available (sem present), so the no-key flow is unchanged.
+// Keyword weight in the hybrid score; semantic gets the rest. Leans on semantic
+// (0.6) because the keyword taxonomy is security-heavy and generalises poorly to
+// other domains, whereas embeddings capture meaning across any field.
+const HYBRID_KW = Number(window.HYBRID_KW_WEIGHT) || 0.4;
+function hybridRelevance(detail, sem) {
+  if (typeof sem !== 'number') return undefined;
+  const kw = detail && typeof detail.score === 'number' && !(detail.breakdown && detail.breakdown.aiAssessed)
+    ? detail.score : undefined;
+  return (typeof kw === 'number' && kw > 0) ? (HYBRID_KW * kw + (1 - HYBRID_KW) * sem) : sem;
+}
+
 function scoreJobDetailed(job, analysis) {
   if (!analysis || !analysis.foundSkills.length || typeof window.Scorer === 'undefined') {
+    // Even without a local analysis, surface an AI score if the Oracle assessed this job.
+    const ai = aiMatchByJob[jobKey(job)];
+    if (ai != null) return { score: ai, breakdown: { aiAssessed: true, points: {}, weights: {} } };
     return { score: 0, breakdown: null };
   }
   const p = state.profile || {};
@@ -1164,7 +1941,43 @@ function scoreJobDetailed(job, analysis) {
   };
   const jobText = normalize([job.title, job.description, job.sector, job.board].filter(Boolean).join(' '));
   const jobSkillKeys = findSkillsLocal(jobText).map(s => s.key);
-  return window.Scorer.scoreJob(job, profile, jobSkillKeys);
+  const r = window.Scorer.scoreJob(job, profile, jobSkillKeys);
+
+  // Outcome-based re-ranking boost: jobs similar to past interviews/offers rank higher.
+  const signal = getRerankSignal();
+  if (window.Rerank && signal && signal.count) {
+    const { points, matched } = window.Rerank.boostFor(jobSkillKeys, signal);
+    if (points > 0) {
+      r.score100 = Math.min(100, (r.score100 != null ? r.score100 : r.score * 100) + points);
+      r.score = Math.round((r.score100 / 100) * 1000) / 1000;
+      if (r.breakdown) { r.breakdown.rerankBoost = points; r.breakdown.rerankMatched = matched; }
+    }
+  }
+
+  // If the AI consultant has deeply assessed this job, its score wins — keeping the
+  // deterministic breakdown (skills/gaps) but unifying the headline % everywhere.
+  const ai = aiMatchByJob[jobKey(job)];
+  if (ai != null) {
+    r.score = ai;
+    r.score100 = Math.round(ai * 100);
+    if (r.breakdown) r.breakdown.aiAssessed = true;
+  }
+  return r;
+}
+
+// Memoised "success signal" from the Tracker (apps that got interview/offer).
+let _rerankCache = { key: '', signal: null };
+function getRerankSignal() {
+  if (typeof window.Rerank === 'undefined') return null;
+  const apps = state.apps || [];
+  const key = apps.map(a => `${a.status}:${a.title || ''}`).join('|');
+  if (key !== _rerankCache.key) {
+    _rerankCache = {
+      key,
+      signal: window.Rerank.successSignal(apps, t => findSkillsLocal(t).map(s => s.key)),
+    };
+  }
+  return _rerankCache.signal;
 }
 
 function calculateMatchScore(job, analysis) {
@@ -1179,63 +1992,148 @@ function syncWriterCv() {
   if (source && !ta.value.trim()) ta.value = source;
 }
 
-function buildImprovedCV(cvText, targetJob, analysis) {
-  const skills   = analysis?.foundSkills?.map(s => s.label) || [];
-  const domain   = analysis?.domain || 'Technology';
-  const topRole  = targetJob || analysis?.roles?.[0]?.name || `${domain} Professional`;
-  const date     = new Date().toLocaleDateString('en-GB');
-  const missing  = analysis?.missingSkills?.slice(0, 3).map(s => s.label) || [];
-
-  const domainSections = {
-    'Software Development':  'TECHNICAL PROJECTS\n──────────────────────────────────────────────────────────\n  [Project Name] — Brief description and technologies used\n  [Project Name] — Brief description and technologies used',
-    'DevOps & Cloud':        'INFRASTRUCTURE & TOOLS\n──────────────────────────────────────────────────────────\n  Cloud: [AWS / Azure / GCP]\n  IaC:   [Terraform / Ansible]\n  CI/CD: [Jenkins / GitHub Actions]',
-    'Data & AI':             'DATA PROJECTS\n──────────────────────────────────────────────────────────\n  [Dataset/Project] — Model type, accuracy, outcome\n  [Dashboard/Report] — Tools, audience, business impact',
-    'Cybersecurity':         'CERTIFICATIONS & TOOLS\n──────────────────────────────────────────────────────────\n  [CompTIA Security+, CEH, OSCP or equivalent]\n  Tools: [Splunk, Nessus, Burp Suite, Wireshark]',
-    'Finance & Accounting':  'FINANCIAL ACHIEVEMENTS\n──────────────────────────────────────────────────────────\n  [Reduced costs by X% / Managed portfolio of €Xm]\n  [Certification: ACCA, CFA, CPA or equivalent]',
-    'Marketing & Sales':     'CAMPAIGN RESULTS\n──────────────────────────────────────────────────────────\n  [Campaign name] — +X% leads, €X revenue generated\n  [Channel/Tool] — X% CTR, X ROAS',
-    'Design & UX':           'PORTFOLIO HIGHLIGHTS\n──────────────────────────────────────────────────────────\n  [Project] — Problem, process, and measurable outcome\n  Portfolio: [figma.com/xxx or behance.net/xxx]',
-    'Healthcare & Nursing':  'PRAKTISCHE ERFAHRUNGEN\n──────────────────────────────────────────────────────────\n  [Institution] — Bereich, Dauer, Hauptaufgaben\n  [Institution] — Bereich, Dauer, Hauptaufgaben\n\nZERTIFIKATE & FORTBILDUNGEN\n──────────────────────────────────────────────────────────\n  [Pflegehilfskraft-Ausbildung · Institution · Jahr]\n  [Erste-Hilfe-Kurs · Jahr] · [Hygieneschulung · Jahr]',
+// Writer options (language / tone / length) read from the page selects.
+function readWriterOptions(prefix) {
+  return {
+    language: $(`${prefix}-lang`)?.value || 'auto',
+    tone:     $(`${prefix}-tone`)?.value || 'professional',
+    length:   $(`${prefix}-length`)?.value || 'standard',
   };
+}
 
-  const domainSection = domainSections[domain] || domainSections['Software Development'];
+// jsPDF's standard fonts only cover Windows-1252, so decorative Unicode (box-drawing
+// rules, ✓/○ bullets, arrows) renders as garbage like "%P" / "%Ë". Replace those with
+// safe equivalents before drawing. The bullet "•" and dashes are CP1252-safe and kept.
+function pdfSafeText(s) {
+  return String(s)
+    .replace(/[╔╗╚╝╠╣╦╩╬]/g, '')        // box corners/junctions → drop
+    .replace(/[═━─_]{3,}/g, m => '-'.repeat(Math.min(m.length, 60))) // rules → dashes
+    .replace(/[═━─]/g, '-')
+    .replace(/[║│┃]/g, '|')
+    .replace(/[✓✔☑]/g, '•')          // checkmarks → bullet
+    .replace(/[○◦▪▫◆■□●]/g, '•')     // misc bullets → bullet
+    .replace(/→/g, '->').replace(/←/g, '<-').replace(/↑/g, '^').replace(/↓/g, 'v')
+    .replace(/[‘’]/g, "'").replace(/[“”]/g, '"');
+}
 
-  return `╔══════════════════════════════════════════════════════════╗
-║            CURRICULUM VITAE — CareerAI Draft              ║
-╚══════════════════════════════════════════════════════════╝
+// Render any plain-text document to a clean, paginated PDF (jsPDF).
+function downloadTextAsPDF(rawText, filename, title) {
+  const lib = window.jspdf;
+  if (!lib || !lib.jsPDF) { toast('PDF library not loaded — refresh the page.', 'error'); return; }
+  if (!rawText || !rawText.trim()) { toast('Nothing to export yet.', 'error'); return; }
+  const text = pdfSafeText(rawText);
 
-PROFESSIONAL PROFILE
-──────────────────────────────────────────────────────────
-Results-driven ${topRole} with expertise in ${
-  skills.length ? skills.slice(0, 4).join(', ') : domain.toLowerCase() + ' best practices'
-}. Passionate about delivering high-quality work and continuously expanding technical skills to meet evolving industry demands.
+  const doc = new lib.jsPDF({ unit: 'pt', format: 'a4' });
+  const PAGE_W = doc.internal.pageSize.getWidth();
+  const PAGE_H = doc.internal.pageSize.getHeight();
+  const M = 48, W = PAGE_W - M * 2;
+  let y = M;
 
-  Target Role:  ${topRole}
-  Domain:       ${domain}
-  Generated:    ${date}
+  if (title) {
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(16); doc.setTextColor(124, 58, 237);
+    doc.text(title, M, y); y += 10;
+    doc.setDrawColor(124, 58, 237); doc.setLineWidth(1.5); doc.line(M, y, M + W, y); y += 18;
+  }
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(11); doc.setTextColor(20, 20, 30);
 
-CORE COMPETENCIES
-──────────────────────────────────────────────────────────
-${skills.length
-  ? skills.map(s => `  ✓  ${s}`).join('\n')
-  : '  ✓  [Add your key skills here]'}
-${missing.length ? '\n  SKILLS TO DEVELOP SOON:\n' + missing.map(s => `  ○  ${s}`).join('\n') : ''}
+  // Preserve blank lines; wrap long lines to the page width.
+  String(text).split('\n').forEach(line => {
+    const wrapped = line.trim() ? doc.splitTextToSize(line, W) : [''];
+    wrapped.forEach(seg => {
+      if (y > PAGE_H - M) { doc.addPage(); y = M; }
+      doc.text(seg, M, y); y += 16;
+    });
+  });
 
-PROFESSIONAL EXPERIENCE
-──────────────────────────────────────────────────────────
-${cvText.split('\n').filter(l => l.trim()).slice(0, 30).map(l => '  ' + l).join('\n')}
+  doc.save(filename);
+  toast(`${filename} downloaded.`, 'success');
+}
 
-${domainSection}
+const _cvPdfBtn = $('download-cv-pdf-btn');
+if (_cvPdfBtn) _cvPdfBtn.addEventListener('click', () => {
+  // Download the polished, photo-bearing CV (profile design), tailored to the
+  // typed target role — same clean output as the Profile and per-job downloads.
+  const target = $('target-job-input')?.value.trim();
+  const built = buildProfilePdfDoc(state.profile, target ? { title: target } : null);
+  if (!built) return;
+  const fileName = (built.name.replace(/\s+/g, '_') || 'CareerAI') + '_CV.pdf';
+  built.doc.save(fileName);
+  toast(`${fileName} downloaded!`, 'success');
+});
+const _coverPdfBtn = $('download-cover-pdf-btn');
+if (_coverPdfBtn) _coverPdfBtn.addEventListener('click', () => {
+  const co = $('cover-company')?.value.trim().replace(/\s+/g, '_') || 'Cover';
+  downloadTextAsPDF($('generated-cover-output').value, `${co}_Cover_Letter.pdf`, 'Cover Letter');
+});
 
-EDUCATION
-──────────────────────────────────────────────────────────
-  [Degree · Institution · Year]
+// Clean, ATS-friendly plain-text CV built from the structured profile (falls back to
+// raw CV text). Uses only Windows-1252-safe characters so it reads well on screen,
+// copies cleanly, and exports without garbage. The downloadable PDF uses the polished
+// design (buildProfilePdfDoc); this text is the editable preview / fallback.
+function buildImprovedCV(cvText, targetJob, analysis) {
+  const p = state.profile || {};
+  const name    = [p.firstName, p.lastName].filter(Boolean).join(' ') || '[Your Name]';
+  const topRole = targetJob || p.title || analysis?.roles?.[0]?.name || 'Professional';
+  const contact = [p.email, p.phone, p.location, p.nationality].filter(Boolean).join(' • ');
+  const skills  = (p.skills && p.skills.length)
+    ? p.skills.map(s => s.label || s)
+    : (analysis?.foundSkills?.map(s => s.label) || []);
+  const date = new Date().toLocaleDateString('en-GB');
+  const rule = '-'.repeat(54);
+  const out = [];
 
-LANGUAGES
-──────────────────────────────────────────────────────────
-  [e.g. English (fluent) · German (B2) · French (A2)]
+  out.push(name);
+  out.push(topRole);
+  if (contact)      out.push(contact);
+  if (p.languages)  out.push('Languages: ' + p.languages);
+  out.push('');
 
-──────────────────────────────────────────────────────────
-Generated by CareerAI Writer Agent — ${date}`;
+  out.push('PROFESSIONAL PROFILE', rule);
+  out.push(p.summary
+    || `Results-driven ${topRole} with expertise in ${skills.slice(0, 4).join(', ') || 'the field'}. `
+       + 'Committed to delivering high-quality work and continuously developing technical skills.');
+  out.push('');
+
+  out.push('CORE COMPETENCIES', rule);
+  out.push(skills.length ? skills.map(s => '• ' + s).join('\n') : '• [Add your key skills here]');
+  out.push('');
+
+  if (p.experience && p.experience.length) {
+    out.push('PROFESSIONAL EXPERIENCE', rule);
+    p.experience.forEach(x => {
+      const head  = [x.role, x.org].filter(Boolean).join(' — ');
+      const dates = [x.start, x.end].filter(Boolean).join(' – ');
+      if (head)       out.push(head + (dates ? `  (${dates})` : ''));
+      if (x.location) out.push(x.location);
+      if (x.desc)     out.push(x.desc);
+      out.push('');
+    });
+  } else if (cvText && cvText.trim()) {
+    out.push('PROFESSIONAL EXPERIENCE', rule);
+    cvText.split('\n').filter(l => l.trim()).slice(0, 30).forEach(l => out.push(l.trim()));
+    out.push('');
+  }
+
+  if (p.education && p.education.length) {
+    out.push('EDUCATION', rule);
+    p.education.forEach(x => {
+      const head  = [x.degree, x.org].filter(Boolean).join(' — ');
+      const dates = [x.start, x.end].filter(Boolean).join(' – ');
+      if (head)       out.push(head + (dates ? `  (${dates})` : ''));
+      if (x.location) out.push(x.location);
+    });
+    out.push('');
+  }
+
+  if (p.certifications && p.certifications.length) {
+    out.push('CERTIFICATIONS', rule);
+    p.certifications.forEach(c => out.push('• ' + [c.name, c.year].filter(Boolean).join(' · ')));
+    out.push('');
+  }
+
+  out.push(rule);
+  out.push(`Tailored for: ${topRole}  •  ${date}`);
+  return out.join('\n');
 }
 
 function buildCoverLetter({ jobTitle, company, name, skills: skillsStr }) {
@@ -1282,7 +2180,7 @@ Thank you for considering my application.
 Yours sincerely,
 ${name || '[Your Name]'}
 
-──────────────────────────────────────────────────────────
+------------------------------------------------------
 Generated by CareerAI Writer Agent — ${date}`;
 }
 
@@ -1299,7 +2197,7 @@ $('generate-cv-btn').addEventListener('click', async () => {
   let text = '', usedAI = false;
   try {
     const foundSkills = (state.analysis?.foundSkills || []).map(s => s.label);
-    const r = await api.post('/api/generate-cv', { cvText, targetRole: target, foundSkills });
+    const r = await api.post('/api/generate-cv', { cvText, targetRole: target, foundSkills, options: readWriterOptions('cv-opt') });
     if (r && r.ok && r.source === 'ai' && r.text) { text = r.text; usedAI = true; }
   } catch (_) { /* fall back to template */ }
 
@@ -1330,7 +2228,7 @@ $('generate-cover-btn').addEventListener('click', async () => {
   let text = '', usedAI = false;
   try {
     // Try the real AI endpoint first.
-    const r = await api.post('/api/generate-cover', { jobTitle, company, name, skills, cvText });
+    const r = await api.post('/api/generate-cover', { jobTitle, company, name, skills, cvText, options: readWriterOptions('cover-opt') });
     if (r && r.ok && r.source === 'ai' && r.text) { text = r.text; usedAI = true; }
   } catch (_) { /* fall back to template */ }
 
@@ -1436,30 +2334,63 @@ async function addApplication(app) {
     norm(a.title) === norm(app.title) && norm(a.company) === norm(app.company));
   if (exists) { toast(`"${app.title}" is already in your tracker.`, 'info'); return; }
 
-  const newApp = { ...app, id: genId(), status: 'applied', createdAt: new Date().toISOString() };
+  const now = new Date().toISOString();
+  const newApp = { ...app, id: genId(), status: 'applied', createdAt: now,
+    history: [{ status: 'applied', at: now }] };
   state.apps.push(newApp);
   saveAppsLocally();
+
+  // Paint before talking to the server. The local list is already correct, so the
+  // round trip decides nothing about what to draw — it only delayed it. On a phone
+  // reaching Stockholm that was several hundred milliseconds of a button that
+  // looked broken.
+  renderKanban();
+  updateStats();
+  toast(`${newApp.title} @ ${newApp.company} added to tracker!`, 'success');
 
   if (state.token && state.online) {
     try {
       const data = await api.post('/api/applications', newApp);
-      if (data.applications) { state.apps = data.applications; saveAppsLocally(); }
-    } catch (_) {}
+      // The server owns the ids, so redraw once its version arrives.
+      if (data.applications) { state.apps = data.applications; saveAppsLocally(); renderKanban(); updateStats(); }
+    } catch (_) {
+      toast('Saved on this device — the server could not be reached.', 'info');
+    }
   }
-
-  renderKanban();
-  updateStats();
-  toast(`${newApp.title} @ ${newApp.company} added to tracker!`, 'success');
 }
 
 async function moveApplication(id, newStatus) {
-  state.apps = state.apps.map(a => a.id === id ? { ...a, status: newStatus } : a);
+  const at = new Date().toISOString();
+  state.apps = state.apps.map(a => {
+    if (a.id !== id) return a;
+    const history = (a.history || []).concat({ status: newStatus, at });
+    return { ...a, status: newStatus, history };
+  });
   saveAppsLocally();
-  if (state.token && state.online) {
-    try { await api.put(`/api/applications/${id}`, { status: newStatus }); } catch (_) {}
-  }
+  if (jwCurrentApp && jwCurrentApp.id === id) jwCurrentApp = state.apps.find(a => a.id === id);
+
+  // Same reason as addApplication: the card's new column is already decided
+  // locally. Waiting for the PUT before moving it made every drag feel laggy.
   renderKanban();
-  toast(`Moved to ${newStatus}.`, 'info');
+  toast(`Moved to ${esc(STATUS_LABELS[newStatus] || newStatus)}.`, 'info');
+
+  if (state.token && state.online) {
+    try {
+      await api.put(`/api/applications/${id}`, { status: newStatus, history: state.apps.find(a => a.id === id)?.history });
+    } catch (_) {
+      toast('Moved on this device — the server could not be reached.', 'info');
+    }
+  }
+}
+
+// Patch an application's data (e.g. saved documents) + persist locally and server-side.
+async function updateAppData(id, patch) {
+  state.apps = state.apps.map(a => a.id === id ? { ...a, ...patch } : a);
+  saveAppsLocally();
+  if (jwCurrentApp && jwCurrentApp.id === id) jwCurrentApp = state.apps.find(a => a.id === id);
+  if (state.token && state.online) {
+    try { await api.put(`/api/applications/${id}`, patch); } catch (_) {}
+  }
 }
 
 async function deleteApplication(id) {
@@ -1509,9 +2440,39 @@ function setupKanbanDnD() {
   });
 }
 
+// Conversion funnel: Saved → Applied → Interviews → Offers + response rate.
+function renderFunnel() {
+  const el = $('tracker-funnel');
+  if (!el) return;
+  const apps = state.apps || [];
+  if (!apps.length) { el.classList.add('hidden'); return; }
+  const count = s => apps.filter(a => a.status === s).length;
+  const saved      = count('applied');                                  // status "applied" = label "Saved"
+  const applied    = count('review') + count('interview') + count('offer') + count('rejected'); // actually sent
+  const interviews = count('interview') + count('offer');               // reached the interview stage
+  const offers     = count('offer');
+  const card = (val, lbl, color) =>
+    `<div class="funnel-card"><div class="funnel-val" style="color:${color}">${val}</div><div class="funnel-lbl">${esc(lbl)}</div></div>`;
+  el.innerHTML =
+      card(saved, 'Saved', 'var(--text)')
+    + card(applied, 'Applied', 'var(--cyan)')
+    + card(interviews, 'Interviews', 'var(--teal)')
+    + card(offers, 'Offers', '#ffc940');
+  el.classList.remove('hidden');
+}
+
+// When the application entered the tracker. Cards created before `createdAt`
+// existed fall back to their first history entry, then to 0 (bottom of column).
+function addedAt(app) {
+  const raw = app.createdAt || app.history?.[0]?.at;
+  const t = raw ? Date.parse(raw) : NaN;
+  return Number.isNaN(t) ? 0 : t;
+}
+
 function renderKanban() {
   dedupeApps();
   setupKanbanDnD();
+  renderFunnel();
   const emptyEl = $('jobs-empty');
   if (emptyEl) emptyEl.classList.toggle('hidden', state.apps.length > 0);
 
@@ -1520,7 +2481,12 @@ function renderKanban() {
     const count = $(`cnt-${status}`);
     if (!col) return;
 
-    const apps = state.apps.filter(a => a.status === status);
+    // Newest arrival on top, so a freshly added card lands at the head of its
+    // column. Sort is stable, so cards saved in the same millisecond keep their
+    // insertion order.
+    const apps = state.apps
+      .filter(a => a.status === status)
+      .sort((a, b) => addedAt(b) - addedAt(a));
     if (count) count.textContent = apps.length;
 
     col.innerHTML = apps.map(app => {
@@ -1534,20 +2500,30 @@ function renderKanban() {
         <div class="app-card" draggable="true" data-id="${app.id}">
           <div class="app-card-title">${esc(app.title)}</div>
           <div class="app-card-company">${esc(app.company)}${app.location ? ' · ' + esc(app.location) : ''}</div>
+          ${app.documents ? `<div class="app-card-docs">📄 Documents ready</div>` : ''}
           ${app.deadline ? `<div class="app-card-deadline" style="color:${deadlineColor}">${deadlineLabel}${esc(app.deadline)}</div>` : ''}
           ${app.url ? `<a class="app-card-link" href="${esc(app.url)}" target="_blank" rel="noreferrer">View job →</a>` : ''}
           ${app.notes ? `<div class="app-card-notes">${esc(app.notes)}</div>` : ''}
           <div class="app-card-actions">
-            ${prev ? `<button class="move-btn" data-id="${app.id}" data-to="${prev}">← ${esc(STATUS_LABELS[prev] || prev)}</button>` : ''}
-            ${next ? `<button class="move-btn" data-id="${app.id}" data-to="${next}">${esc(STATUS_LABELS[next] || next)} →</button>` : ''}
+            ${prev ? `<button class="move-btn" data-id="${app.id}" data-to="${prev}" title="Move this job back to ${esc(STATUS_LABELS[prev] || prev)}">← ${esc(STATUS_LABELS[prev] || prev)}</button>` : ''}
+            ${next ? `<button class="move-btn" data-id="${app.id}" data-to="${next}" title="Move this job forward to ${esc(STATUS_LABELS[next] || next)}">${esc(STATUS_LABELS[next] || next)} →</button>` : ''}
             <button class="delete-btn" data-id="${app.id}" data-confirm="0">✕</button>
           </div>
+          <!-- Separate from the move buttons on purpose: those change the pipeline
+               stage, this one prepares for the interview for THIS posting. Reading
+               "Interview →" as the second thing is the mistake the layout invited. -->
+          <button class="prep-btn" data-prep="${app.id}">🎤 Prep interview for this job</button>
         </div>
       `;
     }).join('');
 
+    col.querySelectorAll('[data-prep]').forEach(btn =>
+      btn.addEventListener('click', e => prepInterviewForJob(e.currentTarget.dataset.prep)));
+
     col.querySelectorAll('.move-btn').forEach(btn =>
-      btn.addEventListener('click', e => moveApplication(e.target.dataset.id, e.target.dataset.to))
+      // Same reason as the tracker button: a translated page puts a <font> between
+      // the tap and the element carrying the data attributes.
+      btn.addEventListener('click', e => moveApplication(e.currentTarget.dataset.id, e.currentTarget.dataset.to))
     );
 
     // Click a card body (not a button/link) → open its job workspace.
@@ -1645,13 +2621,51 @@ const ORACLE_ICON = `<svg width="40" height="40" viewBox="0 0 48 48" fill="none"
   <path d="M33 37 L35.5 34.5 L38 36 L41 32.5" stroke="#10B981" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>`;
 
-async function openJobWorkspace(app) {
+// Cache AI consultations per job + profile, so re-opening a card costs no LLM
+// call (this is the main source of Gemini free-tier rate-limits). The key includes
+// a profile signature, so the consult refreshes automatically when your CV changes.
+const _consultCache = {};
+function profileSig() {
+  const p = state.profile || {};
+  return (p.skills || []).map(s => s.key || s.label || s).join(',') + '|' + (p.title || '');
+}
+function consultKey(app) {
+  return `${app.id || (app.title + '|' + app.company)}::${profileSig()}`;
+}
+
+// Compact status timeline from an application's history (Saved → Applied → …).
+function renderStatusTimeline(app) {
+  const h = app && app.history;
+  if (!Array.isArray(h) || !h.length) return '';
+  const fmt = at => { try { return new Date(at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }); } catch (_) { return ''; } };
+  const steps = h.map(e =>
+    `<span class="tl-step"><span class="tl-dot ${esc(e.status)}"></span>${esc(STATUS_LABELS[e.status] || e.status)}`
+    + `<span class="tl-date">${fmt(e.at)}</span></span>`).join('<span class="tl-arrow">→</span>');
+  return `<div class="jw-timeline">${steps}</div>`;
+}
+
+async function openJobWorkspace(app, force) {
   jwCurrentApp = app;
   $('jw-title').textContent = app.title || 'Job';
-  $('jw-company').textContent = [app.company, app.location].filter(Boolean).join(' · ');
-  const out = $('jw-cover-output');
-  out.classList.add('hidden'); out.value = '';
+  $('jw-company').innerHTML = esc([app.company, app.location].filter(Boolean).join(' · '))
+    + renderStatusTimeline(app);
   $('job-workspace').classList.remove('hidden');
+
+  // Show previously saved documents (persisted on the application) right away.
+  if (app.documents && (app.documents.cv || app.documents.cover || app.documents.email)) {
+    renderJobDocs(app, app.documents);
+  } else {
+    $('jw-docs')?.classList.add('hidden');
+  }
+
+  // Cached consultation → render instantly, no AI call.
+  const key = consultKey(app);
+  if (!force && _consultCache[key]) {
+    renderJobConsult(_consultCache[key]);
+    $('jw-match').insertAdjacentHTML('afterbegin',
+      `<div class="hint" style="margin-bottom:8px">Cached analysis — click <strong>Re-check match</strong> to refresh.</div>`);
+    return;
+  }
 
   // Oracle = AI consultation: read the posting, compare to the profile. Falls
   // back to the local keyword analysis when no LLM key is configured.
@@ -1661,26 +2675,53 @@ async function openJobWorkspace(app) {
     + `<span>The AI consultant is analysing the job<span class="jw-dots"></span></span></div>`;
   $('jw-gaps').innerHTML = '';
   $('jw-oracle').innerHTML = '';
-  let consult = null;
-  try {
-    const profileText = (typeof profileToText === 'function' ? profileToText() : '') || state.cvText || '';
-    const r = await fetch(`${baseUrl}/api/job-consult`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jobTitle: app.title, company: app.company, jobDescription: app.description || '', profileText })
-    });
-    const d = await r.json();
-    if (d && d.ok && d.consult) consult = d.consult;
-  } catch (_) { /* offline / no key → keyword fallback */ }
 
-  if (jwCurrentApp !== app) return;     // a newer card was opened meanwhile
-  if (consult) { renderJobConsult(consult); return; }
+  // One attempt → returns { consult } or { reason }.
+  async function attempt() {
+    try {
+      const profileText = (typeof profileToText === 'function' ? profileToText() : '') || state.cvText || '';
+      const r = await fetch(`${baseUrl}/api/job-consult`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ jobTitle: app.title, company: app.company, jobDescription: app.description || '', profileText })
+      });
+      const d = await r.json();
+      if (d && d.ok && d.consult) return { consult: d.consult };
+      return { reason: (d && d.reason) || 'error' };
+    } catch (_) { return { reason: 'offline' }; }
+  }
 
-  // AI consultation unavailable → keyword fallback, clearly labelled + retry.
+  // Auto-retry transient failures (Gemini per-minute rate-limit / busy). The quota
+  // resets within ~1 min, so we wait and retry instead of giving up immediately.
+  const MAX = 3;
+  for (let i = 1; i <= MAX; i++) {
+    const res = await attempt();
+    if (jwCurrentApp !== app) return;                 // user opened another card
+    if (res.consult) { _consultCache[key] = res.consult; renderJobConsult(res.consult); return; }
+
+    // Don't retry these — retrying won't help.
+    if (res.reason === 'llm-not-configured' || res.reason === 'offline') break;
+
+    if (i < MAX) {
+      // Show a live countdown while we wait for the rate-limit window to reset.
+      for (let s = 18; s > 0; s--) {
+        if (jwCurrentApp !== app) return;
+        $('jw-match').innerHTML =
+          `<div class="jw-oracle-item" style="border-color:var(--orange);background:var(--orange-dim)">`
+          + `AI busy (free-tier rate limit). Auto-retrying in <strong>${s}s</strong>… `
+          + `<span class="hint">(attempt ${i + 1}/${MAX})</span></div>`;
+        await new Promise(r => setTimeout(r, 1000));
+      }
+    }
+  }
+
+  if (jwCurrentApp !== app) return;
+  // Still failing after retries → keyword fallback, clearly labelled + manual retry.
   renderJobWorkspace();
   $('jw-match').insertAdjacentHTML('afterbegin',
     `<div class="jw-oracle-item" style="margin-bottom:12px;border-color:var(--orange);background:var(--orange-dim)">`
-    + `⚠️ The AI consultant didn't answer (provider busy or free-tier rate-limit). `
-    + `Showing a basic keyword analysis — click <strong>Re-check match</strong> to retry the full AI consultation.</div>`);
+    + `⚠️ The AI consultant is still busy (free-tier rate-limit). `
+    + `Showing a basic keyword analysis — click <strong>Re-check match</strong> to retry, `
+    + `or add a free <strong>OpenRouter</strong> key as a fallback provider.</div>`);
 }
 
 // Render the AI consultation (opinion + strengths + gaps + certs + learning).
@@ -1694,11 +2735,17 @@ function renderJobConsult(c) {
     + `<a href="${courses(label)}" target="_blank" rel="noreferrer">Coursera →</a></div>`;
 
   const pct = Math.max(0, Math.min(100, Math.round(Number(c.matchPercent) || 0)));
-  const color = pct >= 70 ? 'var(--teal)' : pct >= 40 ? 'var(--cyan)' : 'var(--orange)';
+  const color = pct >= 75 ? 'var(--teal)' : pct >= 40 ? 'var(--cyan)' : 'var(--orange)';
   $('jw-match').innerHTML =
-    `<span class="jw-match-score" style="color:${color}">${pct}%</span> match`
+    `<span class="jw-match-score" style="color:${color}">${pct}%</span> match${helpDot('matchScore')}`
     + `<div class="jw-bar"><div style="width:${pct}%;background:${color}"></div></div>`
     + (c.matchSummary ? `<p style="font-size:13px;color:var(--text-muted);margin-top:8px">${esc(c.matchSummary)}</p>` : '');
+
+  // Make this AI score authoritative for this job everywhere (cards converge to it).
+  if (jwCurrentApp) {
+    aiMatchByJob[jobKey(jwCurrentApp)] = pct / 100;
+    if (state.jobs && state.jobs.length) rerenderJobs();
+  }
 
   const strengths = Array.isArray(c.strengths) ? c.strengths : [];
   const missing   = Array.isArray(c.missing) ? c.missing : [];
@@ -1750,7 +2797,7 @@ function renderJobWorkspace() {
     const pct = profileSkills.length ? Math.round(matched / total * 100) : 0;
     const color = pct >= 70 ? 'var(--teal)' : pct >= 40 ? 'var(--cyan)' : 'var(--orange)';
     $('jw-match').innerHTML =
-      `<span class="jw-match-score" style="color:${color}">${pct}%</span> skills match`
+      `<span class="jw-match-score" style="color:${color}">${pct}%</span> skills match${helpDot('matchScore')}`
       + `<div class="jw-bar"><div style="width:${pct}%;background:${color}"></div></div>`
       + `<span style="font-size:12px;color:var(--text-muted)">${matched}/${total} of the job's skills are in your profile`
       + `${profileSkills.length ? '' : ' — import/analyze your CV first'}</span>`;
@@ -1804,30 +2851,110 @@ function renderJobWorkspace() {
     + oracleBody + certHtml + platformsHtml;
 }
 
-async function generateJobCover() {
-  const app = jwCurrentApp;
-  if (!app) return;
-  const btn = $('jw-cover'); const orig = btn.innerHTML;
-  btn.disabled = true; btn.innerHTML = 'Generating…';
+// Detect a document's language (DE vs EN) from its text — used to keep the email in
+// the same language the AI wrote the cover letter in when "Auto" is selected.
+function detectDocLang(text) {
+  const t = String(text || '');
+  if (/[äöüß]|\b(und|der|die|das|für|mit|nicht|eine|Ihre|Sehr geehrte|Bewerbung|Kenntnisse|Erfahrung|Stelle)\b/.test(t)) return 'de';
+  return 'en';
+}
+
+// Localised application email (subject + body) so it matches the cover letter's language.
+function buildApplicationEmail({ title, company, name, email, lang }) {
+  if (lang === 'de') {
+    return {
+      subject: `Bewerbung als ${title}${company ? ' bei ' + company : ''}`,
+      body: `Sehr geehrte Damen und Herren,\n\n`
+        + `anbei sende ich Ihnen meinen Lebenslauf und mein Anschreiben für die Position als ${title}`
+        + `${company ? ' bei ' + company : ''}. Über die Gelegenheit zu einem persönlichen Gespräch würde ich mich sehr freuen.\n\n`
+        + `Mit freundlichen Grüßen,\n${name || '[Ihr Name]'}\n${email || ''}`,
+    };
+  }
+  return {
+    subject: `Application for ${title}${company ? ' at ' + company : ''}`,
+    body: `Dear Hiring Team,\n\nPlease find attached my CV and cover letter for the ${title} position`
+      + `${company ? ' at ' + company : ''}. I would welcome the opportunity to discuss how my `
+      + `background fits your needs.\n\nKind regards,\n${name || '[Your name]'}\n${email || ''}`,
+  };
+}
+
+// Gmail compose URL (web). Attachments can't be pre-filled by any site (browser
+// security), so we pre-fill recipient/subject/body and the user attaches the PDFs.
+function gmailComposeUrl({ to, subject, body }) {
+  const q = new URLSearchParams({ view: 'cm', fs: '1', to: to || '', su: subject || '', body: body || '' });
+  return 'https://mail.google.com/mail/?' + q.toString();
+}
+
+// The graph writes the letter; this turns it into the finished deliverable —
+// pre-composed email, Copy/PDF panel, and a copy persisted on the application so
+// it survives a refresh. It used to live in "Generate documents", which is gone.
+async function persistJobLetter(app, letterText) {
+  if (!app || !letterText) return;
   const p = state.profile || {};
   const name = [p.firstName, p.lastName].filter(Boolean).join(' ');
-  const skills = (p.skills || []).slice(0, 6).map(s => s.label || s).join(', ');
-  const cvText = (typeof profileToText === 'function' ? profileToText() : '') || state.cvText || '';
-  let text = '', usedAI = false;
-  try {
-    const r = await api.post('/api/generate-cover', {
-      jobTitle: app.title, company: app.company, name, skills, cvText, jobDescription: app.description || ''
-    });
-    if (r && r.ok && r.source === 'ai' && r.text) { text = r.text; usedAI = true; }
-  } catch (_) {}
-  if (!text && typeof buildCoverLetter === 'function') {
-    text = buildCoverLetter({ jobTitle: app.title, company: app.company, name, skills });
+
+  // Pre-compose the email in the SAME language as the cover letter. When "Auto",
+  // follow the language the AI actually wrote the cover in (detected from its text).
+  const langChoice = $('jw-lang')?.value || 'auto';
+  const emailLang = langChoice !== 'auto' ? langChoice : detectDocLang(letterText);
+  const mail = buildApplicationEmail({ title: app.title, company: app.company, name, email: p.email, lang: emailLang });
+
+  const documents = { cover: letterText, mail, generatedAt: new Date().toISOString(), ai: true };
+  renderJobDocs(app, documents);
+  state.docsCount += 1; updateStats();
+
+  await updateAppData(app.id, { documents });
+  renderKanban();
+}
+
+function renderJobDocs(app, docs) {
+  const wrap = $('jw-docs');
+  const block = (key, title, text) => `
+    <div class="jw-doc">
+      <div class="jw-doc-head"><strong>${esc(title)}</strong>
+        <span>
+          <button class="btn btn-ghost btn-xs" data-copy="${key}">Copy</button>
+          <button class="btn btn-ghost btn-xs" data-pdf="${key}">PDF</button>
+        </span>
+      </div>
+      <textarea id="jw-doc-${key}" class="field" rows="9" readonly>${esc(text)}</textarea>
+    </div>`;
+  const savedNote = docs.generatedAt
+    ? `<div class="hint" style="margin-bottom:8px">Saved documents (generated ${new Date(docs.generatedAt).toLocaleString('en-GB')}${docs.ai ? ', AI' : ''}). Click <strong>Generate documents</strong> to refresh.</div>`
+    : '';
+  // Pre-composed email (subject + body). Support legacy saved docs that stored a
+  // single `email` string by splitting its first "Subject:/Betreff:" line off.
+  let mail = docs.mail;
+  if (!mail && docs.email) {
+    const lines = String(docs.email).split('\n');
+    const subj = (lines[0].match(/^(?:Subject|Betreff):\s*(.*)$/) || [])[1] || '';
+    mail = { subject: subj, body: lines.slice(subj ? 1 : 0).join('\n').trim() };
   }
-  const out = $('jw-cover-output');
-  out.value = text || 'Could not generate a cover letter.';
-  out.classList.remove('hidden');
-  btn.disabled = false; btn.innerHTML = orig;
-  toast(usedAI ? 'Cover letter generated (AI)!' : 'Cover letter generated.', 'success');
+
+  wrap.innerHTML = savedNote
+    + block('cover', 'Cover Letter', docs.cover || '')
+    + (mail ? `
+    <div class="jw-doc">
+      <div class="jw-doc-head"><strong>Application email</strong></div>
+      <div class="hint" style="margin:2px 0 8px">Opens Gmail with the subject &amp; message ready. Attach your CV and the cover letter PDF (downloaded above) — sites can't pre-attach files.</div>
+      <button id="jw-gmail-btn" class="btn btn-primary btn-sm">✉ Open in Gmail</button>
+    </div>` : '');
+  wrap.classList.remove('hidden');
+
+  const tag = (app.company || 'job').replace(/\s+/g, '_');
+  wrap.querySelectorAll('[data-copy]').forEach(b =>
+    b.addEventListener('click', () => copyText(`jw-doc-${b.dataset.copy}`)));
+  wrap.querySelectorAll('[data-pdf]').forEach(b =>
+    b.addEventListener('click', () => {
+      const key = b.dataset.pdf;
+      downloadTextAsPDF($(`jw-doc-${key}`).value, `${tag}_${key}.pdf`, 'Cover Letter');
+    }));
+
+  const gmailBtn = $('jw-gmail-btn');
+  if (gmailBtn && mail) gmailBtn.addEventListener('click', () => {
+    window.open(gmailComposeUrl({ subject: mail.subject, body: mail.body }), '_blank', 'noopener');
+    toast('Gmail opened — now attach your CV & cover letter PDFs.', 'info');
+  });
 }
 
 (function wireJobWorkspace() {
@@ -1837,8 +2964,8 @@ async function generateJobCover() {
   $('jw-close').addEventListener('click', close);
   overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
-  $('jw-recheck').addEventListener('click', () => { if (jwCurrentApp) openJobWorkspace(jwCurrentApp); toast('Re-consulting with your current profile…', 'info'); });
-  $('jw-cover').addEventListener('click', generateJobCover);
+  $('jw-recheck').addEventListener('click', () => { if (jwCurrentApp) openJobWorkspace(jwCurrentApp, true); toast('Re-consulting with your current profile…', 'info'); });
+  $('jw-graph-btn')?.addEventListener('click', runAgentGraph);
   $('jw-update-profile').addEventListener('click', () => {
     jwReturnApp = jwCurrentApp;          // remember the job to re-match after saving
     close();
@@ -1846,6 +2973,88 @@ async function generateJobCover() {
     toast('Update your profile and click "Save Profile" — we\'ll re-check this job automatically.', 'info');
   });
 })();
+
+// Run the LangGraph multi-agent pipeline (Scout → Matcher → Writer ⇄ Critic) on
+// the current job and show the execution trace + self-improved letter + score.
+async function runAgentGraph() {
+  const app = jwCurrentApp;
+  if (!app) return;
+  const btn = $('jw-graph-btn'); const orig = btn.innerHTML;
+  btn.disabled = true; btn.innerHTML = 'Writing…';
+  const panel = $('jw-graph-panel');
+  panel.classList.remove('hidden');
+  panel.innerHTML = '<div class="hint">Scout → Matcher → Writer ⇄ Critic …</div>';
+  const cvText = (typeof profileToText === 'function' ? profileToText() : '') || state.cvText || '';
+  // Live trace: each node's step is appended as the SSE stream delivers it.
+  panel.innerHTML = '<div class="jw-graph-head">🔗 LangGraph · running…</div><ol class="jw-graph-trace"></ol>';
+  const ol = panel.querySelector('.jw-graph-trace');
+  const addStep = (t) => {
+    const li = document.createElement('li');
+    li.innerHTML = `<strong>${esc(t.node)}</strong> — ${esc(t.note)}`;
+    ol.appendChild(li);
+  };
+  const renderDone = (d) => {
+    // The Critic hands the loop a passing score when it cannot run, so the graph
+    // terminates. That score is bookkeeping, not a judgement — never show it as one.
+    const scored = d.scored !== false && d.score != null;
+    const pass = scored && d.score >= d.qualityBar;
+    const verdict = scored
+      ? `Critic <strong style="color:${pass ? 'var(--teal)' : 'var(--orange)'}">${d.score}/100</strong> (bar ${d.qualityBar})${helpDot('criticScore')}`
+      : `Critic <strong style="color:var(--orange)">not evaluated</strong> — the judge could not run`;
+
+    panel.querySelector('.jw-graph-head').innerHTML =
+      `🔗 LangGraph · <strong>${d.revisions}</strong> revision(s) · ${verdict}`;
+    if (d.feedback) panel.insertAdjacentHTML('beforeend', `<div class="hint" style="margin-top:6px"><strong>Last critique:</strong> ${esc(d.feedback)}</div>`);
+
+    // The graph is now the only writer, so its letter has to become the finished
+    // deliverable here — Copy/PDF panel, application email, and saved on the job.
+    if (d.coverLetter) persistJobLetter(app, d.coverLetter);
+
+    toast(scored
+      ? `Cover letter ready — ${d.revisions} revision(s), score ${d.score}/100.`
+      : `Cover letter ready — ${d.revisions} revision(s), not evaluated.`, scored ? 'success' : 'info');
+  };
+
+  try {
+    const r = await fetch(`${baseUrl}/api/graph-stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({
+        cvText, profile: state.profile || {},
+        job: { title: app.title, company: app.company },
+        jobDescription: app.description || '',
+        options: { ...readWriterOptions('cover-opt'), language: $('jw-lang')?.value || 'auto' },
+      }),
+    });
+    const ct = r.headers.get('content-type') || '';
+    if (!ct.includes('text/event-stream') || !r.body) {
+      const d = await r.json().catch(() => null); // available:false (no key) or error
+      panel.innerHTML = `<div class="hint">The agent graph needs an LLM key. ${esc((d && (d.reason || d.error)) || '')}</div>`;
+      return;
+    }
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) >= 0) {
+        const line = buf.slice(0, idx); buf = buf.slice(idx + 2);
+        if (!line.startsWith('data:')) continue;
+        let ev; try { ev = JSON.parse(line.slice(5).trim()); } catch (_) { continue; }
+        if (ev.type === 'step') addStep(ev.step);
+        else if (ev.type === 'done') renderDone(ev.result);
+        else if (ev.type === 'error') panel.insertAdjacentHTML('beforeend', `<div class="hint">Error: ${esc(ev.error)}</div>`);
+      }
+    }
+  } catch (e) {
+    panel.insertAdjacentHTML('beforeend', `<div class="hint">Graph failed: ${esc(e.message)}</div>`);
+  } finally {
+    btn.disabled = false; btn.innerHTML = orig;
+  }
+}
 
 // ── CareerBot Chat Assistant ────────────────────────────────────────────────
 const chatKnowledge = [
@@ -1890,7 +3099,7 @@ const chatKnowledge = [
     match: msg => /\bjob\b|search|offer|position|vacanc/.test(msg),
     reply: () => state.jobs.length
       ? `I found **${state.jobs.length} jobs** for you!\n\nEach one shows a **match score** if your profile is complete. Open **Job Search** to review them.`
-      : `Go to **Job Search**.\nPick your region and platform, then click **Search Jobs** or **Scrape All Platforms** to query 4 sources at once.`
+      : `Go to **Job Search**.\nPick your region and platform, then click **Search Jobs** or **Scrape All Platforms** to query every configured platform at once.`
   },
   {
     match: msg => /match|score|fit/.test(msg),
@@ -1944,6 +3153,37 @@ function addChatMsg(text, from) {
   return div;
 }
 
+// ── Body scroll lock for overlays ─────────────────────────────────────────
+//
+// An overlay that only hides itself with a class leaves the document behind it
+// scrollable. On a phone that is very visible: the page slides around under the
+// open panel as you try to scroll the panel's own content.
+//
+// `overflow: hidden` on <body> is the usual answer and iOS Safari ignores it for
+// touch scrolling, so the body has to come out of flow entirely — which loses the
+// scroll position, hence putting it back by hand on release.
+let _scrollLockY = 0;
+let _scrollLockDepth = 0;
+
+function lockBodyScroll() {
+  if (_scrollLockDepth++ > 0) return;      // already locked by another overlay
+  _scrollLockY = window.scrollY;
+  const b = document.body.style;
+  b.position = 'fixed';
+  b.top = `-${_scrollLockY}px`;
+  b.left = '0';
+  b.right = '0';
+  b.width = '100%';
+}
+
+function unlockBodyScroll() {
+  if (_scrollLockDepth === 0) return;
+  if (--_scrollLockDepth > 0) return;      // another overlay still open
+  const b = document.body.style;
+  b.position = b.top = b.left = b.right = b.width = '';
+  window.scrollTo(0, _scrollLockY);
+}
+
 function initChat() {
   const panel    = $('chat-panel');
   const toggleBtn= $('chat-toggle-btn');
@@ -1953,17 +3193,27 @@ function initChat() {
 
   if (!panel || !toggleBtn) return;
 
+  const openChat = () => {
+    panel.classList.remove('hidden');
+    lockBodyScroll();
+    setTimeout(() => input.focus(), 50);
+  };
+  const closeChat = () => {
+    if (panel.classList.contains('hidden')) return;   // never unlock twice
+    panel.classList.add('hidden');
+    unlockBodyScroll();
+  };
+
   toggleBtn.addEventListener('click', () => {
-    panel.classList.toggle('hidden');
     toggleBtn.classList.remove('has-new');
-    if (!panel.classList.contains('hidden')) {
-      setTimeout(() => input.focus(), 50);
-    }
+    if (panel.classList.contains('hidden')) openChat(); else closeChat();
   });
 
-  closeBtn.addEventListener('click', () => panel.classList.add('hidden'));
+  closeBtn.addEventListener('click', closeChat);
+  // Escape closes it, like every other overlay in the app.
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeChat(); });
 
-  function sendMessage(text) {
+  async function sendMessage(text) {
     const msg = (text != null ? text : input.value).trim();
     if (!msg) return;
     addChatMsg(msg, 'user');
@@ -1978,12 +3228,28 @@ function initChat() {
     box.appendChild(typing);
     box.scrollTop = box.scrollHeight;
 
-    const delay = 500 + Math.random() * 500;
-    setTimeout(() => {
-      typing.remove();
+    // Try the grounded RAG endpoint first; fall back to keyword answers when no
+    // embeddings/LLM key is configured or the request fails.
+    let reply = null, sources = null;
+    try {
+      const profileText = (typeof profileToText === 'function' ? profileToText() : '') || state.cvText || '';
+      const r = await fetch(`${baseUrl}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ message: msg, profile: profileText }),
+      });
+      const d = await r.json();
+      if (d && d.available && d.reply) { reply = d.reply; sources = d.sources; }
+    } catch (_) { /* offline → fall back below */ }
+
+    typing.remove();
+    if (reply) {
+      const cite = sources && sources.length ? `\n\n**Sources:** ${sources.slice(0, 3).join(' · ')}` : '';
+      addChatMsg(reply + cite, 'bot');
+    } else {
       addChatMsg(getChatResponse(msg), 'bot');
-      if (panel.classList.contains('hidden')) toggleBtn.classList.add('has-new');
-    }, delay);
+    }
+    if (panel.classList.contains('hidden')) toggleBtn.classList.add('has-new');
   }
 
   sendBtn.addEventListener('click', () => sendMessage());
@@ -2002,8 +3268,8 @@ function initChat() {
 // ── Stats ───────────────────────────────────────────────────────────────────
 function updateStats() {
   const set = (id, v) => { const el = $(id); if (el) el.textContent = v; };
-  const highMatches = state.analysis
-    ? state.jobs.filter(j => calculateMatchScore(j, state.analysis) >= 0.7).length
+  const highMatches = ensureAnalysis()
+    ? state.jobs.filter(j => calculateMatchScore(j, state.analysis) >= HIGH_MATCH_THRESHOLD).length
     : 0;
   set('stat-jobs',    state.jobs.length);
   set('stat-matches', highMatches);
@@ -2244,6 +3510,49 @@ function profileComplete() {
   return !!(p.firstName || p.lastName) && (p.skills?.length > 0);
 }
 
+function profileCompletionScore() {
+  const p = state.profile || {};
+  let score = 0;
+  if (p.firstName && p.lastName) score += 10;
+  if (p.email) score += 10;
+  if (p.phone) score += 10;
+  if (p.title) score += 10;
+  if (p.summary) score += 10;
+  if (p.skills?.length) score += 20;
+  if (p.experience?.length) score += 15;
+  if (p.education?.length || p.certifications?.length) score += 15;
+  return Math.min(100, score);
+}
+
+function updateProfileSummary() {
+  const score = profileCompletionScore();
+  const skills = (state.profile?.skills || []).length;
+  const exp = (state.profile?.experience || []).length;
+  const edu = (state.profile?.education || []).length;
+  const fill = $('pf-completion-fill');
+  const pct = $('pf-completion-pct');
+  const sk = $('pf-summary-skills');
+  const ex = $('pf-summary-exp');
+  const ed = $('pf-summary-edu');
+  if (fill) fill.style.width = `${score}%`;
+  if (pct) pct.textContent = `${score}%`;
+  if (sk) sk.textContent = String(skills);
+  if (ex) ex.textContent = String(exp);
+  if (ed) ed.textContent = String(edu || (state.profile?.certifications?.length || 0));
+}
+
+function setCvProgressStep(stepKey) {
+  const steps = document.querySelectorAll('#cv-progress-steps .progress-step');
+  if (!steps.length) return;
+  const container = $('cv-progress-steps');
+  container.classList.remove('hidden');
+  steps.forEach(step => {
+    const key = step.dataset.step;
+    step.classList.toggle('active', key === stepKey);
+    step.classList.toggle('completed', key !== stepKey && key !== 'done');
+  });
+}
+
 // ── Profile: mode toggle (Import from CV / Manual entry) ─────────────────────
 document.querySelectorAll('.profile-mode-btn').forEach(btn =>
   btn.addEventListener('click', () => setProfileMode(btn.dataset.mode))
@@ -2298,13 +3607,26 @@ if (_photoRemove) _photoRemove.addEventListener('click', () => {
   state.profile.photo = ''; saveProfileToStorage(); renderProfileForm(); toast('Photo removed.', 'info');
 });
 
-// ── Profile: Download as PDF (jsPDF — direct download) ──────────────────────
-function downloadProfilePDF() {
-  const p = state.profile || emptyProfile();
+const _pfReset = $('pf-reset');
+if (_pfReset) _pfReset.addEventListener('click', () => {
+  if (!confirm('Delete your saved profile data? This cannot be undone.')) return;
+  state.profile = emptyProfile();
+  saveProfileToStorage();
+  renderProfileForm();
+  updateProfileSummary();
+  toast('Profile data deleted.', 'info');
+});
+
+// ── Profile → structured CV PDF (jsPDF) ─────────────────────────────────────
+// Builds the polished, photo-bearing CV from the structured profile and returns
+// the jsPDF doc. `overrides` lets callers tailor a copy (e.g. the target job title)
+// without mutating the saved profile. Used by the Profile "Download PDF" button.
+function buildProfilePdfDoc(profile, overrides) {
+  const p = Object.assign({}, profile || emptyProfile(), overrides || {});
   const name = [p.firstName, p.lastName].filter(Boolean).join(' ') || 'Your Name';
 
   const lib = window.jspdf;
-  if (!lib || !lib.jsPDF) { toast('PDF library not loaded — try refreshing the page.', 'error'); return; }
+  if (!lib || !lib.jsPDF) { toast('PDF library not loaded — try refreshing the page.', 'error'); return null; }
 
   const doc = new lib.jsPDF({ unit: 'pt', format: 'a4' });
   const PAGE_W = doc.internal.pageSize.getWidth();
@@ -2407,8 +3729,15 @@ function downloadProfilePDF() {
     });
   }
 
-  const fileName = (name.replace(/\s+/g, '_') || 'CareerAI') + '_CV.pdf';
-  doc.save(fileName);
+  return { doc, name };
+}
+
+// Profile page: download the CV exactly as the profile defines it.
+function downloadProfilePDF() {
+  const built = buildProfilePdfDoc(state.profile);
+  if (!built) return;
+  const fileName = (built.name.replace(/\s+/g, '_') || 'CareerAI') + '_CV.pdf';
+  built.doc.save(fileName);
   toast(`${fileName} downloaded!`, 'success');
 }
 
@@ -2472,6 +3801,7 @@ function renderProfileForm() {
       ? missing.map(m => `<span class="pf-warn-item">Missing ${m}</span>`).join('')
       : '';
   }
+  updateProfileSummary();
 }
 
 // ── Profile: skill tags ───────────────────────────────────────────────────────
@@ -2484,7 +3814,7 @@ function renderSkillTags() {
     : '<span class="hint">No skills yet. Add some, or import from your CV.</span>';
   wrap.querySelectorAll('.skill-tag button').forEach(b =>
     b.addEventListener('click', e => {
-      state.profile.skills.splice(Number(e.target.dataset.i), 1);
+      state.profile.skills.splice(Number(e.currentTarget.dataset.i), 1);
       saveProfileToStorage(); renderSkillTags();
     })
   );
@@ -2700,20 +4030,118 @@ function generateInterview(role) {
   return { role: role || state.profile?.title || domain || 'your target role', common, roleQs, tips };
 }
 
-const _interviewBtn = $('generate-interview-btn');
-if (_interviewBtn) _interviewBtn.addEventListener('click', () => {
-  const role = $('interview-role').value.trim() || state.profile?.title || '';
-  const data = generateInterview(role);
-  const section = arr => arr.map(q => `<li>${esc(q)}</li>`).join('');
+/**
+ * `derivedFrom` is the honest label. The old version headed the second block
+ * "Role-specific (Data Analyst)" even when the questions were a canned HR list
+ * that had never seen the role — the same lie as a Critic score nobody computed.
+ */
+function renderInterview(role, common, roleSpecific, tips, usedAI, derivedFrom) {
+  const section = arr => (arr || []).map(q => `<li>${esc(q)}</li>`).join('');
+  const heading = usedAI
+    ? `Role-specific (${esc(role)})`
+    : 'Technical questions';
+  const note = usedAI
+    ? ''
+    : `<div class="hint" style="margin-bottom:8px">No model was reachable — these are built from
+        ${esc(derivedFrom || 'the built-in taxonomy')}.</div>`;
+
+  // With neither a known role nor a parsed CV there is nothing technical to ask.
+  // An empty numbered list under a confident heading is worse than no block.
+  const technicalBlock = (roleSpecific || []).length
+    ? `<div class="iv-block"><h3 class="col-label">${heading}</h3>${note}<ol class="iv-list">${section(roleSpecific)}</ol></div>`
+    : `<div class="iv-block"><h3 class="col-label">${heading}</h3>
+         <div class="hint">Upload your CV or name a role this app knows, and the technical questions
+         will be built from the skills it actually requires.</div></div>`;
+
   $('interview-content').innerHTML = `
-    <div class="iv-block"><h3 class="col-label">Common questions</h3><ol class="iv-list">${section(data.common)}</ol></div>
-    <div class="iv-block"><h3 class="col-label">Role-specific (${esc(data.role)})</h3><ol class="iv-list">${section(data.roleQs)}</ol></div>
-    <div class="iv-block"><h3 class="col-label">Tips</h3><ul class="iv-list">${section(data.tips)}</ul></div>`;
+    <div class="iv-block"><h3 class="col-label">Common questions</h3><ol class="iv-list">${section(common)}</ol></div>
+    ${technicalBlock}
+    <div class="iv-block"><h3 class="col-label">Tips</h3><ul class="iv-list">${section(tips)}</ul></div>`;
   $('interview-output').classList.remove('hidden');
   state.docsCount++;
   refreshGettingStarted();
   updateStats();
-  toast('Interview prep generated!', 'success');
+  toast(usedAI ? 'AI interview prep generated!' : 'Interview prep built from your skills (no model).', usedAI ? 'success' : 'info');
+}
+
+// ── Interview prep tied to one saved job ───────────────────────────────────
+//
+// The board's "Interview →" button only advances the pipeline stage. Preparing for
+// the interview is a different action and belongs to a specific posting: its title,
+// its company, and — for jobs saved from a search — its actual description, which is
+// what turns generic role questions into questions about this posting.
+function interviewJob() {
+  if (!state.interviewJobId) return null;
+  return (state.apps || []).find(a => a.id === state.interviewJobId) || null;
+}
+
+function renderInterviewContext() {
+  const el = $('interview-context');
+  if (!el) return;
+  const job = interviewJob();
+  if (!job) { el.classList.add('hidden'); el.innerHTML = ''; return; }
+
+  el.innerHTML = `
+    <div>
+      <strong>${esc(job.title)}</strong>
+      <div class="hint">${esc(job.company || 'Unknown company')}${job.location ? ' · ' + esc(job.location) : ''}${
+        job.description ? ' · questions drawn from the posting' : ' · no posting text saved, questions from the role only'
+      }</div>
+    </div>
+    <button class="btn btn-ghost btn-xs" id="interview-context-clear">Not this job</button>`;
+  el.classList.remove('hidden');
+  $('interview-context-clear')?.addEventListener('click', () => {
+    state.interviewJobId = null;
+    renderInterviewContext();
+    toast('Interview prep is no longer tied to a job.', 'info');
+  });
+}
+
+function prepInterviewForJob(id) {
+  const job = (state.apps || []).find(a => a.id === id);
+  if (!job) { toast('That job is no longer in your tracker.', 'error'); return; }
+
+  state.interviewJobId = id;
+  navigate('interviews');
+  const roleInput = $('interview-role');
+  if (roleInput) roleInput.value = job.title || '';
+  renderInterviewContext();
+  // Generate straight away: the user already said which job they mean, so making
+  // them press a second button adds nothing.
+  $('generate-interview-btn')?.click();
+}
+
+const _interviewBtn = $('generate-interview-btn');
+if (_interviewBtn) _interviewBtn.addEventListener('click', async () => {
+  const job  = interviewJob();
+  // The typed field still wins: the user may retitle the role for a job-linked prep.
+  const role = $('interview-role').value.trim() || job?.title || state.profile?.title || '';
+  const btn = _interviewBtn; const orig = btn.innerHTML;
+  btn.disabled = true; btn.innerHTML = 'Generating…';
+
+  // The server answers either way: the model when it is reachable, otherwise
+  // questions derived from the role's own required skills.
+  let done = false;
+  try {
+    const skills = (state.profile?.skills || state.analysis?.foundSkills || []).map(s => s.label || s).slice(0, 10);
+    const r = await api.post('/api/generate-interview', {
+      role, skills,
+      domain: state.analysis?.domain || '',
+      company: job?.company || '',
+      jobDescription: job?.description || '',
+    });
+    if (r && r.data) {
+      renderInterview(role || 'your target role', r.data.common, r.data.roleSpecific, r.data.tips,
+        r.ok && r.source === 'ai', r.data.derivedFrom);
+      done = true;
+    }
+  } catch (_) { /* the server is unreachable — fall back locally */ }
+
+  if (!done) {
+    const d = generateInterview(role);
+    renderInterview(d.role, d.common, d.roleQs, d.tips, false, 'the built-in question bank');
+  }
+  btn.disabled = false; btn.innerHTML = orig;
 });
 
 const _ivCopy = $('copy-interview-btn');
@@ -2743,16 +4171,343 @@ if (_topAvatar) _topAvatar.addEventListener('click', () => navigate('profile'));
 
 // Merge the extended IT-Security taxonomy (200+ skills) loaded by security-skills.js,
 // de-duplicating by key so existing multi-domain skills stay and none is detected twice.
+// A duplicate key still contributes its aliases to the surviving entry.
 function mergeSecuritySkills() {
   const groups = (typeof window !== 'undefined' && window.SECURITY_GROUPS) || [];
   if (!groups.length) return;
-  const seen = new Set(skillGroups.flatMap(g => g.skills.map(s => s.key)));
+  const byKey = new Map(skillGroups.flatMap(g => g.skills).map(s => [s.key, s]));
   groups.forEach(group => {
-    const skills = group.skills.filter(s => !seen.has(s.key));
-    skills.forEach(s => seen.add(s.key));
+    const skills = [];
+    group.skills.forEach(s => {
+      const existing = byKey.get(s.key);
+      if (existing) {
+        existing.aliases = [...new Set([...(existing.aliases || []), ...(s.aliases || [])])];
+      } else {
+        byKey.set(s.key, s);
+        skills.push(s);
+      }
+    });
     if (skills.length) skillGroups.push({ category: group.category, skills });
   });
 }
+
+// ── My Account (identity manager) ─────────────────────────────────────────
+let accountData = null;
+
+// "Windows · Chrome" from a User-Agent. Deliberately coarse: the point is for the
+// user to recognise their own devices, not to fingerprint them.
+function describeDevice(ua) {
+  const s = String(ua || '');
+  if (!s) return 'Unknown device';
+  const os =
+    /Windows NT/.test(s) ? 'Windows' :
+    /Android/.test(s)    ? 'Android' :
+    /iPhone|iPad/.test(s)? 'iOS'     :
+    /Mac OS X/.test(s)   ? 'macOS'   :
+    /Linux/.test(s)      ? 'Linux'   : 'Unknown OS';
+  const browser =
+    /Edg\//.test(s)      ? 'Edge'    :
+    /OPR\//.test(s)      ? 'Opera'   :
+    /Chrome\//.test(s)   ? 'Chrome'  :
+    /Firefox\//.test(s)  ? 'Firefox' :
+    /Safari\//.test(s)   ? 'Safari'  : 'Unknown browser';
+  return `${os} · ${browser}`;
+}
+
+function relativeTime(ms) {
+  if (!ms) return 'unknown';
+  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (s < 60)    return 'just now';
+  if (s < 3600)  return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  return `${Math.floor(s / 86400)} d ago`;
+}
+
+async function loadAccount() {
+  const signedOut = $('account-signed-out');
+  const body = $('account-body');
+  if (!body) return;
+
+  if (!state.token) {
+    signedOut.classList.remove('hidden');
+    body.classList.add('hidden');
+    return;
+  }
+
+  try {
+    accountData = await api.get('/api/account');
+  } catch (e) {
+    signedOut.classList.remove('hidden');
+    body.classList.add('hidden');
+    toast(e.message || 'Could not load your account.', 'error');
+    return;
+  }
+
+  signedOut.classList.add('hidden');
+  body.classList.remove('hidden');
+  const d = accountData;
+
+  $('ac-name').value  = d.name || '';
+  $('ac-email').value = d.email || '';
+  $('ac-role').textContent = d.role;
+  $('ac-meta').textContent = `Username: ${d.username}`
+    + (d.birthDate ? ` · born ${new Date(d.birthDate + 'T00:00:00').toLocaleDateString('en-GB')}` : '')
+    + (d.phone ? ` · ${d.phone}` : '')
+    + (d.createdAt ? ` · joined ${new Date(d.createdAt).toLocaleDateString('en-GB')}` : '');
+
+  // Email confirmation status, with a resend when it is still pending.
+  const ev = $('ac-email-state');
+  if (ev) {
+    if (!d.email) {
+      ev.innerHTML = '<span class="hint">No email address set.</span>';
+    } else if (d.emailVerified) {
+      ev.innerHTML = '<span class="pill ok">email confirmed</span>';
+    } else {
+      ev.innerHTML = '<span class="pill warn">email not confirmed</span>'
+        + (d.canResendConfirmation
+          ? ' <button class="btn btn-ghost btn-xs" id="ac-resend">Resend confirmation</button>'
+          : ' <span class="hint">No email provider configured on the server.</span>');
+      $('ac-resend')?.addEventListener('click', async (e) => {
+        const b = e.currentTarget; b.disabled = true; b.textContent = 'Sending…';
+        try {
+          const r = await api.post('/api/account/resend-confirmation');
+          toast(`Confirmation email sent to ${r.email}.`, 'success');
+        } catch (err) {
+          toast(err.message || 'Could not send the email.', 'error');
+        } finally { b.disabled = false; b.textContent = 'Resend confirmation'; }
+      });
+    }
+  }
+
+  // A provider-created account has no password yet, so there is nothing to confirm.
+  $('ac-password-state').textContent = d.hasPassword ? '' : 'No password set — you sign in through a provider.';
+  $('ac-current-wrap').classList.toggle('hidden', !d.hasPassword);
+  // oidc-only: no local password exists to change, and the endpoint refuses anyway.
+  $('ac-password-card')?.classList.toggle('hidden', d.localAuth === false);
+
+  // Show the admin nav entry only to admins. The server enforces this regardless;
+  // hiding the button just avoids offering a page that would 403.
+  $('nav-admin')?.classList.toggle('hidden', d.role !== 'admin');
+
+  renderAccountProviders(d);
+  renderAccountSessions(d);
+}
+
+function renderAccountProviders(d) {
+  const wrap = $('ac-providers');
+  const linked = d.providers.map(p => `
+    <div class="ac-row">
+      <div>
+        <strong>${esc(p.label)}</strong>
+        <div class="hint">${esc(p.email || 'linked')}${p.linkedAt ? ` · since ${new Date(p.linkedAt).toLocaleDateString('en-GB')}` : ''}</div>
+      </div>
+      <button class="btn btn-ghost btn-xs" data-unlink="${esc(p.id)}">Unlink</button>
+    </div>`).join('');
+
+  const linkable = d.linkable.map(p => `
+    <div class="ac-row">
+      <div><strong>${esc(p.label)}</strong><div class="hint">Not linked</div></div>
+      <button class="btn btn-ghost btn-xs" data-link="${esc(p.id)}">Link</button>
+    </div>`).join('');
+
+  wrap.innerHTML = (linked + linkable)
+    || '<p class="hint">No identity provider is configured on this server.</p>';
+
+  wrap.querySelectorAll('[data-link]').forEach(b => b.addEventListener('click', async () => {
+    try {
+      // Ask the server for the authorization URL over an authenticated fetch, then
+      // navigate. This keeps the bearer token out of the URL entirely.
+      const { url } = await api.post(`/api/auth/${b.dataset.link}/link-start`);
+      window.location.href = url;
+    } catch (e) { toast(e.message || 'Could not start linking.', 'error'); }
+  }));
+
+  wrap.querySelectorAll('[data-unlink]').forEach(b => b.addEventListener('click', async () => {
+    if (!confirm(`Unlink ${b.dataset.unlink} from your account?`)) return;
+    try {
+      await api.delete(`/api/account/providers/${b.dataset.unlink}`);
+      toast('Provider unlinked.', 'success');
+      loadAccount();
+    } catch (e) { toast(e.message || 'Could not unlink.', 'error'); }
+  }));
+}
+
+function renderAccountSessions(d) {
+  const wrap = $('ac-sessions');
+  wrap.innerHTML = d.sessions.map(s => `
+    <div class="ac-row">
+      <div>
+        <strong>${esc(describeDevice(s.ua))}</strong>${s.current ? ' <span class="pill">this device</span>' : ''}
+        <div class="hint">
+          signed in with ${esc(s.viaLabel || s.via)}${s.ip ? ` · ${esc(s.ip)}` : ''} · active ${esc(relativeTime(s.lastSeen))}
+        </div>
+      </div>
+      ${s.current ? '' : `<button class="btn btn-ghost btn-xs" data-revoke="${esc(s.id)}">Revoke</button>`}
+    </div>`).join('') || '<p class="hint">No active sessions.</p>';
+
+  wrap.querySelectorAll('[data-revoke]').forEach(b => b.addEventListener('click', async () => {
+    try {
+      await api.delete(`/api/account/sessions/${b.dataset.revoke}`);
+      toast('Session revoked.', 'success');
+      loadAccount();
+    } catch (e) { toast(e.message || 'Could not revoke.', 'error'); }
+  }));
+}
+
+(function wireAccountPage() {
+  const idForm = $('ac-identity-form');
+  if (!idForm) return;
+
+  $('account-signin-btn')?.addEventListener('click', showAuthModal);
+
+  idForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    const msg = $('ac-identity-msg');
+    msg.className = 'form-msg'; msg.textContent = '';
+    try {
+      const d = await api.patch('/api/account', {
+        name:  $('ac-name').value.trim(),
+        email: $('ac-email').value.trim(),
+      });
+      msg.className = 'form-msg ok';
+      msg.textContent = 'Saved.';
+      // The sidebar shows the display name, so keep it in step. Deliberately NOT
+      // persistAuth: this is the same person renaming themselves, and running the
+      // cache-owner guard here would read it as a different user and wipe their CV.
+      setDisplayName(d.name);
+      loadAccount();
+    } catch (err) { msg.textContent = err.message || 'Could not save.'; }
+  });
+
+  $('ac-password-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const msg = $('ac-password-msg');
+    msg.className = 'form-msg'; msg.textContent = '';
+    try {
+      const r = await api.post('/api/account/password', {
+        currentPassword: $('ac-current-password').value,
+        newPassword:     $('ac-new-password').value,
+      });
+      msg.className = 'form-msg ok';
+      msg.textContent = r.revoked ? `Password updated — ${r.revoked} other session(s) signed out.` : 'Password updated.';
+      $('ac-current-password').value = ''; $('ac-new-password').value = '';
+      loadAccount();
+    } catch (err) { msg.textContent = err.message || 'Could not update password.'; }
+  });
+
+  $('ac-revoke-others').addEventListener('click', async () => {
+    if (!confirm('Sign out every other device?')) return;
+    try {
+      const r = await api.delete('/api/account/sessions');
+      toast(`${r.revoked} session(s) signed out.`, 'success');
+      loadAccount();
+    } catch (e) { toast(e.message || 'Could not sign out other sessions.', 'error'); }
+  });
+
+  $('ac-delete').addEventListener('click', async () => {
+    if (!confirm('Delete your account, your saved jobs and your server-side profile? This cannot be undone.')) return;
+    if (!confirm('Last check — really delete your account?')) return;
+    try {
+      await api.delete('/api/account');
+      state.token = null; state.user = null;
+      localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY);
+      // "This cannot be undone" has to be true on the device too: the account is
+      // gone from the server, so leaving the CV cached here would be the worst
+      // version of the leak.
+      clearUserData();
+      if (typeof renderProfileForm === 'function') renderProfileForm();
+      updateAuthUI();
+      toast('Account deleted.', 'info');
+      showAuthModal();
+    } catch (e) { toast(e.message || 'Could not delete the account.', 'error'); }
+  });
+})();
+
+// ── Admin: every account, and who is online ───────────────────────────────
+async function loadAdmin() {
+  const wrap = $('admin-body');
+  if (!wrap) return;
+  wrap.innerHTML = '<p class="hint">Loading…</p>';
+  let d;
+  try {
+    d = await api.get('/api/admin/db');
+  } catch (e) {
+    wrap.innerHTML = `<div class="card"><p class="hint">${esc(e.message || 'Could not load.')}</p></div>`;
+    return;
+  }
+
+  const rows = d.users.map(u => `
+    <tr>
+      <td><strong>${esc(u.username)}</strong>${u.role === 'admin' ? ' <span class="pill">admin</span>' : ''}</td>
+      <td>${esc(u.name || '')}</td>
+      <td>${esc(u.email || '—')}</td>
+      <td>${u.authMethods.length ? u.authMethods.map(m => `<span class="pill">${esc(m)}</span>`).join(' ') : '<span class="hint">none</span>'}</td>
+      <td>${u.online ? `<span class="pill ok">online · ${u.activeSessions}</span>` : '<span class="hint">offline</span>'}</td>
+      <td>${u.createdAt ? esc(new Date(u.createdAt).toLocaleDateString('en-GB')) : '—'}</td>
+    </tr>`).join('');
+
+  wrap.innerHTML = `
+    <div class="card">
+      <div class="card-header">
+        <h2>Accounts</h2>
+        <span class="hint">${d.totalUsers} account(s) · ${d.activeSessions} active session(s)</span>
+      </div>
+      <div class="admin-table-wrap">
+        <table class="admin-table">
+          <thead><tr><th>Username</th><th>Name</th><th>Email</th><th>Sign-in methods</th><th>Status</th><th>Joined</th></tr></thead>
+          <tbody>${rows || '<tr><td colspan="6" class="hint">No accounts yet.</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card" id="admin-feedback"><p class="hint">Loading feedback…</p></div>`;
+
+  renderAdminFeedback();
+}
+
+// Feedback is submitted anonymously on purpose: /api/feedback records no session, no
+// username and no IP. It therefore cannot be shown per user, and the table below is
+// deliberately not joinable with the accounts above — saying so in the UI stops
+// anyone assuming the link exists and merely happens to be missing.
+async function renderAdminFeedback() {
+  const box = $('admin-feedback');
+  if (!box) return;
+  let f;
+  try {
+    f = await api.get('/api/admin/feedback');
+  } catch (e) {
+    box.innerHTML = `<p class="hint">${esc(e.message || 'Could not load feedback.')}</p>`;
+    return;
+  }
+
+  const rows = (f.entries || []).map(e => `
+    <tr>
+      <td>${e.rating ? '★'.repeat(e.rating) + '<span class="hint">' + '☆'.repeat(5 - e.rating) + '</span>' : '<span class="hint">—</span>'}</td>
+      <td>${e.area ? `<span class="pill">${esc(e.area)}</span>` : '<span class="hint">—</span>'}</td>
+      <td>${esc(e.liked || '') || '<span class="hint">—</span>'}</td>
+      <td>${esc(e.improve || '') || '<span class="hint">—</span>'}</td>
+      <td>${e.at ? esc(new Date(e.at).toLocaleDateString('en-GB')) : '—'}</td>
+    </tr>`).join('');
+
+  box.innerHTML = `
+    <div class="card-header">
+      <h2>Feedback</h2>
+      <span class="hint">
+        ${f.total} submission(s)${f.averageRating ? ` · average ${f.averageRating}/5` : ''} · anonymous
+      </span>
+    </div>
+    <p class="hint" style="margin-bottom:12px">
+      Submitted without a session, a username or an IP address, so it cannot be traced
+      back to an account — including by you.
+    </p>
+    <div class="admin-table-wrap">
+      <table class="admin-table admin-table-prose">
+        <thead><tr><th>Rating</th><th>Area</th><th>What worked</th><th>What to improve</th><th>Date</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="5" class="hint">No feedback yet.</td></tr>'}</tbody>
+      </table>
+    </div>`;
+}
+
+$('admin-refresh')?.addEventListener('click', loadAdmin);
 
 // ── Init ──────────────────────────────────────────────────────────────────
 (async function init() {
@@ -2764,16 +4519,873 @@ function mergeSecuritySkills() {
 
   renderKanban();
   renderProfileForm();
+  updateProfileSummary();
   refreshGettingStarted();
   updateStats();
   initChat();
-  setupNotifyToggle();
 
   if (state.token && !state.user) {
     state.token = null;
     localStorage.removeItem(TOKEN_KEY);
+    clearUserData();
   }
-  if (state.token && state.online) {
+
+  loadAuthProviders();
+  // Must run after loadProfile/updateAuthUI: a provider redirect lands here with a
+  // token in the fragment, and consuming it signs the user in for this session.
+  const cameBackFromProvider = consumeAuthFragment();
+
+  // Caches written before the per-user split carry no owner. We do NOT wipe them:
+  // the structured profile lives only in this browser, so deleting it would destroy
+  // the user's CV with no server copy to restore from. Instead we adopt it for
+  // whoever is signed in now, which is the only account that could have written it
+  // in the session that is still open. From then on persistAuth guards it.
+  //
+  // After consumeAuthFragment, and skipped when it ran: a provider sign-in already
+  // set the owner from auth_user. This call is async, so starting it earlier let it
+  // resolve *after* that and stamp the previous user's name onto the new user's cache.
+  if (!cameBackFromProvider && state.token && !localStorage.getItem(CACHE_OWNER_KEY)) {
+    adoptCacheOwner();
+  }
+
+  if (state.token && state.online && !cameBackFromProvider) {
     loadApplications();
   }
+  // Keep the admin nav entry honest on a normal load, not only after visiting the
+  // account page. Failure is fine — the button simply stays hidden.
+  if (state.token && state.online) {
+    api.get('/api/account')
+      .then(d => $('nav-admin')?.classList.toggle('hidden', d.role !== 'admin'))
+      .catch(() => {});
+  }
 })();
+
+
+
+
+// ── Career Pathway ────────────────────────────────────────────────────────
+// Four columns of role nodes on a shared row grid, so neighbours line up and the
+// curves between them stay near-horizontal. Every transition is drawn once;
+// hovering previews a role's next steps, selecting one traces the whole path
+// from the feeder roles up to it.
+//
+// The pathway itself is written server-side by the model and cached there. This
+// page draws it, ticks the skills the CV already proves, asks Bundesagentur how
+// many of those positions are open, and can hand the selected role to the Writer
+// agent to turn the remaining gaps into a study plan.
+//
+// View state (domain, selected role, comparison set) lives in the URL, so a link
+// reopens exactly what the sender was looking at.
+
+// A three-line title ("Junior Application Security Engineer") plus its domain label
+// needs 96px. At 88 the nodes overlapped their neighbours.
+const CP_ROW_HEIGHT = 112;
+const CP_MAX_COMPARE = 3;
+const CP_LEVEL_KEYS = ['feeder', 'entry', 'mid', 'adv'];
+
+// "Where are you now?" — routes a visitor straight to the column that hires at their
+// level. The chart is wide and scrolls horizontally, so without this a beginner lands
+// on the left edge and an experienced analyst has to hunt rightwards for their own
+// rung. Chip values match the data-level set on .cp-col by cpColumns().
+function cpWireWhereChips() {
+  const bar = $('cp-where');
+  if (!bar || bar.dataset.wired === '1') return;
+  bar.dataset.wired = '1';
+
+  bar.querySelectorAll('[data-goto]').forEach(chip => chip.addEventListener('click', () => {
+    const level = chip.dataset.goto;
+    const col = document.querySelector(`.cp-col[data-level="${level}"]`);
+    if (!col) { toast('Open a domain first — the chart is still loading.', 'info'); return; }
+
+    bar.querySelectorAll('[data-goto]').forEach(c => c.classList.toggle('is-active', c === chip));
+    // Only the chart scrolls, not the page: scrollIntoView on a horizontally
+    // scrolling child would drag the whole window sideways too.
+    const chart = $('cp-chart');
+    if (chart) chart.scrollTo({ left: Math.max(0, col.offsetLeft - 24), behavior: 'smooth' });
+    document.querySelectorAll('.cp-col').forEach(c => c.classList.toggle('is-focused', c === col));
+  }));
+}
+
+let _cpWired = false;
+let _cpData = null;
+let _cpSelected = null;
+let _cpHover = null;
+let _cpCompare = [];
+let _cpSuggestIndex = -1;
+let _cpPathways = [];   // the six beginner categories, from /api/career-domains
+let _cpDomains = [];    // every domain, so a ?domain= in the URL can be validated
+
+// ── Boot ────────────────────────────────────────────────────────────────────
+
+async function initCareerPath() {
+  if (!$('cp-cols')) return;
+
+  if (!_cpWired) {
+    _cpWired = true;
+    $('cp-compare-clear')?.addEventListener('click', () => { _cpCompare = []; cpRenderCompare(); cpSyncUrl(); });
+    window.addEventListener('resize', () => cpDrawLinks());
+    window.addEventListener('popstate', () => cpApplyUrl());
+    cpWireKeyboard();
+  }
+
+  if (!_cpData) cpApplyUrl();
+}
+
+/** Read ?role / ?compare and restore that exact view of the chart. */
+function cpApplyUrl() {
+  const q = new URLSearchParams(location.search);
+  _cpCompare = (q.get('compare') || '').split('|').filter(Boolean).slice(0, CP_MAX_COMPARE);
+  loadCareerGraph(q.get('role') || null);
+}
+
+/** Push the current view into the URL without reloading the page. */
+function cpSyncUrl(push = false) {
+  const q = new URLSearchParams(location.search);
+  q.delete('domain');
+  if (_cpSelected) q.set('role', _cpSelected); else q.delete('role');
+  if (_cpCompare.length) q.set('compare', _cpCompare.join('|')); else q.delete('compare');
+  const url = `${location.pathname}?${q}`;
+  if (push) history.pushState(null, '', url); else history.replaceState(null, '', url);
+}
+
+function cpStatus(msg) {
+  const el = $('cp-status');
+  el.textContent = msg || '';
+  el.classList.toggle('hidden', !msg);
+}
+
+/**
+ * One chart for the whole field. There is no domain to pick: every security job
+ * is on it, and the specialisation a role belongs to is written under its name.
+ */
+async function loadCareerGraph(selectRole = null) {
+  _cpData = null; _cpSelected = null; _cpHover = null;
+  $('cp-cols').innerHTML = '';
+  $('cp-links').innerHTML = '';
+  $('cp-chart').classList.remove('has-focus');
+  $('cp-detail').classList.add('hidden');
+  $('cp-compare').classList.add('hidden');
+  $('cp-summary').classList.add('hidden');
+  $('cp-source').classList.add('hidden');
+  cpStatus('Loading the career chart…');
+
+  try {
+    const r = await fetch(`${baseUrl}/api/career-graph`);
+    const p = await r.json();
+    if (!r.ok) throw new Error(p.error || `HTTP ${r.status}`);
+    cpStatus('');
+    _cpData = p;
+    renderCareerChart(p);
+    _cpCompare = _cpCompare.filter(t => cpFindRole(t));
+    cpRenderCompare();
+    if (selectRole && cpFindRole(selectRole)) cpSelect(selectRole);
+    else cpSyncUrl();
+  } catch (err) {
+    cpStatus(`Could not load the chart: ${err.message}`);
+  }
+}
+
+// ── Model helpers ───────────────────────────────────────────────────────────
+
+/** Skill labels and keys detected in the user's CV, lowercased. */
+function cpOwnedSkills() {
+  const set = new Set();
+  (state.analysis?.foundSkills || []).forEach(s => {
+    if (s.key)   set.add(String(s.key).toLowerCase());
+    if (s.label) set.add(String(s.label).toLowerCase());
+  });
+  return set;
+}
+
+// The chart used to open on the feeder roles, which already assume an IT job.
+// A student has none, so the graph began where they are not. This node is the
+// beginning of the path, built client-side rather than asked of the model — the
+// answer would be the same for every domain.
+const CP_START_TITLE = 'You — student or career changer';
+
+/**
+ * The feeder column. For a security specialisation it is the six beginner
+ * categories, always all six — a newcomer should see every door, not only the
+ * three the model happened to name. Only the ones that actually open onto this
+ * domain get an edge; the rest stand there, unlit, as options for another path.
+ *
+ * A pathway domain keeps the model's own feeders: the jobs before IT support are
+ * not the six categories, they are trainee roles.
+ */
+function cpFeederRoles(p) {
+  if (p.kind !== 'security' || !_cpPathways.length) return p.feeder || [];
+  const entry = (p.levels?.[0]?.roles || []).map(r => r.title);
+  const labelOf = (key) => _cpDomains.find(x => x.key === key)?.label || key;
+
+  return _cpPathways.map(d => {
+    const opens = (d.leadsToKeys || []).includes(p.domain);
+    return {
+      title: d.title,
+      why: d.why || d.label,
+      // A door that does not open here still says where it does open, otherwise it
+      // stands in the chart with no edge and no explanation.
+      sub: opens ? null : `leads to ${(d.leadsToKeys || []).slice(0, 2).map(labelOf).join(', ')}`,
+      next: opens ? entry : [],
+      opens,
+      elsewhere: (d.leadsToKeys || []).map(k => ({ key: k, label: labelOf(k) })),
+    };
+  });
+}
+
+function cpStartNode(p) {
+  return {
+    title: CP_START_TITLE,
+    why: 'No professional experience yet. Everything below is reachable from here.',
+    next: cpFeederRoles(p).map(f => f.title),
+  };
+}
+
+function cpColumns(p) {
+  return [
+    { title: 'Start here', years: 'no experience required', level: 'start', roles: [cpStartNode(p)] },
+    { title: 'Feeder roles', years: 'the jobs that lead in', level: 'feeder', roles: cpFeederRoles(p) },
+    ...(p.levels || []).map((l, i) => ({ title: l.name, years: l.years, level: CP_LEVEL_KEYS[i + 1] || 'adv', roles: l.roles || [] })),
+  ];
+}
+
+function cpAllRoles() {
+  if (!_cpData) return [];
+  return [cpStartNode(_cpData), ...cpFeederRoles(_cpData), ...(_cpData.levels || []).flatMap(l => l.roles || [])];
+}
+function cpFindRole(title) { return cpAllRoles().find(r => r.title === title) || null; }
+function cpIsStart(title) { return title === CP_START_TITLE; }
+function cpIsFeeder(title) { return _cpData ? cpFeederRoles(_cpData).some(r => r.title === title) : false; }
+
+/** The first entry-level role: what a beginner is actually aiming at. */
+function cpFirstEntryRole() {
+  return _cpData?.levels?.[0]?.roles?.[0] || null;
+}
+function cpEdges() { return cpAllRoles().flatMap(r => (r.next || []).map(n => [r.title, n])); }
+
+/** Every role that can reach `title`, walking the edges backwards. */
+function cpAncestors(title) {
+  const back = new Map();
+  cpEdges().forEach(([u, v]) => { if (!back.has(v)) back.set(v, []); back.get(v).push(u); });
+  const seen = new Set();
+  const queue = [title];
+  while (queue.length) {
+    for (const u of back.get(queue.shift()) || []) {
+      if (seen.has(u)) continue;
+      seen.add(u); queue.push(u);
+    }
+  }
+  return seen;
+}
+
+// ── Chart ───────────────────────────────────────────────────────────────────
+
+function renderCareerChart(p) {
+  // Only speak up when the content is *not* what it appears to be. A pathway the
+  // model wrote needs no label; the deterministic outline does, so nobody mistakes
+  // a mechanical ladder for an analysis.
+  const badge = $('cp-source');
+  const isOutline = p.source !== 'llm';
+  badge.textContent = isOutline ? 'Some ladders are outlines' : '';
+  badge.classList.toggle('is-template', isOutline);
+  badge.classList.toggle('hidden', !isOutline);
+
+  const summary = $('cp-summary');
+  if (p.summary) { summary.textContent = p.summary; summary.classList.remove('hidden'); }
+  cpWireWhereChips();
+
+  const cols = cpColumns(p);
+  const rows = Math.max(...cols.map(c => c.roles.length), 1);
+
+  $('cp-cols').innerHTML = cols.map(col => `
+    <div class="cp-col" data-level="${col.level}" style="--cp-rows: repeat(${rows}, ${CP_ROW_HEIGHT}px)">
+      <div class="cp-col-head">
+        <div class="cp-col-title">${esc(col.title)}</div>
+        <div class="cp-col-years">${esc(col.years || '')}</div>
+      </div>
+      ${col.roles.map(r => `
+        <button type="button" class="cp-node${cpIsFeeder(r.title) || cpIsStart(r.title) ? '' : ' has-add'}" role="treeitem" aria-selected="false"
+                data-title="${esc(r.title)}" data-level="${col.level}"
+                aria-label="${esc(r.title)}, ${esc(col.title)}${r.salary ? ', ' + esc(r.salary) : ''}"
+                ${r.why ? `title="${esc(r.why)}"` : ''}>
+          <i class="cp-dot lvl-${col.level}" aria-hidden="true"></i>
+          <span class="cp-node-body">
+            <span class="cp-node-title">${esc(r.title)}</span>
+            ${r.domainLabel || r.titleDe || r.sub ? `<span class="cp-node-sub">${esc(r.domainLabel || r.titleDe || r.sub)}</span>` : ''}
+          </span>
+          ${cpIsFeeder(r.title) ? '' : `<span class="cp-node-add" role="button" tabindex="0"
+              data-add="${esc(r.title)}" aria-label="Add ${esc(r.title)} to comparison">+ compare</span>`}
+        </button>`).join('')}
+    </div>`).join('');
+
+  const cols_ = $('cp-cols');
+  cols_.querySelectorAll('.cp-node').forEach(btn => {
+    btn.addEventListener('click', e => {
+      if (e.target.closest('[data-add]')) return;
+      cpSelect(btn.dataset.title, true);
+    });
+    btn.addEventListener('mouseenter', () => { if (!_cpSelected) { _cpHover = btn.dataset.title; cpPaint(); } });
+    btn.addEventListener('mouseleave', () => { if (!_cpSelected) { _cpHover = null; cpPaint(); } });
+  });
+  cols_.querySelectorAll('[data-add]').forEach(el => {
+    const add = () => cpToggleCompare(el.dataset.add);
+    el.addEventListener('click', e => { e.stopPropagation(); add(); });
+    el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); add(); } });
+  });
+
+  cpPaint();
+}
+
+function cpSelect(title, push = false) {
+  _cpSelected = _cpSelected === title ? null : title;   // click again to clear
+  _cpHover = null;
+  cpPaint();
+  const role = _cpSelected ? cpFindRole(_cpSelected) : null;
+  if (!role) $('cp-detail').classList.add('hidden');
+  else if (cpIsStart(role.title)) cpRenderStart(role);
+  else if (cpIsFeeder(role.title)) cpRenderFeeder(role);
+  else cpRenderDetail(role);
+  cpSyncUrl(push);
+}
+
+/** Which nodes stay lit: the focus, everything that leads to it, and its next steps. */
+function cpTraced() {
+  const focus = _cpSelected || _cpHover;
+  if (!focus) return null;
+  const role = cpFindRole(focus);
+  const set = new Set([focus, ...(role?.next || [])]);
+  if (_cpSelected) cpAncestors(focus).forEach(t => set.add(t));   // path-tracing, on click only
+  return { focus, set };
+}
+
+function cpPaint() {
+  const cols = $('cp-cols');
+  const traced = cpTraced();
+  // Dimming only makes sense when something is lit. A node with no path of its own
+  // would otherwise darken the whole chart and look like a crash.
+  const dim = Boolean(traced) && traced.set.size > 1;
+  cols.classList.toggle('has-focus', dim);
+  $('cp-chart').classList.toggle('has-focus', dim);
+  cols.querySelectorAll('.cp-node').forEach(n => {
+    const t = n.dataset.title;
+    n.classList.toggle('is-active', traced?.focus === t);
+    n.classList.toggle('is-next', Boolean(traced) && traced.focus !== t && traced.set.has(t));
+    n.classList.toggle('is-compared', _cpCompare.includes(t));
+    n.setAttribute('aria-selected', String(traced?.focus === t));
+  });
+  cpDrawLinks();
+}
+
+/** One bezier per declared transition. Edges inside the traced set are lit. */
+function cpDrawLinks() {
+  const svg = $('cp-links');
+  const cols = $('cp-cols');
+  if (!svg || !cols || !_cpData) return;
+
+  const traced = cpTraced();
+  const nodeOf = (t) => cols.querySelector(`.cp-node[data-title="${CSS.escape(t)}"]`);
+  const origin = cols.getBoundingClientRect();
+
+  const paths = cpEdges().map(([u, v]) => {
+    const a = nodeOf(u), b = nodeOf(v);
+    if (!a || !b) return '';
+    const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+    const x1 = ra.right - origin.left;
+    const y1 = ra.top - origin.top + ra.height / 2;
+    const x2 = rb.left - origin.left - 7;
+    const y2 = rb.top - origin.top + rb.height / 2;
+    const dx = Math.max(28, (x2 - x1) * 0.5);
+    const lit = traced && traced.set.has(u) && traced.set.has(v);
+    return `<path${lit ? ' class="is-lit"' : ''} marker-end="url(#cp-arrow${lit ? '-lit' : ''})"
+      d="M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}"/>`;
+  }).join('');
+
+  const marker = (id, fill) => `<marker id="${id}" viewBox="0 0 8 8" refX="6" refY="4"
+      markerWidth="5" markerHeight="5" orient="auto">
+      <path d="M 0 0 L 8 4 L 0 8 z" fill="${fill}" stroke="none"/></marker>`;
+  svg.innerHTML = `<defs>${marker('cp-arrow', 'var(--text-muted)')}${marker('cp-arrow-lit', 'var(--cyan)')}</defs>${paths}`;
+}
+
+// ── Keyboard: arrows walk the grid, Enter selects ────────────────────────────
+
+function cpWireKeyboard() {
+  $('cp-cols').addEventListener('keydown', (e) => {
+    if (!['ArrowRight', 'ArrowLeft', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
+    const node = e.target.closest('.cp-node');
+    if (!node) return;
+    e.preventDefault();
+
+    const cols = [...$('cp-cols').querySelectorAll('.cp-col')];
+    const col = node.closest('.cp-col');
+    const ci = cols.indexOf(col);
+    const nodes = [...col.querySelectorAll('.cp-node')];
+    const ri = nodes.indexOf(node);
+
+    let target = null;
+    if (e.key === 'ArrowUp')    target = nodes[ri - 1];
+    if (e.key === 'ArrowDown')  target = nodes[ri + 1];
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      const dest = cols[ci + (e.key === 'ArrowRight' ? 1 : -1)];
+      if (dest) {
+        const list = [...dest.querySelectorAll('.cp-node')];
+        target = list[Math.min(ri, list.length - 1)];
+      }
+    }
+    target?.focus();
+  });
+}
+
+// ── Compare ─────────────────────────────────────────────────────────────────
+
+function cpToggleCompare(title) {
+  if (_cpCompare.includes(title)) _cpCompare = _cpCompare.filter(t => t !== title);
+  else if (_cpCompare.length >= CP_MAX_COMPARE) return toast(`Compare up to ${CP_MAX_COMPARE} roles at a time.`, 'info');
+  else _cpCompare.push(title);
+  cpRenderCompare();
+  cpPaint();
+  cpSyncUrl();
+}
+
+function cpRenderCompare() {
+  const bar = $('cp-compare-bar');
+  const box = $('cp-compare');
+  bar.classList.toggle('hidden', _cpCompare.length === 0);
+  box.classList.toggle('hidden', _cpCompare.length < 2);
+
+  $('cp-compare-chips').innerHTML = _cpCompare.map(t =>
+    `<span class="cp-chip">${esc(t)}<button type="button" data-drop="${esc(t)}" aria-label="Remove ${esc(t)}">×</button></span>`).join('');
+  $('cp-compare-chips').querySelectorAll('[data-drop]').forEach(b =>
+    b.addEventListener('click', () => cpToggleCompare(b.dataset.drop)));
+
+  if (_cpCompare.length < 2) return;
+
+  const roles = _cpCompare.map(cpFindRole).filter(Boolean);
+  const owned = cpOwnedSkills();
+  const skills = [...new Set(roles.flatMap(r => r.skills || []))].sort();
+
+  box.innerHTML = `
+    <table class="cp-matrix">
+      <caption class="cp-panel-note">A skill required by only some of these roles is a gap you would
+        have to close when moving between them. Skills already in your CV are ticked.</caption>
+      <thead>
+        <tr><th scope="col">Skill</th>${roles.map(r => `<th scope="col">${esc(r.title)}</th>`).join('')}</tr>
+      </thead>
+      <tbody>
+        ${skills.map(s => {
+          const marks = roles.map(r => (r.skills || []).includes(s));
+          const shared = marks.every(Boolean);
+          const inCv = owned.has(s.toLowerCase());
+          return `<tr class="${shared ? '' : 'is-gap'}">
+            <th scope="row">${esc(s)}${inCv ? ' <span class="cp-mark yes">✓</span>' : ''}</th>
+            ${marks.map(m => `<td class="${m ? '' : 'cp-gap'}"><span class="cp-mark ${m ? 'yes' : 'no'}">${m ? 'required' : '—'}</span></td>`).join('')}
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
+}
+
+// ── Detail panel ────────────────────────────────────────────────────────────
+
+function cpPanel(title, note, body, cls = '') {
+  return `<div class="cp-panel ${cls}">
+      <h4>${esc(title)}</h4>
+      ${note ? `<div class="cp-panel-note">${esc(note)}</div>` : ''}
+      ${body}
+    </div>`;
+}
+
+/**
+ * The beginner's panel. Someone with no experience does not need a salary band
+ * for a Security Architect — they need to know which job to apply for first and
+ * what to learn before they do.
+ */
+function cpRenderStart(role) {
+  const target = cpFirstEntryRole();
+  const feeders = cpFeederRoles(_cpData);
+  const el = $('cp-detail');
+
+  el.innerHTML = `
+    <div class="cp-detail-head">
+      <div>
+        <div class="cp-detail-title">Starting from zero</div>
+        <div class="cp-detail-sub">No experience is required to begin in ${esc(_cpData.label)}.</div>
+      </div>
+      ${target ? `<div class="cp-controls-actions">
+        <button class="btn btn-primary btn-sm" id="cp-plan-btn">Plan my way to ${esc(target.title)}</button>
+      </div>` : ''}
+    </div>
+    <div class="cp-grid">
+      ${cpPanel('Your first job', 'These roles hire without security experience and teach you the ground you will stand on.',
+        `<ul class="cp-list">${feeders.map(f => `<li>${esc(f.title)}</li>`).join('')}</ul>`)}
+
+      ${feeders.length ? cpPanel('Why they lead in', '',
+        `<div class="cp-plan-text">${feeders.map(f => `${esc(f.title)} — ${esc(f.why || '')}`).join('\n\n')}</div>`) : ''}
+
+      ${target ? cpPanel(`Then aim for ${target.title}`,
+        'The first security role of this pathway. These are the skills it asks for.',
+        `<ul class="cp-list">${(target.skills || []).map(s =>
+          `<li class="${cpOwnedSkills().has(String(s).toLowerCase()) ? 'has' : ''}">${esc(s)}</li>`).join('')}</ul>
+         ${target.certs?.length ? `<div class="cp-stat"><div class="cp-figure-sub">Usual first certification<br>${esc(target.certs[0])}</div></div>` : ''}`) : ''}
+
+      ${cpPanel('Open positions', 'Live count from Bundesagentur für Arbeit, all of Germany.' + helpDot('liveCount'),
+        `<div class="cp-figure" id="cp-count">…</div>
+         <div class="cp-figure-sub">${feeders[0] ? `listings for ${esc(feeders[0].title)}` : 'listings'}</div>
+         <div class="cp-stat"><div class="cp-figure-sub">A feeder role is easier to land than a security role, and it is
+           the fastest way to get paid while you learn.</div></div>`)}
+
+      <div id="cp-plan" class="hidden"></div>
+    </div>`;
+  el.classList.remove('hidden');
+
+  if (target) $('cp-plan-btn').addEventListener('click', () => cpBuildPlan(target));
+  if (feeders[0]) cpLoadCount(feeders[0].title);
+}
+
+/**
+ * A feeder role: not a security job, so no salary band or certification ladder.
+ *
+ * A feeder that does not open onto the domain on screen used to dim the whole
+ * chart and then offer a plan towards a role it does not lead to. It now says so,
+ * and sends the reader to the domains it actually opens.
+ */
+function cpRenderFeeder(role) {
+  const next = (role.next || []).map(cpFindRole).filter(Boolean);
+  const opens = next.length > 0;
+  const target = opens ? next[0] : null;
+  const el = $('cp-detail');
+
+  el.innerHTML = `
+    <div class="cp-detail-head">
+      <div>
+        <div class="cp-detail-title">${esc(role.title)}</div>
+        <div class="cp-detail-sub">${opens
+          ? `A way into ${esc(_cpData.label)}, not a security role itself.`
+          : `This job does not lead into ${esc(_cpData.label)}.`}</div>
+      </div>
+      ${target ? `<div class="cp-controls-actions">
+        <button class="btn btn-primary btn-sm" id="cp-plan-btn">Plan my move to ${esc(target.title)}</button>
+      </div>` : ''}
+    </div>
+    <div class="cp-grid">
+      ${role.why ? cpPanel('Why it leads into security', '', `<div class="cp-plan-text">${esc(role.why)}</div>`) : ''}
+
+      ${opens ? cpPanel('It leads to', 'The security roles this job opens up.',
+        `<ul class="cp-list">${next.map(r => `<li>${esc(r.title)}${r.domainLabel
+          ? ` <span class="cp-figure-sub" style="display:inline">— ${esc(r.domainLabel)}</span>` : ''}</li>`).join('')}</ul>`) : ''}
+
+      ${cpPanel('Open positions', 'Live count from Bundesagentur für Arbeit, all of Germany.' + helpDot('liveCount'),
+        `<div class="cp-figure" id="cp-count">…</div>
+         <div class="cp-figure-sub">listings matching this title</div>`)}
+
+      <div id="cp-plan" class="hidden"></div>
+    </div>`;
+  el.classList.remove('hidden');
+
+  if (target) $('cp-plan-btn').addEventListener('click', () => cpBuildPlan(target));
+  cpLoadCount(role.title, role.salary);
+}
+
+function cpRenderDetail(role) {
+  const owned = cpOwnedSkills();
+  const li = (t, mark) => `<li class="${mark && owned.has(String(t).toLowerCase()) ? 'has' : ''}">${esc(t)}</li>`;
+  const panel = (title, note, body, cls = '') => `
+    <div class="cp-panel ${cls}">
+      <h4>${esc(title)}</h4>
+      ${note ? `<div class="cp-panel-note">${esc(note)}</div>` : ''}
+      ${body}
+    </div>`;
+
+  const el = $('cp-detail');
+  el.innerHTML = `
+    <div class="cp-detail-head">
+      <div>
+        <div class="cp-detail-title">${esc(role.title)}</div>
+        <div class="cp-detail-sub">${esc(role.domainLabel || role.titleDe || '')}</div>
+      </div>
+      <div class="cp-controls-actions">
+        <button class="btn btn-ghost btn-sm" id="cp-add-compare">${_cpCompare.includes(role.title) ? 'Remove from comparison' : 'Add to comparison'}</button>
+        <button class="btn btn-primary btn-sm" id="cp-plan-btn">Build my learning plan</button>
+      </div>
+    </div>
+    <div class="cp-grid">
+      ${/* Only worth a card when it adds titles the heading does not already show.
+            In outline mode commonTitles is [role.title], so this claimed to report
+            what employers write and printed the generated role name back. */''}
+      ${role.commonTitles?.filter(t => t !== role.title).length ? panel('Also advertised as',
+        'Other wordings employers use for this role.',
+        `<ul class="cp-list">${role.commonTitles.filter(t => t !== role.title).map(t => li(t, false)).join('')}</ul>`) : ''}
+
+      ${role.skills?.length ? panel('Skills for this step',
+        `${role.skills.filter(s => owned.has(s.toLowerCase())).length} of ${role.skills.length} already in your profile.`,
+        `<ul class="cp-list">${role.skills.map(t => li(t, true)).join('')}</ul>`) : ''}
+
+      ${role.certs?.length ? panel('Certifications',
+        'Commonly held at this level — not a requirement.',
+        `<ul class="cp-list">${role.certs.map(t => li(t, true)).join('')}</ul>`) : ''}
+
+      ${panel('Open positions', 'Live count from Bundesagentur für Arbeit, all of Germany.' + helpDot('liveCount'),
+        `<div class="cp-figure" id="cp-count">…</div>
+         <div class="cp-figure-sub" id="cp-count-note">counting…</div>
+         <div class="cp-stat" id="cp-salary-box">
+           <div class="cp-salary" id="cp-salary">…</div>
+           <div class="cp-figure-sub" id="cp-salary-note">reading job ads…</div>
+         </div>
+         ${role.education ? `<div class="cp-stat"><div class="cp-figure-sub">Typical background at this level — not a requirement<br>${esc(role.education)}</div></div>` : ''}`)}
+
+      <div id="cp-plan" class="hidden"></div>
+    </div>`;
+  el.classList.remove('hidden');
+
+  $('cp-add-compare').addEventListener('click', () => { cpToggleCompare(role.title); cpRenderDetail(role); });
+  $('cp-plan-btn').addEventListener('click', () => cpBuildPlan(role));
+  cpLoadCount(role.title, role.salary);
+}
+
+// Ladder titles are constructed ("Junior X", "X (Tier 1)", "Senior X", "X Architect"),
+// and German job ads do not contain those strings. Querying them literally returned 0
+// and told a student the discipline has no openings: measured against Bundesagentur,
+// "Junior Vulnerability Analyst" gives 0 while "Vulnerability Analyst" gives 8 and
+// "Vulnerability Management" gives 98. Strip the seniority decoration and count the
+// role itself.
+function cpCountableTitle(title) {
+  return String(title || '')
+    .replace(/\s*\([^)]*\)\s*/g, ' ')                       // "(Tier 1)", "(m/w/d)"
+    .replace(/^(junior|senior|lead|principal|head of)\s+/i, '')
+    .replace(/\s+(architect|manager|lead)$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+async function cpLoadCount(title, referenceSalary) {
+  const el = $('cp-count');
+  if (!el) return;
+  const query = cpCountableTitle(title) || title;
+  const note = $('cp-count-note');
+  try {
+    const d = await (await fetch(`${baseUrl}/api/job-count?keyword=${encodeURIComponent(query)}`)).json();
+    if (!el.isConnected) return;                    // the user moved on while we waited
+    el.textContent = d.count == null ? '—' : d.count.toLocaleString('de-DE');
+    // Name the query, so a low number can be read as "this wording is rare" rather
+    // than "this career does not exist".
+    if (note) note.textContent = `matching “${query}” — all seniorities`;
+  } catch (_) {
+    if (el.isConnected) el.textContent = '—';
+    if (note) note.textContent = 'count unavailable';
+  }
+  cpLoadSalary(query, referenceSalary);
+}
+
+// Salary measured from the ads themselves. The figure printed here used to be a
+// constant — every entry-level role in every domain showed the same band — so what
+// matters as much as the number is the evidence beside it: how many ads were read,
+// and how many of them stated pay at all. Most German postings do not.
+// Measured when the ads allow it, clearly flagged as an orientation figure when
+// they do not. In practice German postings almost never state pay — 0 of 34 on a
+// live check — so the second branch is the common one, and the wording matters:
+// the band it shows is a level-wide constant, and must not be mistaken for data.
+async function cpLoadSalary(query, referenceSalary) {
+  const el = $('cp-salary');
+  const note = $('cp-salary-note');
+  if (!el || !note) return;
+
+  const showReference = (reason) => {
+    if (!referenceSalary) {
+      el.textContent = '—';
+      el.classList.add('cp-salary-none');
+      note.textContent = reason;
+      return;
+    }
+    el.textContent = referenceSalary;
+    el.classList.add('cp-salary-reference');
+    note.innerHTML = esc(`orientation only, not measured — typical for this level, same figure for every role at this stage. ${reason}`) + helpDot('salaryReference');
+  };
+
+  try {
+    const d = await (await fetch(`${baseUrl}/api/salary-band?keyword=${encodeURIComponent(query)}`)).json();
+    if (!el.isConnected) return;
+
+    if (d.display) {
+      el.textContent = d.display;
+      el.classList.remove('cp-salary-reference', 'cp-salary-none');
+      note.innerHTML = esc(`gross per year — middle half of the ${d.withSalary} ad(s) that stated pay, out of ${d.read} read for “${query}”`) + helpDot('salaryMeasured');
+      return;
+    }
+    showReference(d.read
+      ? `Only ${d.withSalary} of ${d.read} live ads stated a salary; ${d.minSample || 5} are needed to measure one.`
+      : 'No ads could be read for this role right now.');
+  } catch (_) {
+    if (el.isConnected) showReference('Live ads could not be read.');
+  }
+}
+
+// ── Learning plan: the gaps of this role, handed to the Writer agent ─────────
+
+async function cpBuildPlan(role) {
+  const owned = cpOwnedSkills();
+  const have = (role.skills || []).filter(s => owned.has(s.toLowerCase()));
+  const missing = (role.skills || []).filter(s => !owned.has(s.toLowerCase()));
+  const box = $('cp-plan');
+  const btn = $('cp-plan-btn');
+
+  box.className = 'cp-panel cp-plan';
+  box.innerHTML = `<h4>Learning plan — ${esc(role.title)}</h4>
+    <div class="cp-panel-note">Writing a roadmap for the ${missing.length} skill(s) you are missing…</div>`;
+  box.classList.remove('hidden');
+  btn.disabled = true;
+
+  try {
+    const r = await fetch(`${baseUrl}/api/generate-roadmap`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ targetRole: role.title, foundSkills: have, missingSkills: missing }),
+    });
+    const d = await r.json();
+    // The workflow always comes back — it is built from the taxonomy. The model
+    // only adds the mentor's commentary, so a rate limit costs the notes, not the plan.
+    const steps = d.steps || [];
+    const text = d.text || '';
+
+    const stepHtml = steps.map(s => `
+      <li class="cp-step">
+        <div class="cp-step-num" aria-hidden="true">${s.step}</div>
+        <div class="cp-step-body">
+          <div class="cp-step-skill">${esc(s.skill)}<span class="cp-step-hours">≈ ${s.hours} h</span></div>
+          <div class="cp-step-how">${esc(s.how)}</div>
+          <div class="cp-step-res">${esc(s.resource)}</div>
+          <div class="cp-step-links">
+            ${(s.links || []).map(l => `<a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer"
+                 class="cp-step-link">${esc(l.label)} ↗</a>`).join('')}
+          </div>
+        </div>
+      </li>`).join('');
+
+    // The full requirement list lives here, not on the role card: what matters is
+    // not "this role uses SIEM" but "you have four of these six, learn the other two".
+    const all = role.skills || [];
+    const req = all.map(s => `<li class="${owned.has(s.toLowerCase()) ? 'has' : ''}">${esc(s)}</li>`).join('');
+
+    box.innerHTML = `<h4>Learning plan — ${esc(role.title)}</h4>
+      <div class="cp-panel-note">${have.length} of ${all.length} skill(s) already in your CV
+        · about ${d.weeks || '?'} weeks at 6 h a week
+        · ${d.ok ? `mentor notes by the Writer agent (${esc(d.provider || 'model')})` : 'no model reachable — the steps below still stand'}</div>
+
+      ${all.length ? `<div class="cp-req">
+        <div class="cp-notes-head">Skills and tools this role requires</div>
+        <ul class="cp-list">${req}</ul>
+      </div>` : ''}
+
+      ${steps.length ? `<div class="cp-notes-head" style="margin-top:22px">What to learn, in order</div>
+        <ol class="cp-steps">${stepHtml}</ol>`
+        : `<div class="cp-plan-text">You already cover every skill this role asks for.</div>`}
+
+      ${d.notes ? `<div class="cp-notes">
+        <div class="cp-notes-head">Mentor's notes</div>
+        <div class="cp-plan-text">${esc(d.notes)}</div>
+      </div>` : ''}
+
+      <div class="cp-plan-actions">
+        <button class="btn btn-ghost btn-sm" id="cp-plan-pdf">Export plan as PDF</button>
+      </div>`;
+
+    const pdfText = [text, d.notes ? `\n\nMentor's notes\n\n${d.notes}` : ''].join('');
+    $('cp-plan-pdf').addEventListener('click', () =>
+      downloadTextAsPDF(pdfText, `learning-plan-${role.title.replace(/\W+/g, '-').toLowerCase()}.pdf`,
+        `Learning plan — ${role.title}`));
+  } catch (err) {
+    box.innerHTML = `<h4>Learning plan</h4><div class="cp-panel-note">Could not build the plan: ${esc(err.message)}</div>`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ── Feedback (anonymous) ───────────────────────────────────────────────────
+//
+// The submit path deliberately does NOT send authHeaders(). Not sending the token is
+// the guarantee: even a future change to the server could not start recording who
+// wrote what, because the identity never crosses the wire.
+let _fbRating = null;
+
+document.querySelectorAll('#fb-rating .fb-star').forEach(btn => {
+  btn.addEventListener('click', () => {
+    _fbRating = Number(btn.dataset.rating);
+    document.querySelectorAll('#fb-rating .fb-star').forEach(b => {
+      const on = Number(b.dataset.rating) <= _fbRating;
+      b.classList.toggle('is-on', on);
+      b.setAttribute('aria-checked', String(Number(b.dataset.rating) === _fbRating));
+    });
+  });
+});
+
+$('fb-submit')?.addEventListener('click', async () => {
+  const liked = $('fb-liked').value.trim();
+  const improve = $('fb-improve').value.trim();
+  const msg = $('fb-msg');
+  msg.className = 'form-msg';
+
+  if (!liked && !improve) {
+    msg.textContent = 'Write at least one line — a score on its own says little.';
+    return;
+  }
+
+  const btn = $('fb-submit');
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Sending…';
+  try {
+    // Plain fetch, no auth header: see above.
+    const r = await fetch(`${baseUrl}/api/feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rating: _fbRating, liked, improve, area: $('fb-area').value }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+
+    msg.className = 'form-msg ok';
+    msg.textContent = 'Sent. Thank you — it is read.';
+    $('fb-liked').value = '';
+    $('fb-improve').value = '';
+    $('fb-area').value = '';
+    _fbRating = null;
+    document.querySelectorAll('#fb-rating .fb-star').forEach(b => {
+      b.classList.remove('is-on');
+      b.setAttribute('aria-checked', 'false');
+    });
+  } catch (e) {
+    msg.textContent = e.message || 'Could not send.';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+});
+
+// Shown only to an admin. The server is the real gate — this just avoids rendering an
+// empty panel, and a 401/403 is the normal answer for everyone else.
+async function loadFeedbackAdmin() {
+  const box = $('fb-admin');
+  if (!box || !state.token) return;
+  try {
+    const d = await api.get('/api/admin/feedback');
+    const summary = $('fb-admin-summary');
+    if (summary) {
+      summary.textContent = d.total
+        ? `${d.total} response${d.total > 1 ? 's' : ''}${d.averageRating ? ` · average ${d.averageRating}/5` : ''}`
+        : 'nothing yet';
+    }
+    $('fb-admin-list').innerHTML = d.entries.length
+      ? d.entries.map(e => `
+        <div class="ac-row fb-entry">
+          <div>
+            ${e.rating ? `<span class="pill">${e.rating}/5</span> ` : ''}
+            ${e.area ? `<span class="hint">${esc(e.area)}</span>` : ''}
+            ${e.liked ? `<div class="fb-liked"><strong>Worked:</strong> ${esc(e.liked)}</div>` : ''}
+            ${e.improve ? `<div class="fb-improve"><strong>Change:</strong> ${esc(e.improve)}</div>` : ''}
+            <div class="hint">${new Date(e.at).toLocaleString('en-GB')}</div>
+          </div>
+        </div>`).join('')
+      : '<p class="hint">No feedback yet.</p>';
+    box.classList.remove('hidden');
+  } catch (_) {
+    // Not an admin, or signed out: leave the panel hidden.
+    box.classList.add('hidden');
+  }
+}
