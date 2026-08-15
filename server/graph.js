@@ -36,6 +36,11 @@ const GraphState = Annotation.Root({
   draft:          Annotation(),
   score:          Annotation(),
   feedback:       Annotation(),
+  // Claims the Critic could not find in the profile. Replaced wholesale each round
+  // rather than accumulated: a revision that removes an invention must be able to
+  // clear the list, otherwise the score stays capped forever and the loop cannot
+  // converge.
+  unsupported:    Annotation({ reducer: (_, b) => b || [], default: () => [] }),
   // False once the Critic has failed. Its fallback hands back the passing score so
   // the loop terminates, and without this flag the UI would report a grade nobody
   // computed. Sticky: one failed judgement taints the run.
@@ -104,8 +109,17 @@ function buildGraph(baseDeps, llm, rag) {
       }
     } catch (_) { /* grounding is best-effort */ }
 
-    const refine = s.revisions > 0 && s.feedback
-      ? `\n\n<critique>\n${s.feedback}\n</critique>\n<previous_draft>\n${s.draft}\n</previous_draft>\n`
+    // Fabrications are named separately from the general critique and given a
+    // separate instruction. Folded into the prose feedback they were one suggestion
+    // among several; a revision would polish the sentence and keep the invented
+    // number inside it.
+    const fabrications = (s.unsupported || []).length
+      ? `\n<unsupported_claims>\n${s.unsupported.map(u => `- ${u}`).join('\n')}\n</unsupported_claims>\n`
+        + 'These claims are NOT in the profile. Remove them or replace them with something the '
+        + 'profile actually supports. Do not rephrase them — a softened invention is still an invention.'
+      : '';
+    const refine = s.revisions > 0 && (s.feedback || fabrications)
+      ? `\n\n<critique>\n${s.feedback}\n</critique>${fabrications}\n<previous_draft>\n${s.draft}\n</previous_draft>\n`
         + 'This is a revision: improve the previous draft using the critique above.'
       : '';
     const system = 'You are the Writer agent. Write a concise, specific cover letter (max ~220 words) '
@@ -133,26 +147,77 @@ function buildGraph(baseDeps, llm, rag) {
     return { draft: text, revisions: s.revisions + 1, trace: [{ node: 'Writer', note: `draft v${s.revisions + 1} · ${text.length} chars` }] };
   };
 
+  // The Critic used to receive the job and the letter, and nothing else. It was
+  // therefore structurally incapable of noticing an invented qualification: with no
+  // profile to compare against, "40+ custom detection rules" and "22% fewer false
+  // positives" read as excellent evidence. The Sprint-3 review produced exactly
+  // that from a CV saying only "Splunk and Python". The old rubric made it worse —
+  // "Evidence & impact (0-25): backs claims with concrete examples/results" pays
+  // for numbers, and the cheapest way to obtain a number is to make one up.
+  //
+  // So the Critic now sees the same evidence the Writer did, and groundedness is
+  // both the largest dimension and a disqualifier. This is what turns the loop from
+  // a style control into a safety control: an invented claim cannot clear the bar,
+  // so it is sent back for revision instead of being handed to the applicant.
   const critic = async (s) => {
+    const structured = typeof s.profile === 'string' && s.profile.trim()
+      ? s.profile
+      : (Object.keys(s.profile || {}).length ? JSON.stringify(s.profile) : '');
+    const evidence = [structured, s.cvText].filter(Boolean).join('\n\n').slice(0, 4000)
+      || '(no profile provided)';
+
     const system = [
       'You are a demanding hiring-manager Critic. Score a cover letter with this RUBRIC (100 pts total):',
-      '  • Specificity (0-30): names concrete skills/tools/certs FROM THE PROFILE (e.g. Splunk, MITRE ATT&CK), not vague claims.',
-      '  • Job relevance (0-30): directly addresses the JOB\'s stated requirements.',
-      '  • Evidence & impact (0-25): backs claims with concrete examples/results, not adjectives.',
-      '  • Concision & tone (0-15): tight, professional, no clichés/filler ("team player", "passionate").',
-      'Be strict: a generic, buzzword letter with no specifics scores 40-55. Sum the four criteria.',
-      'ALWAYS give ONE concrete, actionable improvement. Reply ONLY as JSON: {"score": <int 0-100>, "feedback": "<one concrete improvement>"}.',
+      '  • Groundedness (0-30): EVERY factual claim — figures, percentages, employers, job titles,',
+      '    certifications, tools, durations — must be supported by the PROFILE. This is the first',
+      '    thing you check and the one you must never trade away.',
+      '  • Job relevance (0-25): directly addresses the JOB\'s stated requirements.',
+      '  • Specificity (0-25): names concrete skills/tools from the PROFILE rather than vague claims.',
+      '  • Concision & tone (0-20): tight, professional, no clichés/filler ("team player", "passionate").',
       '',
-      'EXAMPLE — a weak letter:',
+      'DISQUALIFYING RULE, applied before anything else: if the letter states ANY fact that the',
+      'profile does not support, the total score MUST NOT exceed 45, however well written it is.',
+      'List each such claim in "unsupported". An impressive metric that is not in the profile is a',
+      'fabrication the applicant will have to defend in an interview — treat it as the most serious',
+      'defect a letter can have, not as evidence of impact.',
+      'A letter that stays strictly within the profile is NOT penalised for lacking numbers.',
+      '',
+      'Be strict: a generic, buzzword letter with no specifics scores 40-55. Sum the four criteria.',
+      'ALWAYS give ONE concrete, actionable improvement.',
+      'Reply ONLY as JSON: {"score": <int 0-100>, "feedback": "<one concrete improvement>", "unsupported": ["<claim>"]}.',
+      '',
+      'EXAMPLE — an invented metric:',
+      'PROFILE: "Computer science student. Splunk and Python."',
+      'LETTER: "...where I wrote 40+ custom detection rules and cut false positives by 22%."',
+      'OUTPUT: {"score": 38, "feedback": "Remove the invented figures: the profile shows Splunk and Python only, with no rule count and no false-positive metric. Describe what you actually built.", "unsupported": ["40+ custom detection rules", "cut false positives by 22%"]}',
+      '',
+      'EXAMPLE — a weak but honest letter:',
       'LETTER: "Dear Manager, I am a passionate team player excited about this SOC role. I learn fast and would be a great fit. Thank you."',
-      'OUTPUT: {"score": 42, "feedback": "Replace generic claims with concrete evidence: name the SIEM tools you have used (e.g. Splunk) and one detection you built."}',
+      'OUTPUT: {"score": 42, "feedback": "Replace generic claims with concrete evidence: name the SIEM tools you have used (e.g. Splunk) and one detection you built.", "unsupported": []}',
     ].join('\n');
-    const user = `<job>\n${(s.jobDescription || s.job?.title || '').slice(0, 2000)}\n</job>\n\n<letter>\n${s.draft}\n</letter>`;
-    const raw = await llm.chat({ system, user, maxTokens: 1500, temperature: 0.2 });
+
+    const user = `<job>\n${(s.jobDescription || s.job?.title || '').slice(0, 2000)}\n</job>\n\n`
+      + `<profile>\n${evidence}\n</profile>\n\n<letter>\n${s.draft}\n</letter>`;
+    // Matched to the Writer's budget. At 1500 the Critic returned "Empty response"
+    // on models that spend part of max_tokens on hidden reasoning, and the run
+    // reported score: null — honest, but no grading happened at all.
+    const raw = await llm.chat({ system, user, maxTokens: 2000, temperature: 0.2 });
     const j = firstJson(raw) || {};
-    const score = Math.max(0, Math.min(100, Number(j.score) || 70));
+    let score = Math.max(0, Math.min(100, Number(j.score) || 70));
     const feedback = String(j.feedback || '').slice(0, 300);
-    return { score, feedback, trace: [{ node: 'Critic', note: `score ${score}/100 · ${feedback || 'ok'}` }] };
+    const unsupported = Array.isArray(j.unsupported)
+      ? j.unsupported.map(u => String(u).trim()).filter(Boolean).slice(0, 6)
+      : [];
+    // The cap is enforced here as well as in the prompt. A model that lists
+    // fabrications and then awards 88 anyway has contradicted itself, and the loop
+    // must not let the higher number through: the cap is what keeps this a control
+    // rather than a suggestion.
+    if (unsupported.length) score = Math.min(score, 45);
+
+    const note = `score ${score}/100`
+      + (unsupported.length ? ` · ${unsupported.length} unsupported claim(s): ${unsupported[0]}` : '')
+      + ` · ${feedback || 'ok'}`;
+    return { score, feedback, unsupported, trace: [{ node: 'Critic', note }] };
   };
 
   // ── Per-node error isolation ─────────────────────────────────────────────
@@ -222,6 +287,11 @@ function formatResult(s) {
     score: scored ? (s.score ?? null) : null,
     scored,
     feedback: s.feedback || '',
+    // Surfaced, not just acted on. If the revision limit runs out with claims still
+    // unsupported, the letter is returned — refusing to hand over the user's own
+    // draft helps nobody — but the caller can say which sentences to check before
+    // sending it. A capped score with no explanation would just look harsh.
+    unsupported: scored ? (s.unsupported || []) : [],
     revisions: s.revisions || 0,
     qualityBar: QUALITY_BAR,
     trace: s.trace || [],

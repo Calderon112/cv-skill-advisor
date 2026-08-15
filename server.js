@@ -4,6 +4,40 @@ const fs     = require('fs');
 const path   = require('path');
 const crypto = require('crypto');
 const zlib   = require('zlib');
+
+// ── .env, BEFORE any application module is required ─────────────────────────
+//
+// Position is the whole point of this block, so keep it above the requires below.
+//
+// It used to sit ~40 lines further down, after them. Node evaluates a module the
+// moment it is required, so every `const X = process.env.Y` at the top of a module
+// read an environment this had not populated yet, and silently took its default.
+// The symptom is quiet and confusing: the variable is spelled correctly, it is in
+// .env, and it does nothing. GRAPH_QUALITY_BAR=99 still reported a bar of 80;
+// llm.js offered no providers at all because it saw no keys.
+//
+// llm.js was patched at the time by making its own reads lazy. That fixed one
+// module and left the trap armed for graph.js, embeddings.js, career-path.js and
+// usage.js — ten module-load reads across four files, found by the Sprint-3 review.
+// Moving the parse above the requires fixes all of them at once, and stops the next
+// module from inheriting the problem.
+const envPath = path.join(__dirname, '.env');
+if (fs.existsSync(envPath)) {
+  const envContent = fs.readFileSync(envPath, 'utf8');
+  envContent.split(/\r?\n/).forEach((line) => {
+    const match = line.match(/^\s*([^#][^=]+?)\s*=\s*(.*)$/);
+    if (match) {
+      const key = match[1].trim();
+      const value = match[2].trim();
+      // A real environment variable always wins over the file: that is how the
+      // container overrides what the developer left in .env.
+      if (!process.env[key] && value) {
+        process.env[key] = value;
+      }
+    }
+  });
+}
+
 let pdfParse;
 
 try { pdfParse = require('pdf-parse'); } catch(_) { pdfParse = null; }
@@ -47,21 +81,6 @@ function verifyPassword(plaintext, stored) {
   return actual === expected;
 }
 
-const envPath = path.join(__dirname, '.env');
-if (fs.existsSync(envPath)) {
-  const envContent = fs.readFileSync(envPath, 'utf8');
-  envContent.split(/\r?\n/).forEach((line) => {
-    const match = line.match(/^\s*([^#][^=]+?)\s*=\s*(.*)$/);
-    if (match) {
-      const key = match[1].trim();
-      const value = match[2].trim();
-      if (!process.env[key] && value) {
-        process.env[key] = value;
-      }
-    }
-  });
-}
-
 // TLS certificate verification is ON by default (secure for production).
 // Some local Windows/dev setups behind a TLS-intercepting proxy or with strict
 // SSL revocation checks cannot validate external certs. ONLY in that case, set
@@ -88,6 +107,11 @@ if (process.env.ALLOW_INSECURE_TLS === '1') {
 
 const DEFAULT_PORT = Number(process.env.PORT || 3000);
 const MAX_PORT_TRIES = 10;
+// The port actually bound, which is not always DEFAULT_PORT: tryListen() walks up
+// to MAX_PORT_TRIES further ports when one is busy. publicBaseUrl() builds the OIDC
+// redirect URI from this, and a URI naming a port nobody is listening on fails the
+// provider's exact-match check — so the guessed value has to become the real one.
+let boundPort = DEFAULT_PORT;
 const publicDir = __dirname;
 // Overridable so a container can keep state on a mounted volume, like
 // EMBED_CACHE_FILE and USAGE_STATS_FILE already do.
@@ -478,7 +502,11 @@ function readJsonBody(req, maxBytes) {
 // what is registered at the provider exactly, so it is configuration, not a guess
 // from Host headers (which an attacker can set).
 function publicBaseUrl() {
-  return String(process.env.PUBLIC_BASE_URL || `http://localhost:${PORT}`).replace(/\/+$/, '');
+  // `PORT` used to be interpolated here and was never declared — only DEFAULT_PORT
+  // was. The branch fires exactly when PUBLIC_BASE_URL is unset, which is the
+  // documented default, so following the README literally crashed the first JSON
+  // response with a ReferenceError. Reported in the Sprint-3 review.
+  return String(process.env.PUBLIC_BASE_URL || `http://localhost:${boundPort}`).replace(/\/+$/, '');
 }
 function oidcRedirectUri() { return `${publicBaseUrl()}/api/auth/callback`; }
 
@@ -4539,6 +4567,7 @@ function tryListen(port, attempt = 1) {
 
   server.listen(port, () => {
     server.removeListener('error', onError);
+    boundPort = port;
     console.log(`Server running at http://localhost:${port}`);
     console.log('API available at /api/status, /api/analyze, /api/jobs');
   });

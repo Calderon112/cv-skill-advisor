@@ -68,7 +68,7 @@ anything to say. The design question is therefore not "can a model write this" b
 A deployed web application that:
 
 1. Extracts a structured profile from an uploaded CV, including scanned PDFs
-2. Searches ten job sources in parallel and merges duplicates across them
+2. Searches every configured job source in parallel and merges duplicates across them
 3. Scores every posting against the profile with a deterministic, published formula
 4. Names the specific skills missing for each posting
 5. Writes a cover letter and has a second agent grade it before delivery
@@ -103,7 +103,7 @@ suitable for sending.
 
 ### Multi-platform job search
 
-Ten sources are queried in parallel and merged. Filters cover region, city, radius,
+Eight sources are queried in parallel and merged with no API key configured; three more join when their optional keys are set, for eleven in total. Filters cover region, city, radius,
 sector and keywords, with geolocation for "near me". A typical search returns
 results in about five seconds.
 
@@ -335,7 +335,7 @@ Search request
     ↓
 buildAllPlatformSources  (only sources whose key is configured)
     ↓
-Ten sources queried in parallel, each isolated: one failure shrinks the
+Every configured source is queried in parallel, each isolated: one failure shrinks the
 sample, it never fails the search
     ↓
 Bundesagentur enrichment  (detail endpoint: real description, title, salary)
@@ -385,7 +385,7 @@ the internal Docker network, so nobody can bypass TLS by connecting to :3000.
 ### Job search
 
 1. User selects region, city, radius, sector and keywords
-2. Backend queries ten sources in parallel, each with its own timeout
+2. Backend queries every configured source in parallel, each with its own timeout
 3. Bundesagentur results are enriched from the official detail endpoint — the
    search response returns a catalogue entry with no description
 4. Results are deduplicated across sources; the card records where else it appeared

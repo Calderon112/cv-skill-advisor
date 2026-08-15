@@ -674,6 +674,42 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
   // ───────────────────────────────────────────────────────────────────────
   // Skill-Gap Recommendations (Sprint-2 feature: concrete "learn Y" advice)
   // ───────────────────────────────────────────────────────────────────────
+  section('Skill matching — negation');
+
+  // "No CISSP" registered as a CISSP hit: the matcher tested for the surface form
+  // and nothing else, so a CV stating an absence produced the certification.
+  // Sprint-3 review finding.
+  {
+    const G = [{ category: 'x', skills: [
+      { key: 'cissp', label: 'CISSP' }, { key: 'splunk', label: 'Splunk' }, { key: 'python', label: 'Python' },
+    ] }];
+    const has = (t, k) => skillMatcher.findSkills(t, G).some(s => s.key === k);
+
+    test('negation: "No CISSP" is not a CISSP hit', () => {
+      assert(!has('No CISSP', 'cissp'), 'denied certification not detected');
+    });
+    test('negation: German "Keine Erfahrung mit Splunk"', () => {
+      assert(!has('Keine Erfahrung mit Splunk', 'splunk'), 'kein/keine understood');
+    });
+    test('negation: French "Pas de certification CISSP"', () => {
+      assert(!has('Pas de certification CISSP', 'cissp'), 'pas de understood');
+    });
+    test('negation: a plain statement is still detected', () => {
+      assert(has('CISSP certified since 2024', 'cissp'), 'no false negative on a normal CV line');
+    });
+    test('negation: does not survive a sentence boundary', () => {
+      assert(has('No CISSP yet. CISSP exam booked for June', 'cissp'),
+        'a later positive occurrence still counts');
+    });
+    test('negation: does not survive a contrastive "but"', () => {
+      assert(has('No CISSP but Splunk daily', 'splunk'), 'the negation governs CISSP, not Splunk');
+    });
+    test('negation: "no problem working with Splunk" still claims Splunk', () => {
+      assert(has('I have no problem working with Splunk', 'splunk'),
+        'the cue denies its own noun, not the skill');
+    });
+  }
+
   section('Skill-Gap Recommendations');
 
   test('learningFor: maps a security skill to concrete resource', () => {
@@ -937,6 +973,61 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
     const r = await graph.runGraph({ cvText: 'siem', profile: {}, job: { title: 'X' }, jobDescription: 'x' }, gDeps, throwLlm, noRag);
     assertEqual(r.scored, false, 'the run is marked unscored');
     assertEqual(r.score, null, 'no grade is handed to the caller');
+  });
+
+  // The Sprint-3 review produced "40+ custom detection rules" and a 22% false-
+  // positive reduction from a CV saying only "Splunk and Python". The rubric was
+  // paying for numbers and the Critic never saw the CV, so it could not have known.
+  await atest('graph: an invented metric caps the score and cannot clear the bar', async () => {
+    const FABRICATED = 'I wrote 40+ custom detection rules and cut false positives by 22%.';
+    const judgeLlm = {
+      isAvailable: () => true,
+      chat: async ({ system }) => (/Critic/.test(system)
+        // A Critic that lists fabrications and then awards 88 anyway: the cap must
+        // override its own arithmetic, not trust it.
+        ? JSON.stringify({ score: 88, feedback: 'Nicely written.',
+                           unsupported: ['40+ custom detection rules', 'cut false positives by 22%'] })
+        : FABRICATED),
+    };
+    const r = await graph.runGraph(
+      { cvText: 'Splunk and Python only.', profile: {}, job: { title: 'SOC Analyst' }, jobDescription: 'x'.repeat(150) },
+      gDeps, judgeLlm, noRag);
+    assert(r.score <= 45, `score capped at 45, got ${r.score}`);
+    assert(r.score < r.qualityBar, 'a fabricating letter cannot clear the quality bar');
+    assertEqual(r.unsupported.length, 2, 'both invented claims surfaced to the caller');
+    assert(r.revisions > 1, 'the loop sent it back for revision');
+  });
+
+  await atest('graph: an honest letter is not penalised for having no numbers', async () => {
+    const honestLlm = {
+      isAvailable: () => true,
+      chat: async ({ system }) => (/Critic/.test(system)
+        ? JSON.stringify({ score: 86, feedback: 'Good.', unsupported: [] })
+        : 'I have used Splunk and Python during my studies.'),
+    };
+    const r = await graph.runGraph(
+      { cvText: 'Splunk and Python only.', profile: {}, job: { title: 'SOC Analyst' }, jobDescription: 'x'.repeat(150) },
+      gDeps, honestLlm, noRag);
+    assertEqual(r.score, 86, 'no cap applied when nothing is unsupported');
+    assertEqual(r.unsupported.length, 0, 'no claims flagged');
+  });
+
+  await atest('graph: the Critic receives the profile, or it cannot check anything', async () => {
+    let criticSawProfile = false;
+    const spyLlm = {
+      isAvailable: () => true,
+      chat: async ({ system, user }) => {
+        if (/Critic/.test(system)) {
+          criticSawProfile = /<profile>[\s\S]*Splunk home lab[\s\S]*<\/profile>/.test(user);
+          return JSON.stringify({ score: 90, feedback: 'ok', unsupported: [] });
+        }
+        return 'draft';
+      },
+    };
+    await graph.runGraph(
+      { cvText: 'Splunk home lab', profile: {}, job: { title: 'X' }, jobDescription: 'x'.repeat(150) },
+      gDeps, spyLlm, noRag);
+    assert(criticSawProfile, 'the CV reaches the Critic as ground truth');
   });
 
   const total = passed + failed + skipped;
