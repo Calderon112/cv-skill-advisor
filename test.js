@@ -7,8 +7,15 @@
 const zlib   = require('zlib');
 const crypto = require('crypto');
 const agents = require('./server/agents.js');
+const reasoning = require('./server/reasoning.js');
 const dedup  = require('./server/dedup.js');
+const rerank = require('./rerank.js');
+const { buildReport } = require('./server/report.js');
 const SecurityLearning = require('./security-learning.js');
+const embeddings = require('./server/embeddings.js');
+const graph = require('./server/graph.js');
+const skillMatcher = require('./skill-matcher.js');
+const { SECURITY_GROUPS } = require('./security-skills.js');
 
 // ── Colour helpers ────────────────────────────────────────────────────────
 const c = {
@@ -98,20 +105,9 @@ const roles = [
   { name: 'Cybersecurity Consultant', required: ['risk assessment', 'vulnerability analysis', 'communication', 'problem solving'] },
 ];
 
-function normalize(text) {
-  return text.toLowerCase().replace(/[.,;:()\-\/]/g, ' ');
-}
-
-function findSkills(text) {
-  const normalized = normalize(text);
-  const found = [];
-  skillGroups.forEach(group => {
-    group.skills.forEach(skill => {
-      if (normalized.includes(skill.key)) found.push(skill);
-    });
-  });
-  return found;
-}
+// Exercise the real matcher rather than a copy of it.
+const normalize = skillMatcher.normalize;
+const findSkills = (text) => skillMatcher.findSkills(text, skillGroups);
 
 function analyzeRoles(foundKeys) {
   return roles
@@ -221,6 +217,40 @@ test('detects multiple skills', () => {
 test('returns empty array for text with no skills', () => {
   const found = findSkills('I love cooking pasta and hiking on weekends');
   assertEqual(found.length, 0, 'no skills found');
+});
+
+// ── 2b. Matching over the full security taxonomy ──────────────────────────
+const secKeys = (text) => skillMatcher.findSkills(text, SECURITY_GROUPS).map(s => s.key);
+
+test('respects word boundaries (no substring false positives)', () => {
+  // "admiNISTrateur" must not detect the NIST framework.
+  const keys = secKeys('Administrateur systeme Linux, administration reseau');
+  assert(!keys.includes('nist'), 'nist not detected inside "administrateur"');
+});
+
+test('detects keys whose punctuation normalize() strips', () => {
+  const keys = secKeys('Experience in Cross-Site Scripting, TCP/IP and Single Sign-On');
+  assertIncludes(keys, 'cross-site scripting', 'xss key reachable');
+  assertIncludes(keys, 'tcp/ip',               'tcp/ip key reachable');
+  assertIncludes(keys, 'single sign-on',       'sso key reachable');
+});
+
+test('detects German and French surface forms via aliases', () => {
+  assertIncludes(secKeys('Erfahrung mit DSGVO'),        'gdpr', 'DSGVO → gdpr');
+  assertIncludes(secKeys('Conformite au RGPD'),         'gdpr', 'RGPD → gdpr');
+  assertIncludes(secKeys('Penetrationstests bei Bosch'),'penetration testing', 'Penetrationstests → pentest');
+  assertIncludes(secKeys('J ai mene des pentests'),     'penetration testing', 'pentests → pentest');
+});
+
+test('log correlation counts as log analysis, never as SIEM', () => {
+  const keys = secKeys('J ai fait de la correlation de logs pendant mon stage');
+  assertIncludes(keys, 'log analysis', 'correlation de logs → log analysis');
+  assert(!keys.includes('siem'), 'siem stays a gap: correlating logs is not SIEM tooling');
+});
+
+test('detects acronyms via aliases', () => {
+  assertIncludes(secKeys('Deployed MFA and SSO with Keycloak'), 'multi-factor authentication', 'MFA');
+  assertIncludes(secKeys('Hardened the WAF and reviewed XSS'),  'web application firewall',    'WAF');
 });
 
 test('is case-insensitive', () => {
@@ -521,6 +551,41 @@ test('dedupeJobs: handles empty input', () => {
   assertEqual(dedup.dedupeJobs([]).length, 0, 'empty');
 });
 
+// ── 12. Outcome-based re-ranking (rerank.js) ─────────────────────────────
+section('Outcome-based re-ranking');
+
+const detectKeys = (text) => findSkills(text).map(s => s.key);
+
+test('successSignal: aggregates skills only from interview/offer apps', () => {
+  const apps = [
+    { status: 'interview', title: 'SOC Analyst with linux and python' },
+    { status: 'offer',     title: 'Penetration tester python' },
+    { status: 'applied',   title: 'Cloud security engineer' }, // ignored (not positive)
+  ];
+  const sig = rerank.successSignal(apps, detectKeys);
+  assertEqual(sig.count, 2, 'only positive apps counted');
+  assert(sig.skills['python'] >= 2, 'python aggregated from both successes');
+});
+
+test('boostFor: rewards jobs sharing skills with past successes', () => {
+  const sig = rerank.successSignal(
+    [{ status: 'offer', title: 'linux python network security' }], detectKeys);
+  const { points, matched } = rerank.boostFor(['python', 'linux'], sig);
+  assert(points > 0, 'positive boost');
+  assertIncludes(matched, 'python', 'python matched');
+});
+
+test('boostFor: no signal → no boost', () => {
+  const { points } = rerank.boostFor(['python'], { count: 0, skills: {} });
+  assertEqual(points, 0, 'zero boost without history');
+});
+
+test('boostFor: boost is capped at MAX_BOOST', () => {
+  const skills = {}; ['a','b','c','d','e','f'].forEach(k => skills[k] = 1);
+  const { points } = rerank.boostFor(['a','b','c','d','e','f'], { count: 6, skills });
+  assert(points <= rerank.MAX_BOOST, 'capped at MAX_BOOST');
+});
+
 (async function runAgentTests() {
   section('Multi-Agent Architecture');
 
@@ -609,6 +674,42 @@ test('dedupeJobs: handles empty input', () => {
   // ───────────────────────────────────────────────────────────────────────
   // Skill-Gap Recommendations (Sprint-2 feature: concrete "learn Y" advice)
   // ───────────────────────────────────────────────────────────────────────
+  section('Skill matching — negation');
+
+  // "No CISSP" registered as a CISSP hit: the matcher tested for the surface form
+  // and nothing else, so a CV stating an absence produced the certification.
+  // Sprint-3 review finding.
+  {
+    const G = [{ category: 'x', skills: [
+      { key: 'cissp', label: 'CISSP' }, { key: 'splunk', label: 'Splunk' }, { key: 'python', label: 'Python' },
+    ] }];
+    const has = (t, k) => skillMatcher.findSkills(t, G).some(s => s.key === k);
+
+    test('negation: "No CISSP" is not a CISSP hit', () => {
+      assert(!has('No CISSP', 'cissp'), 'denied certification not detected');
+    });
+    test('negation: German "Keine Erfahrung mit Splunk"', () => {
+      assert(!has('Keine Erfahrung mit Splunk', 'splunk'), 'kein/keine understood');
+    });
+    test('negation: French "Pas de certification CISSP"', () => {
+      assert(!has('Pas de certification CISSP', 'cissp'), 'pas de understood');
+    });
+    test('negation: a plain statement is still detected', () => {
+      assert(has('CISSP certified since 2024', 'cissp'), 'no false negative on a normal CV line');
+    });
+    test('negation: does not survive a sentence boundary', () => {
+      assert(has('No CISSP yet. CISSP exam booked for June', 'cissp'),
+        'a later positive occurrence still counts');
+    });
+    test('negation: does not survive a contrastive "but"', () => {
+      assert(has('No CISSP but Splunk daily', 'splunk'), 'the negation governs CISSP, not Splunk');
+    });
+    test('negation: "no problem working with Splunk" still claims Splunk', () => {
+      assert(has('I have no problem working with Splunk', 'splunk'),
+        'the cue denies its own noun, not the skill');
+    });
+  }
+
   section('Skill-Gap Recommendations');
 
   test('learningFor: maps a security skill to concrete resource', () => {
@@ -687,6 +788,247 @@ test('dedupeJobs: handles empty input', () => {
     assert(result.recommendations.length === 0, 'no recommendations without injected recommender');
   });
 
+
+  section('Agent reasoning layer');
+
+  // A stub model: returns whatever the test scripted, so these exercise the guard
+  // rather than a provider. The guard is the security boundary — a model that
+  // invents a qualification must not be able to put it in a cover letter.
+  const stubLlm = (reply) => ({ isAvailable: () => true, chat: async () => reply });
+  const VOCAB = [
+    { key: 'firewall', label: 'Firewall' },
+    { key: 'siem', label: 'SIEM' },
+    { key: 'kubernetes', label: 'Kubernetes' },
+  ];
+  const CV = 'Ich habe zu Hause ein Labor mit pfSense aufgebaut und den Netzwerkverkehr segmentiert. '
+           + 'Im Studium Grundlagen der IT-Sicherheit, Python und Linux.';
+
+  await atest('Scout reasoning: accepts an inferred skill backed by a verbatim CV quote', async () => {
+    const out = await reasoning.inferSkills(
+      { cvText: CV, foundKeys: [], vocabulary: VOCAB },
+      stubLlm(JSON.stringify([
+        { key: 'firewall', evidence: 'ein Labor mit pfSense aufgebaut', confidence: 0.9 },
+      ])));
+    assert(out && out.inferred.length === 1, 'one skill inferred');
+    assert(out.inferred[0].key === 'firewall', 'the firewall skill');
+    assert(out.inferred[0].evidence.includes('pfSense'), 'evidence carried through');
+  });
+
+  await atest('Scout reasoning: REJECTS a skill whose evidence is not in the CV', async () => {
+    const out = await reasoning.inferSkills(
+      { cvText: CV, foundKeys: [], vocabulary: VOCAB },
+      stubLlm(JSON.stringify([
+        { key: 'siem', evidence: 'drei Jahre Splunk im SOC', confidence: 0.95 },
+      ])));
+    assert(out && out.inferred.length === 0, 'nothing accepted');
+    assert(out.rejected.length === 1 && /evidence/.test(out.rejected[0].why), 'rejected for missing evidence');
+  });
+
+  await atest('Scout reasoning: rejects a key outside the taxonomy', async () => {
+    const out = await reasoning.inferSkills(
+      { cvText: CV, foundKeys: [], vocabulary: VOCAB },
+      stubLlm(JSON.stringify([{ key: 'quantum-crypto', evidence: 'pfSense', confidence: 1 }])));
+    assert(out.inferred.length === 0 && out.rejected.length === 1, 'invented key refused');
+  });
+
+  await atest('Scout reasoning: no model configured leaves the analysis untouched', async () => {
+    const out = await reasoning.inferSkills(
+      { cvText: CV, foundKeys: [], vocabulary: VOCAB }, { isAvailable: () => false });
+    assert(out === null, 'returns null so the caller keeps the deterministic result');
+  });
+
+  await atest('Scout reasoning: malformed model output does not throw', async () => {
+    const out = await reasoning.inferSkills(
+      { cvText: CV, foundKeys: [], vocabulary: VOCAB }, stubLlm('sorry, I cannot help'));
+    assert(out === null, 'unparseable reply degrades to null');
+  });
+
+  const LONG_POSTING = 'Wir suchen eine erfahrene Fachkraft. Voraussetzung sind mindestens zehn Jahre '
+    + 'Berufserfahrung im Bereich IT-Sicherheit sowie ein abgeschlossenes Studium. Kenntnisse in Python '
+    + 'und Linux werden vorausgesetzt. Die Stelle ist unbefristet und in Vollzeit zu besetzen.';
+
+  await atest('Matcher reasoning: a blocked verdict must cite the requirement', async () => {
+    const v = await reasoning.adjudicate(
+      { job: { title: 'Senior Analyst' }, jobDescription: LONG_POSTING, foundKeys: ['python'], score: 0.81 },
+      stubLlm(JSON.stringify({ verdict: 'blocked', blockers: ['mindestens zehn Jahre Berufserfahrung'], reason: 'Junior profile.' })));
+    assert(v.verdict === 'blocked' && v.blockers.length === 1, 'blocked with a cited requirement');
+  });
+
+  await atest('Matcher reasoning: "blocked" with no cited requirement is downgraded to ok', async () => {
+    const v = await reasoning.adjudicate(
+      { job: { title: 'Analyst' }, jobDescription: LONG_POSTING, foundKeys: [], score: 0.7 },
+      stubLlm(JSON.stringify({ verdict: 'blocked', blockers: [], reason: 'feels wrong' })));
+    assert(v.verdict === 'ok', 'an opinion without evidence cannot exclude a candidate');
+  });
+
+  await atest('Matcher reasoning: a posting too short to state a requirement is not judged', async () => {
+    const v = await reasoning.adjudicate(
+      { job: { title: 'Analyst' }, jobDescription: 'Full description on LinkedIn.', foundKeys: [], score: 0.9 },
+      stubLlm(JSON.stringify({ verdict: 'blocked', blockers: ['x'], reason: 'y' })));
+    assert(v === null, 'no description, no verdict');
+  });
+
+  await atest('Matcher reasoning: blocked matches are demoted, never rescored', async () => {
+    const deps = {
+      scoreJob: (job) => ({ score: job.s, breakdown: {} }),
+      llm: { isAvailable: () => true },
+      reasoning: {
+        ADJUDICATE_TOP_N: 2,
+        adjudicate: async ({ job }) => (job.title === 'Senior'
+          ? { verdict: 'blocked', blockers: ['10 years'], reason: 'too senior' }
+          : { verdict: 'ok', blockers: [], reason: '' }),
+      },
+    };
+    const jobs = [
+      { title: 'Senior', s: 0.9, description: 'x'.repeat(200) },
+      { title: 'Junior', s: 0.8, description: 'x'.repeat(200) },
+    ];
+    const base = agents.MatcherAgent.run({ analysis: { foundKeys: [] }, jobs }, null, deps);
+    assert(base.matches[0].job.title === 'Senior', 'deterministic ranking puts Senior first');
+    const out = await agents.MatcherAgent.reason(base, { analysis: { foundKeys: [] } }, deps);
+    assert(out.matches[0].job.title === 'Junior', 'blocked match demoted below the eligible one');
+    assert(out.matches[1].score === 0.9, 'the blocked match keeps its original score');
+    assert(out.blockedCount === 1, 'blocked count reported');
+  });
+
+  section('Market report');
+
+  await atest('buildReport: aggregates skills, locations and totals', async () => {
+    const jobs = [
+      { title: 'Python Developer', description: 'python linux', company: 'Acme', location: 'Berlin, DE' },
+      { title: 'Python Engineer',  description: 'python',       company: 'Globex', location: 'Berlin' },
+      { title: 'SOC Analyst',      description: 'incident response', company: 'SecOps', location: 'Munich' },
+    ];
+    const report = await buildReport(jobs, { findSkills }, 'python');
+    assertEqual(report.total_jobs, 3, 'counts all jobs');
+    assert(report.top_skills.length > 0, 'skills aggregated');
+    assert(report.top_locations.some(l => l.name === 'Berlin' && l.count === 2), 'Berlin counted twice');
+    assert(typeof report.summary === 'string' && report.summary.length > 0, 'summary produced');
+  });
+
+  // ── RAG: embeddings maths (pure, no API) ─────────────────────────────────
+  section('RAG — embeddings');
+
+  await atest('cosine: identical vectors = 1, orthogonal = 0', async () => {
+    assert(Math.abs(embeddings.cosine([1, 2, 3], [1, 2, 3]) - 1) < 1e-9, 'identical → 1');
+    assert(Math.abs(embeddings.cosine([1, 0], [0, 1]) - 0) < 1e-9, 'orthogonal → 0');
+    assertEqual(embeddings.cosine([1, 2], [1, 2, 3]), 0, 'length mismatch → 0');
+  });
+
+  await atest('relevance: calibrates raw cosine to an honest 0..1', async () => {
+    assertEqual(embeddings.relevance(0.55), 0, 'at/below floor → 0');
+    assertEqual(embeddings.relevance(0.40), 0, 'below floor clamps to 0');
+    assertEqual(embeddings.relevance(0.82), 1, 'at/above ceil → 1');
+    const mid = embeddings.relevance(0.685); // midpoint of [0.55, 0.82]
+    assert(mid > 0.45 && mid < 0.55, `midpoint ≈ 0.5 (got ${mid.toFixed(3)})`);
+    assert(embeddings.relevance(0.56) < embeddings.relevance(0.81), 'monotonic (preserves ranking)');
+  });
+
+  // ── LangGraph: routing + Writer⇄Critic loop (mocked LLM, deterministic) ───
+  section('LangGraph — multi-agent pipeline');
+
+  const gDeps = {
+    findSkills: () => [{ key: 'siem', label: 'SIEM' }],
+    analyzeRoles: () => [{ name: 'SOC Analyst', score: 0.8 }],
+    allSkills: () => [{ key: 'siem', label: 'SIEM' }, { key: 'edr', label: 'EDR' }],
+    scoreJob: () => ({ score: 0.8, breakdown: {} }),
+    recommend: () => [],
+  };
+  const noRag = { isAvailable: () => false, retrieve: async () => [] };
+
+  await atest('graph: Writer⇄Critic loop refines until the quality bar', async () => {
+    let criticCalls = 0;
+    const mockLlm = {
+      isAvailable: () => true,
+      chat: async ({ system }) => {
+        if (/Critic/.test(system)) { criticCalls++; return JSON.stringify({ score: criticCalls === 1 ? 50 : 95, feedback: 'add specifics' }); }
+        return 'Dear Manager, a tailored letter mentioning SIEM and Splunk.';
+      },
+    };
+    const r = await graph.runGraph(
+      { cvText: 'siem splunk', profile: { title: 'SOC' }, job: { title: 'SOC Analyst' }, jobDescription: 'monitor SIEM alerts' },
+      gDeps, mockLlm, noRag,
+    );
+    assert(r.coverLetter.length > 0, 'produces a letter');
+    assertEqual(r.revisions, 2, 'looped once (score 50 → refine → 95)');
+    assertEqual(r.score, 95, 'final Critic score above the bar');
+    assert(r.trace.some(t => t.node === 'Scout') && r.trace.some(t => t.node === 'Critic'), 'trace records the path');
+  });
+
+  await atest('graph: conditional route — no job → no letter (ends after Matcher)', async () => {
+    const mockLlm = { isAvailable: () => true, chat: async () => 'x' };
+    const r = await graph.runGraph({ cvText: 'siem', profile: {}, job: null, jobDescription: '' }, gDeps, mockLlm, noRag);
+    assertEqual(r.coverLetter, '', 'routed straight to END');
+    assertEqual(r.revisions, 0, 'Writer never ran');
+  });
+
+  await atest('graph: per-node error isolation (LLM failure → trace, no crash)', async () => {
+    const throwLlm = { isAvailable: () => true, chat: async () => { throw new Error('boom'); } };
+    const r = await graph.runGraph({ cvText: 'siem', profile: {}, job: { title: 'X' }, jobDescription: 'x' }, gDeps, throwLlm, noRag);
+    assert(r.trace.some(t => /error/i.test(t.note)), 'error captured in the trace, pipeline still returns');
+  });
+
+  await atest('graph: a Critic that could not run reports no score, it does not invent one', async () => {
+    const throwLlm = { isAvailable: () => true, chat: async () => { throw new Error('boom'); } };
+    const r = await graph.runGraph({ cvText: 'siem', profile: {}, job: { title: 'X' }, jobDescription: 'x' }, gDeps, throwLlm, noRag);
+    assertEqual(r.scored, false, 'the run is marked unscored');
+    assertEqual(r.score, null, 'no grade is handed to the caller');
+  });
+
+  // The Sprint-3 review produced "40+ custom detection rules" and a 22% false-
+  // positive reduction from a CV saying only "Splunk and Python". The rubric was
+  // paying for numbers and the Critic never saw the CV, so it could not have known.
+  await atest('graph: an invented metric caps the score and cannot clear the bar', async () => {
+    const FABRICATED = 'I wrote 40+ custom detection rules and cut false positives by 22%.';
+    const judgeLlm = {
+      isAvailable: () => true,
+      chat: async ({ system }) => (/Critic/.test(system)
+        // A Critic that lists fabrications and then awards 88 anyway: the cap must
+        // override its own arithmetic, not trust it.
+        ? JSON.stringify({ score: 88, feedback: 'Nicely written.',
+                           unsupported: ['40+ custom detection rules', 'cut false positives by 22%'] })
+        : FABRICATED),
+    };
+    const r = await graph.runGraph(
+      { cvText: 'Splunk and Python only.', profile: {}, job: { title: 'SOC Analyst' }, jobDescription: 'x'.repeat(150) },
+      gDeps, judgeLlm, noRag);
+    assert(r.score <= 45, `score capped at 45, got ${r.score}`);
+    assert(r.score < r.qualityBar, 'a fabricating letter cannot clear the quality bar');
+    assertEqual(r.unsupported.length, 2, 'both invented claims surfaced to the caller');
+    assert(r.revisions > 1, 'the loop sent it back for revision');
+  });
+
+  await atest('graph: an honest letter is not penalised for having no numbers', async () => {
+    const honestLlm = {
+      isAvailable: () => true,
+      chat: async ({ system }) => (/Critic/.test(system)
+        ? JSON.stringify({ score: 86, feedback: 'Good.', unsupported: [] })
+        : 'I have used Splunk and Python during my studies.'),
+    };
+    const r = await graph.runGraph(
+      { cvText: 'Splunk and Python only.', profile: {}, job: { title: 'SOC Analyst' }, jobDescription: 'x'.repeat(150) },
+      gDeps, honestLlm, noRag);
+    assertEqual(r.score, 86, 'no cap applied when nothing is unsupported');
+    assertEqual(r.unsupported.length, 0, 'no claims flagged');
+  });
+
+  await atest('graph: the Critic receives the profile, or it cannot check anything', async () => {
+    let criticSawProfile = false;
+    const spyLlm = {
+      isAvailable: () => true,
+      chat: async ({ system, user }) => {
+        if (/Critic/.test(system)) {
+          criticSawProfile = /<profile>[\s\S]*Splunk home lab[\s\S]*<\/profile>/.test(user);
+          return JSON.stringify({ score: 90, feedback: 'ok', unsupported: [] });
+        }
+        return 'draft';
+      },
+    };
+    await graph.runGraph(
+      { cvText: 'Splunk home lab', profile: {}, job: { title: 'X' }, jobDescription: 'x'.repeat(150) },
+      gDeps, spyLlm, noRag);
+    assert(criticSawProfile, 'the CV reaches the Critic as ground truth');
+  });
 
   const total = passed + failed + skipped;
   const bar   = '─'.repeat(50);

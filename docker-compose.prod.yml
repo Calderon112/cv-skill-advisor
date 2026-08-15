@@ -1,0 +1,180 @@
+# CyberCareer — production stack.
+#
+#   cp .env.prod.example .env.prod     # then fill it in — every value is required
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
+#
+# What this changes versus docker-compose.yml (which is for a laptop):
+#
+#   • Keycloak runs `start`, not `start-dev`: real hostname handling, HTTPS
+#     expected, and PostgreSQL instead of the embedded H2 database that dev mode
+#     uses. H2 there is explicitly not for production — accounts can be lost.
+#   • Caddy terminates TLS and gets Let's Encrypt certificates automatically,
+#     renewing them without being asked.
+#   • Nothing but Caddy publishes a port. The app and Keycloak are reachable only
+#     on the internal Docker network, so no one can bypass TLS by hitting :3000.
+#   • The app stores to SQLite rather than rewriting a JSON file on every change.
+#
+# DNS, before the first start — both names must point at this server's IP:
+#     A   @      <server IP>          → app.example.com
+#     A   auth   <server IP>          → auth.example.com
+# Caddy cannot obtain a certificate until they resolve.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: careerai-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"      # required: Let's Encrypt validates over HTTP, and redirects to 443
+      - "443:443"
+      - "443:443/udp"  # HTTP/3
+    environment:
+      APP_DOMAIN:  ${APP_DOMAIN:?set APP_DOMAIN in .env.prod}
+      AUTH_DOMAIN: ${AUTH_DOMAIN:?set AUTH_DOMAIN in .env.prod}
+      ACME_EMAIL:  ${ACME_EMAIL:?set ACME_EMAIL in .env.prod}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates live here. Losing this volume means re-issuing them, and
+      # Let's Encrypt rate-limits that to 5 per week per domain.
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - cybercareer
+      - keycloak
+
+  cybercareer:
+    build: .
+    image: cybercareer:3.0.0
+    container_name: cybercareer
+    restart: unless-stopped
+    # No `ports:` on purpose — Caddy proxies to it over the internal network.
+    env_file:
+      - .env.prod
+    environment:
+      PORT: 3000
+      NODE_ENV: production
+      # Never disable certificate verification on a public server. The app also
+      # refuses to start with NODE_ENV=production and this set to 1.
+      ALLOW_INSECURE_TLS: "0"
+      # Postgres, not SQLite. The stack already runs one for Keycloak, so this adds no
+      # service and no native module to build into the image — and it is the only
+      # option that lets more than one app instance share state.
+      #
+      # This used to say `sqlite`, which server.js did not read at all, and the SQLite
+      # module falls back to JSON files when better-sqlite3 is missing (it is not a
+      # dependency). The deployment would have stored accounts in a file while looking
+      # configured for a database. The app now refuses to start if this says postgres
+      # and DATABASE_URL is unset.
+      STORAGE_BACKEND: postgres
+      DATABASE_URL: postgres://${APP_DB_USER:-careerai}:${APP_DB_PASSWORD:?set a strong APP_DB_PASSWORD in .env.prod}@postgres:5432/${APP_DB_NAME:-careerai}
+      # Public identity of this deployment. The OIDC redirect URI is derived from
+      # it and must match what Keycloak has registered, exactly.
+      PUBLIC_BASE_URL: https://${APP_DOMAIN}
+      # Caddy terminates TLS, so it is the only place that can honestly promise
+      # HTTPS — but the app emits the header, so it must be told to.
+      ENABLE_HSTS: "1"
+      OIDC_PROVIDERS: keycloak
+      # Two routes to the same Keycloak: the browser follows the public one, this
+      # container cannot resolve it and uses the service name instead.
+      OIDC_KEYCLOAK_ISSUER: https://${AUTH_DOMAIN}/realms/${KC_REALM:-careerai}
+      OIDC_KEYCLOAK_INTERNAL_ISSUER: http://keycloak:8080/realms/${KC_REALM:-careerai}
+      OIDC_KEYCLOAK_CLIENT_ID: ${OIDC_KEYCLOAK_CLIENT_ID:?set it in .env.prod}
+      OIDC_KEYCLOAK_CLIENT_SECRET: ${OIDC_KEYCLOAK_CLIENT_SECRET:?set it in .env.prod}
+    volumes:
+      - cybercareer-data:/app/data
+    # Least privilege at the container boundary. The app process still runs as a user
+    # that can read the whole project directory — that is how Node works — so the
+    # containment has to come from the sandbox around it:
+    #
+    #   read_only        the image itself cannot be modified, so an attacker who gets
+    #                    code execution cannot drop a backdoor into /app and have it
+    #                    survive a restart
+    #   tmpfs /tmp       the one writable place it actually needs, wiped on restart
+    #   cap_drop ALL     a web server needs no kernel capabilities whatsoever
+    #   no-new-privileges  no setuid binary inside can escalate
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      keycloak:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: careerai-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${KC_DB_NAME:-keycloak}
+      POSTGRES_USER: ${KC_DB_USER:-keycloak}
+      POSTGRES_PASSWORD: ${KC_DB_PASSWORD:?set a strong KC_DB_PASSWORD in .env.prod}
+      # Read by db-init/01-app-database.sh on first initialisation only.
+      APP_DB_NAME: ${APP_DB_NAME:-careerai}
+      APP_DB_USER: ${APP_DB_USER:-careerai}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?set a strong APP_DB_PASSWORD in .env.prod}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # Creates the application's own database and user, separate from Keycloak's, so
+      # neither can read the other's tables. Runs once, when the volume is empty.
+      - ./db-init:/docker-entrypoint-initdb.d:ro
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      # Keycloak fails to boot against a database still starting up, and then stays
+      # down. Wait for it to actually accept connections.
+      test: ["CMD-SHELL", "pg_isready -U ${KC_DB_USER:-keycloak} -d ${KC_DB_NAME:-keycloak}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: careerai-keycloak
+    restart: unless-stopped
+    # `start`, not `start-dev`. Dev mode uses an in-memory H2 database and turns
+    # off hostname checks — losing accounts on restart and accepting any Host
+    # header.
+    #
+    # NOT `--optimized`. That flag promises a server already built for this exact
+    # configuration, and the stock image is built for H2 — KC_DB is a build-time
+    # option, not a runtime one. On a fresh volume Keycloak refuses outright:
+    #   "The '--optimized' flag was used for first ever server start."
+    # and the container restart-loops while Caddy answers 502.
+    #
+    # Plain `start` runs the build itself whenever the build options changed. It
+    # costs 30-60 s on the first start and nothing afterwards. Baking `kc.sh build
+    # --db=postgres` into a custom image would buy that time back, at the price of
+    # another image to maintain.
+    command: start
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/${KC_DB_NAME:-keycloak}
+      KC_DB_USERNAME: ${KC_DB_USER:-keycloak}
+      KC_DB_PASSWORD: ${KC_DB_PASSWORD}
+      # The public URL users reach. Every URL Keycloak advertises — issuer,
+      # authorization endpoint, the links inside its emails — is built from this.
+      KC_HOSTNAME: https://${AUTH_DOMAIN}
+      # Caddy speaks plain HTTP to this container, so Keycloak must accept it while
+      # still believing it is behind HTTPS. Without the proxy header setting it
+      # would generate http:// links and the OIDC flow would break.
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+      KC_HEALTH_ENABLED: "true"
+      # First-boot admin only. Change the password immediately after, then remove
+      # these two lines — they are read on every start and sit in `docker inspect`.
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_ADMIN_USER:?set it in .env.prod}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD:?set a strong one in .env.prod}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  cybercareer-data:
+  postgres-data:
+  caddy-data:
+  caddy-config:

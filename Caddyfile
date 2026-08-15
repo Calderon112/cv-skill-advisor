@@ -1,0 +1,75 @@
+# Caddy — TLS termination and reverse proxy for the production stack.
+#
+# Certificates are obtained from Let's Encrypt and renewed automatically; there is
+# nothing to run on a schedule. It needs ports 80 and 443 open, and both domains
+# resolving to this server, before the first start.
+
+{
+	email {$ACME_EMAIL}
+	# Uncomment while testing to use the staging CA. Let's Encrypt allows only 5
+	# certificates per domain per week, and a misconfigured retry loop burns them.
+	# acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+
+# ── The application ─────────────────────────────────────────────────────────
+{$APP_DOMAIN} {
+	encode zstd gzip
+
+	# The app is not published on the host; this name only resolves on the
+	# internal Docker network.
+	reverse_proxy cybercareer:3000
+
+	# The app sets its own CSP, HSTS and frame options — it knows what it loads,
+	# and duplicating them here would produce two conflicting headers.
+	header {
+		# Caddy advertises itself by default; no reason to name the software.
+		-Server
+	}
+
+	log {
+		output file /data/access-app.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+}
+
+# ── Keycloak ────────────────────────────────────────────────────────────────
+{$AUTH_DOMAIN} {
+	encode zstd gzip
+
+	reverse_proxy keycloak:8080 {
+		# Keycloak builds its issuer and redirect URLs from these. Without them it
+		# would emit http:// links behind the proxy and the OIDC flow would fail
+		# with a "redirect_uri mismatch" that points nowhere obvious.
+		header_up X-Forwarded-Proto https
+		header_up X-Forwarded-Host {host}
+		header_up X-Forwarded-Port 443
+	}
+
+	# The admin console is reachable from the internet by default. Restrict it to
+	# the addresses you administer from — the login page is otherwise exposed to
+	# every password-guessing bot on the internet.
+	#
+	# Replace with your own IP and uncomment:
+	# @admin path /admin/*
+	# handle @admin {
+	# 	@blocked not remote_ip 203.0.113.4
+	# 	respond @blocked 403
+	# 	reverse_proxy keycloak:8080 {
+	# 		header_up X-Forwarded-Proto https
+	# 		header_up X-Forwarded-Host {host}
+	# 	}
+	# }
+
+	header {
+		-Server
+	}
+
+	log {
+		output file /data/access-auth.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+}

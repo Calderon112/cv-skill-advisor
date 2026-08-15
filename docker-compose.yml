@@ -1,0 +1,87 @@
+# CyberCareer — one-command local deployment.
+#
+#   cp .env.example .env      # required: the file is read at startup (may stay empty)
+#   docker compose up --build
+#   open http://localhost:3000
+#
+# Every API key is optional. Without one, the AI features fall back to
+# deterministic templates and keyword matching instead of failing.
+
+services:
+  cybercareer:
+    build: .
+    image: cybercareer:3.0.0
+    container_name: cybercareer
+    ports:
+      - "${PORT:-3000}:3000"
+    env_file:
+      - .env
+    environment:
+      # Always bind to the container's own port; the host port is mapped above.
+      PORT: 3000
+      # Overrides whatever .env says. ALLOW_INSECURE_TLS exists for a developer host
+      # sitting behind a TLS-intercepting proxy or antivirus; inside the container
+      # there is no such interception, so turning off certificate verification would
+      # expose every outbound API key for no benefit. The image runs with
+      # NODE_ENV=production, where the server now refuses to start with that flag set —
+      # so without this line, `docker compose up` would fail for anyone whose .env
+      # carries it.
+      ALLOW_INSECURE_TLS: "0"
+    volumes:
+      # User database, RAG embedding cache and LLM usage counters survive a
+      # rebuild. Remove with: docker compose down -v
+      - cybercareer-data:/app/data
+    restart: unless-stopped
+
+  # ── Identity provider (optional) ─────────────────────────────────────────
+  #
+  # Start it only when you want provider sign-in:
+  #     docker compose --profile identity up keycloak
+  #
+  # Name the service. A bare `--profile identity up` ALSO starts `cybercareer`,
+  # because profiles add services rather than restrict to them — and that second
+  # copy dies on "port 3000 already in use" when the app runs via npm start.
+  #
+  # Keycloak then owns the login form and brokers Google / GitHub / LinkedIn /
+  # Microsoft, so CareerAI needs no per-network code — you add those inside
+  # Keycloak under Identity providers. Admin console: http://localhost:8080
+  #
+  # `start-dev` uses an embedded database and disables HTTPS. That is correct for
+  # local development and NOT safe to expose publicly: for a real deployment use
+  # `start`, an external Postgres, and TLS in front.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: careerai-keycloak
+    profiles: ["identity"]
+    command: start-dev
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_HEALTH_ENABLED: "true"
+      # Keycloak must advertise the URL the BROWSER uses, not its container name —
+      # the issuer and the login redirect both have to be reachable from the host.
+      # The app container reaches it separately via OIDC_*_INTERNAL_ISSUER.
+      KC_HOSTNAME: http://localhost:${KEYCLOAK_PORT:-8080}
+      KC_HOSTNAME_STRICT: "false"
+    ports:
+      - "${KEYCLOAK_PORT:-8080}:8080"
+    volumes:
+      # Realm, clients and users survive a restart. Wipe with: docker compose down -v
+      - keycloak-data:/opt/keycloak/data
+      # LOCAL DEVELOPMENT ONLY — deliberately absent from docker-compose.prod.yml.
+      #
+      # Norton Web/Mail Shield intercepts TLS on this developer machine: it presents
+      # its own certificate for smtp.resend.com, signed by a root only the Windows
+      # store knows about. Node accepts it (it reads that store); the JVM inside this
+      # container does not, and outbound mail fails with
+      #   PKIX path building failed: unable to find valid certification path
+      #
+      # Trusting that root here fixes local testing. It is an interception CA, so
+      # trusting it means accepting that Norton can read this container's TLS traffic
+      # — acceptable on a laptop that is already being intercepted, never on a server.
+      - ./certs:/opt/keycloak/conf/truststores:ro
+    restart: unless-stopped
+
+volumes:
+  cybercareer-data:
+  keycloak-data:
