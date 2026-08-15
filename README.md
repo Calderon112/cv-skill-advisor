@@ -139,6 +139,41 @@ The Writer revises until the draft clears the bar or the revision limit is reach
 The final score and the number of revisions are both displayed, so a weak letter is
 visible rather than quietly handed over.
 
+#### Which agents reason, and which do not
+
+Each agent runs a deterministic core first, and only Scout, Matcher and the two
+letter agents deliberate on top of it. The split is a design decision, not an
+omission:
+
+| Agent | Deterministic core | Deliberation |
+|---|---|---|
+| Scout | Skill lookup over the 246-entry taxonomy | Proposes skills the CV *demonstrates* without naming them |
+| Matcher | Published score formula (skills 45 / role 20 / location 10 / remote 10 / seniority 10 / pay 5) | Decides eligibility — hard blockers the weights cannot express |
+| Writer | — | Drafts and revises against the Critic's objections |
+| Critic | — | Scores the draft, decides whether it goes back |
+
+The match score itself is never produced by a model. An applicant must be able to
+ask why a posting scored 72 and get the same answer tomorrow; a model deciding that
+number would make it irreproducible and unexplainable. The model is used where
+variability is useful and verifiable, not where it destroys an explanation.
+
+Both deliberative passes are constrained by a guard that runs on their output:
+
+- A skill Scout infers is accepted only if its quoted evidence appears **verbatim**
+  in the CV, and only if the key exists in the taxonomy. Measured against the
+  production model, this rejects real overreach: asked to read a CV describing a
+  pfSense home lab, the model proposed `firewall` with a paraphrased quote and the
+  guard threw it out. The bias is deliberate — losing a true skill costs less than
+  putting an invented qualification into a letter the applicant has to defend.
+- A `blocked` verdict from Matcher is discarded unless it cites the requirement it
+  relies on. On two postings scoring an identical 0.82, the senior role was blocked
+  on three quoted requirements (eight years' experience, a completed degree, C1
+  German) and the Werkstudent role passed, its "wünschenswert" items correctly read
+  as non-binding.
+
+Without an API key, both passes return nothing and the agents fall back to their
+deterministic results. No feature disappears; the reasoning does.
+
 Language (auto/English/German), tone and length are selectable. A pre-composed
 application email opens directly in Gmail.
 

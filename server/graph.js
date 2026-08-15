@@ -15,6 +15,7 @@
 
 const { StateGraph, START, END, Annotation } = require('@langchain/langgraph');
 const { ScoutAgent, MatcherAgent } = require('./agents.js');
+const reasoning = require('./reasoning.js');
 
 const QUALITY_BAR = Number(process.env.GRAPH_QUALITY_BAR) || 80; // 0..100
 const MAX_REVISIONS = Number(process.env.GRAPH_MAX_REVISIONS) || 2;
@@ -56,20 +57,39 @@ function firstJson(text) {
  * @param rag   server/rag.js (retrieve, isAvailable) — optional
  */
 // Build + compile the graph (shared by the invoke and streaming callers).
-function buildGraph(deps, llm, rag) {
+function buildGraph(baseDeps, llm, rag) {
+  // Injected rather than imported inside the agents, so a test can hand them a
+  // stub model — or nothing at all, and watch them fall back to the deterministic
+  // path. buildAgentDeps() in server.js stays unaware of reasoning.
+  const deps = { ...baseDeps, llm, reasoning };
+
   // ── Nodes ────────────────────────────────────────────────────────────────
-  const scout = (s) => {
-    const analysis = ScoutAgent.run({ cvText: s.cvText || '' }, null, deps);
-    return { analysis, trace: [{ node: 'Scout', note: `${analysis.foundKeys.length} skills · top role: ${analysis.roles?.[0]?.name || '—'}` }] };
+  // Both nodes are two-phase: a deterministic result first, then a deliberation
+  // that may extend it. The order is deliberate — reasoning never runs without a
+  // baseline to fall back to, so a model outage degrades the answer instead of
+  // failing the run.
+  const scout = async (s) => {
+    const base = ScoutAgent.run({ cvText: s.cvText || '' }, null, deps);
+    const analysis = await ScoutAgent.reason(base, { cvText: s.cvText || '' }, deps);
+    const gained = analysis.foundKeys.length - base.foundKeys.length;
+    const note = `${analysis.foundKeys.length} skills`
+      + (gained > 0 ? ` (+${gained} inferred from evidence)` : '')
+      + (analysis.rejected?.length ? ` · ${analysis.rejected.length} claim(s) rejected` : '')
+      + ` · top role: ${analysis.roles?.[0]?.name || '—'}`;
+    return { analysis, trace: [{ node: 'Scout', note }] };
   };
 
-  const matcher = (s) => {
+  const matcher = async (s) => {
     // Score the provided job list, or the single target job when scoring one posting
     // (so the trace never reads a confusing "0 jobs scored").
     const toScore = (s.jobs && s.jobs.length) ? s.jobs : (s.job ? [s.job] : []);
-    const matching = MatcherAgent.run({ analysis: s.analysis, jobs: toScore }, null, deps);
+    const base = MatcherAgent.run({ analysis: s.analysis, jobs: toScore }, null, deps);
+    const matching = await MatcherAgent.reason(base, { analysis: s.analysis }, deps);
     const job = (matching.matches[0] && matching.matches[0].job) || s.job || null;
-    return { matching, job, trace: [{ node: 'Matcher', note: `${matching.matches.length} job(s) scored · ${matching.highCount} strong` }] };
+    const note = `${matching.matches.length} job(s) scored · ${matching.highCount} strong`
+      + (matching.adjudicated ? ` · ${matching.adjudicated} adjudicated` : '')
+      + (matching.blockedCount ? `, ${matching.blockedCount} blocked on eligibility` : '');
+    return { matching, job, trace: [{ node: 'Matcher', note }] };
   };
 
   const writer = async (s) => {

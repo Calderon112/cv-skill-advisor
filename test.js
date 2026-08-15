@@ -7,6 +7,7 @@
 const zlib   = require('zlib');
 const crypto = require('crypto');
 const agents = require('./server/agents.js');
+const reasoning = require('./server/reasoning.js');
 const dedup  = require('./server/dedup.js');
 const rerank = require('./rerank.js');
 const { buildReport } = require('./server/report.js');
@@ -751,6 +752,108 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
     assert(result.recommendations.length === 0, 'no recommendations without injected recommender');
   });
 
+
+  section('Agent reasoning layer');
+
+  // A stub model: returns whatever the test scripted, so these exercise the guard
+  // rather than a provider. The guard is the security boundary — a model that
+  // invents a qualification must not be able to put it in a cover letter.
+  const stubLlm = (reply) => ({ isAvailable: () => true, chat: async () => reply });
+  const VOCAB = [
+    { key: 'firewall', label: 'Firewall' },
+    { key: 'siem', label: 'SIEM' },
+    { key: 'kubernetes', label: 'Kubernetes' },
+  ];
+  const CV = 'Ich habe zu Hause ein Labor mit pfSense aufgebaut und den Netzwerkverkehr segmentiert. '
+           + 'Im Studium Grundlagen der IT-Sicherheit, Python und Linux.';
+
+  await atest('Scout reasoning: accepts an inferred skill backed by a verbatim CV quote', async () => {
+    const out = await reasoning.inferSkills(
+      { cvText: CV, foundKeys: [], vocabulary: VOCAB },
+      stubLlm(JSON.stringify([
+        { key: 'firewall', evidence: 'ein Labor mit pfSense aufgebaut', confidence: 0.9 },
+      ])));
+    assert(out && out.inferred.length === 1, 'one skill inferred');
+    assert(out.inferred[0].key === 'firewall', 'the firewall skill');
+    assert(out.inferred[0].evidence.includes('pfSense'), 'evidence carried through');
+  });
+
+  await atest('Scout reasoning: REJECTS a skill whose evidence is not in the CV', async () => {
+    const out = await reasoning.inferSkills(
+      { cvText: CV, foundKeys: [], vocabulary: VOCAB },
+      stubLlm(JSON.stringify([
+        { key: 'siem', evidence: 'drei Jahre Splunk im SOC', confidence: 0.95 },
+      ])));
+    assert(out && out.inferred.length === 0, 'nothing accepted');
+    assert(out.rejected.length === 1 && /evidence/.test(out.rejected[0].why), 'rejected for missing evidence');
+  });
+
+  await atest('Scout reasoning: rejects a key outside the taxonomy', async () => {
+    const out = await reasoning.inferSkills(
+      { cvText: CV, foundKeys: [], vocabulary: VOCAB },
+      stubLlm(JSON.stringify([{ key: 'quantum-crypto', evidence: 'pfSense', confidence: 1 }])));
+    assert(out.inferred.length === 0 && out.rejected.length === 1, 'invented key refused');
+  });
+
+  await atest('Scout reasoning: no model configured leaves the analysis untouched', async () => {
+    const out = await reasoning.inferSkills(
+      { cvText: CV, foundKeys: [], vocabulary: VOCAB }, { isAvailable: () => false });
+    assert(out === null, 'returns null so the caller keeps the deterministic result');
+  });
+
+  await atest('Scout reasoning: malformed model output does not throw', async () => {
+    const out = await reasoning.inferSkills(
+      { cvText: CV, foundKeys: [], vocabulary: VOCAB }, stubLlm('sorry, I cannot help'));
+    assert(out === null, 'unparseable reply degrades to null');
+  });
+
+  const LONG_POSTING = 'Wir suchen eine erfahrene Fachkraft. Voraussetzung sind mindestens zehn Jahre '
+    + 'Berufserfahrung im Bereich IT-Sicherheit sowie ein abgeschlossenes Studium. Kenntnisse in Python '
+    + 'und Linux werden vorausgesetzt. Die Stelle ist unbefristet und in Vollzeit zu besetzen.';
+
+  await atest('Matcher reasoning: a blocked verdict must cite the requirement', async () => {
+    const v = await reasoning.adjudicate(
+      { job: { title: 'Senior Analyst' }, jobDescription: LONG_POSTING, foundKeys: ['python'], score: 0.81 },
+      stubLlm(JSON.stringify({ verdict: 'blocked', blockers: ['mindestens zehn Jahre Berufserfahrung'], reason: 'Junior profile.' })));
+    assert(v.verdict === 'blocked' && v.blockers.length === 1, 'blocked with a cited requirement');
+  });
+
+  await atest('Matcher reasoning: "blocked" with no cited requirement is downgraded to ok', async () => {
+    const v = await reasoning.adjudicate(
+      { job: { title: 'Analyst' }, jobDescription: LONG_POSTING, foundKeys: [], score: 0.7 },
+      stubLlm(JSON.stringify({ verdict: 'blocked', blockers: [], reason: 'feels wrong' })));
+    assert(v.verdict === 'ok', 'an opinion without evidence cannot exclude a candidate');
+  });
+
+  await atest('Matcher reasoning: a posting too short to state a requirement is not judged', async () => {
+    const v = await reasoning.adjudicate(
+      { job: { title: 'Analyst' }, jobDescription: 'Full description on LinkedIn.', foundKeys: [], score: 0.9 },
+      stubLlm(JSON.stringify({ verdict: 'blocked', blockers: ['x'], reason: 'y' })));
+    assert(v === null, 'no description, no verdict');
+  });
+
+  await atest('Matcher reasoning: blocked matches are demoted, never rescored', async () => {
+    const deps = {
+      scoreJob: (job) => ({ score: job.s, breakdown: {} }),
+      llm: { isAvailable: () => true },
+      reasoning: {
+        ADJUDICATE_TOP_N: 2,
+        adjudicate: async ({ job }) => (job.title === 'Senior'
+          ? { verdict: 'blocked', blockers: ['10 years'], reason: 'too senior' }
+          : { verdict: 'ok', blockers: [], reason: '' }),
+      },
+    };
+    const jobs = [
+      { title: 'Senior', s: 0.9, description: 'x'.repeat(200) },
+      { title: 'Junior', s: 0.8, description: 'x'.repeat(200) },
+    ];
+    const base = agents.MatcherAgent.run({ analysis: { foundKeys: [] }, jobs }, null, deps);
+    assert(base.matches[0].job.title === 'Senior', 'deterministic ranking puts Senior first');
+    const out = await agents.MatcherAgent.reason(base, { analysis: { foundKeys: [] } }, deps);
+    assert(out.matches[0].job.title === 'Junior', 'blocked match demoted below the eligible one');
+    assert(out.matches[1].score === 0.9, 'the blocked match keeps its original score');
+    assert(out.blockedCount === 1, 'blocked count reported');
+  });
 
   section('Market report');
 
