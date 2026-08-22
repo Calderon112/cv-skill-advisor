@@ -105,6 +105,13 @@
            border: 1px solid var(--line); background: var(--bg-soft); }
   .video iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
   .video .todo { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); text-align: center; padding: 20px; }
+
+/* Screenshot. width/height are on the <img> so the browser reserves the box
+   before the file arrives and the page does not jump as it loads. */
+.shot{margin:0 0 1.5rem}
+.shot img{width:100%;height:auto;display:block;border-radius:10px;
+  border:1px solid var(--line,#d8dee9);box-shadow:0 8px 28px rgba(0,0,0,.12)}
+.shot figcaption{margin-top:.65rem;font-size:.9rem;opacity:.75;text-align:center}
 </style>
 </head>
 <body>
@@ -307,6 +314,11 @@
 
            Delete the placeholder div below once either is in place.
            ──────────────────────────────────────────────────────────────────── -->
+      <figure class="shot">
+        <img src="screenshot-dashboard.png" alt="CareerAI dashboard: postings ranked by match score, each showing its skill breakdown"
+             width="1400" height="900" loading="lazy" decoding="async">
+        <figcaption>Postings ranked by match score. Every number opens into the breakdown that produced it.</figcaption>
+      </figure>
       <div class="todo">Product video — coming shortly.<br>
         Meanwhile, the app is live at
         <a href="https://careerai-jk.duckdns.org">careerai-jk.duckdns.org</a>.</div>

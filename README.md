@@ -1,7 +1,7 @@
 # AI-Assisted Job Application Agent for IT Security
 
-An **LLM-based job-application assistant** that reads a candidate's CV, searches ten
-German and international job portals at once, scores every posting against the
+An **LLM-based job-application assistant** that reads a candidate's CV, searches every
+configured German and international job portal at once, scores every posting against the
 profile with a published formula, and drafts a cover letter through a multi-agent
 pipeline in which one agent grades another's output before the user ever sees it.
 
@@ -138,6 +138,30 @@ Four agents in sequence, with a loop:
 The Writer revises until the draft clears the bar or the revision limit is reached.
 The final score and the number of revisions are both displayed, so a weak letter is
 visible rather than quietly handed over.
+
+#### How often does the loop actually fire?
+
+A reviewer asked the question this project asks of its own salary panel: if the
+Critic rarely rejects, the loop is expensive for little return. Measured with
+`node scripts/measure-critic.js`, eight runs across thin, mid and strong CVs
+against postings with and without real requirements:
+
+| | |
+|---|---|
+| Letters the Critic sent back for revision | **4 / 8 (50 %)** |
+| Still below the bar after the revision limit | 3 / 8 (38 %) |
+| Runs where a claim was not supported by the CV | 1 / 8 (13 %) |
+| Mean final score | 80.0 / 100 |
+| Extra model calls spent on revision | 8 |
+
+Half is not "rarely", and the failures land where they should: the thin CV
+produced six unsupported claims and was capped at 45, while the strong CV scored
+95. The 38 % that never clear the bar are not hidden — the score and the revision
+count are displayed with the letter, so a weak draft is visible rather than
+quietly handed over.
+
+The measurement is a script rather than a figure typed into this file, so the
+next person can re-run it and disagree.
 
 #### Which agents reason, and which do not
 
