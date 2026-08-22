@@ -66,7 +66,7 @@ Skill detection is still a substring match — you own that on slide 13.
 - **Anyone whose CV and the market speak different words.** That is the one problem this system
   actually solves.
 
-Everything else — seven job boards, the career chart, the cover-letter agent — follows from that.
+Everything else — eleven job boards, the career chart, the cover-letter agent — follows from that.
 
 ---
 
@@ -224,7 +224,7 @@ START → Scout → Matcher ──(a job?)──no──→ END
 
 | Layer | What it contributes | Remove it and… |
 |---|---|---|
-| **Deterministic core**<br>taxonomy · scorer · scrapers | 232 skills, seven job boards in parallel, fuzzy cross-source dedup, a transparent six-criterion score you can audit by hand. | …there is no product. This is the floor. |
+| **Deterministic core**<br>taxonomy · scorer · scrapers | 232 skills, eleven job boards in parallel, fuzzy cross-source dedup, a transparent six-criterion score you can audit by hand. | …there is no product. This is the floor. |
 | **RAG**<br>embeddings · cosine · 65 chunks | **1.** Ranks postings by meaning — SOC 51 % for a CV that never writes "SIEM". **2.** Grounds the assistant, which returns its sources. **3.** Feeds the Writer context before it drafts. | …ranking falls back to keywords, the assistant can hallucinate a certification, and the letter is written from nothing. |
 | **LangGraph**<br>state · edges · loop | Typed shared state, conditional routing (no job → no letter), a Writer⇄Critic self-improvement loop, per-node error isolation, a live trace streamed to the UI. | …a linear chain: no loop, no branch, and one failing agent takes the whole run down. |
 
@@ -261,6 +261,36 @@ twice, and then stop.
 > What's next: my skill matcher is still keyword-based. "Log correlation" will never find "SIEM"
 > through a synonym table. That belongs to the semantic layer — which I already have, for job
 > ranking. Extending it to skill detection is the first item on my backlog.
+
+---
+
+## Note on numbers used in this deck
+
+Two reviewers independently found the same defect: the slide count of job
+platforms disagreed with the README, which disagreed with the live interface. For
+a pitch whose argument is that every figure can be checked, that is the worst
+possible inconsistency, and it is the kind people notice.
+
+The count is conditional, so state the condition:
+
+> **Eight sources run with no API key configured. Eleven when every optional key
+> is set** — Jooble, Adzuna and the Apify-backed Indeed each need their own.
+
+Say "eleven" on a slide only where the deployment being demonstrated actually has
+those keys. Otherwise say eight.
+
+The same discipline applies to the security slide. "Enterprise-grade security by
+default" invites a question it cannot survive, and this project's own README is
+more honest than that phrase: no refresh-token rotation, rate limits held in
+process memory, PostgreSQL unreplicated. Name what is actually there instead —
+each of these is verifiable in the repository during Q&A:
+
+- OIDC with PKCE (S256), single-use state, nonce validated
+- CSP without `unsafe-inline`; static files served from an allow-list
+- Containers run `read_only`, `cap_drop: ALL`, `no-new-privileges`
+- No password stored by this application; identity is delegated entirely
+
+Specific claims hold up under questioning. Superlatives do not.
 
 ---
 
