@@ -8,7 +8,7 @@ pipeline in which one agent grades another's output before the user ever sees it
 **Live application:** <https://careerai-jk.duckdns.org>
 **Project website:** <https://calderon112.github.io/cv-skill-advisor/>
 
-Final-year project, Westfälische Hochschule Gelsenkirchen.
+Built for the German IT-security job market.
 
 ---
 
