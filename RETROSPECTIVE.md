@@ -178,9 +178,31 @@ commits; it never protected the deliverable, and nothing said so.
 
 ---
 
+## 10. A fix kept beside the code instead of inside it
+
+**Symptom.** None, which is the point. `PATCH-pdf-fix.js` sat at the repository
+root for three sprints: 92 lines of step-by-step instructions for editing
+`extractPdfText()`, written while debugging PDFs that Word, Canva and Acrobat
+produce.
+
+**Cause.** Writing the fix down was the right instinct. Leaving it as a file was
+not. It was applied to `server.js` early on, the README stopped referencing it,
+and it became a stale duplicate of a function that had since moved on — 53 lines
+describing 40 that no longer matched.
+
+**Fix.** The reasoning it carried — why three extraction attempts exist, and which
+real file defeated each preceding one — is now a comment above the function it
+explains. The file is deleted.
+
+**Lesson.** Documentation that lives beside the code instead of inside it drifts
+from it silently, and there is no test for a stale file. A Sprint-1 reviewer
+flagged the workflow; three sprints passed before it was acted on.
+
+---
+
 ## The pattern
 
-Seven of these nine produced a *plausible* wrong answer rather than an error: a
+Eight of these ten produced a *plausible* wrong answer rather than an error: a
 default that looked chosen, a score that looked earned, a skill that looked
 detected, a search that looked complete. None of them crashed. Most were found by
 reading, by someone other than the author, or by measuring something that had been
