@@ -135,3 +135,64 @@ descriptor, not video.
    file in `docs/`.
 
 Both placeholders are already in the files, with instructions in the comments.
+
+---
+
+## Voiceover, ready to paste
+
+The narration above, with the stage directions stripped out, in one block. Paste
+it into a text-to-speech tool and record the screen separately, then lay the two
+together.
+
+The bracketed markers are pauses, not words. ElevenLabs and most others honour a
+line break as a short breath; the marks are there so you can hear where the shot
+changes even before the picture is cut.
+
+**297 words — about 2:00 at a normal reading pace.** If your take runs long, the
+cut is the third paragraph, not the fourth.
+
+```
+Applying for a security job in Germany means doing the same work over and over.
+Different portals, no shared interface. Twenty requirements per posting, and no
+indication which ones you already meet.
+
+[pause]
+
+You upload your CV once. The system reads it, including scanned PDFs, and extracts
+what you can actually demonstrate.
+
+One search reaches every configured portal. Eight without any API key, eleven with
+them. The same vacancy posted three times is merged into one card.
+
+[pause]
+
+Every posting gets a match score. Not from a language model. From a published
+formula: skills forty-five, role twenty, location ten, remote ten, seniority ten,
+pay five. The same CV and the same posting give the same number tomorrow. And it
+names the exact skills standing between you and that job.
+
+[pause]
+
+The cover letter is written by one agent and graded by another, out of a hundred,
+against the posting itself. Below the bar, it goes back for revision. In testing,
+half the letters were sent back at least once. And a letter claiming something
+your CV does not support cannot pass at all.
+
+[pause]
+
+From there you track every application through to the interview.
+
+CareerAI. Live at careerai dash j k dot duckdns dot org.
+```
+
+**On the last line.** Spell the URL out phonetically as written above, or the
+synthetic voice will read "careerai-jk.duckdns.org" as one unpronounceable word.
+Show the URL on screen at the same time; nobody types a domain from audio alone.
+
+**On the numbers.** "Forty-five, twenty, ten, ten, ten, five" read as words is
+deliberate — a TTS engine given "45%" often produces "forty-five percent sign".
+Check that one line before recording the whole take.
+
+**Voice choice.** Pick one and stay with it across the whole video. A warm, level
+delivery suits this material; anything with sales energy fights the content, which
+is arguing that the numbers can be checked.
