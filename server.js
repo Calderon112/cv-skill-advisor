@@ -1954,42 +1954,7 @@ const DOMAIN_MATCH_TERMS = {
 // depending on the posting saying what it is. In practice German postings are
 // explicit about this: "Werkstudent (m/w/d)" is in the title, because that is what
 // the applicant is searching for.
-const EMPLOYMENT_TERMS = {
-  werkstudent: [
-    'werkstudent', 'working student', 'studentische hilfskraft', 'studentischer mitarbeiter',
-    'shk', 'hiwi', 'wissenschaftliche hilfskraft', 'student assistant', 'studentenjob',
-  ],
-  praktikum: [
-    'praktikum', 'praktikant', 'internship', 'intern ', 'trainee', 'pflichtpraktikum',
-    'praxissemester', 'volontariat',
-  ],
-  ausbildung: [
-    'ausbildung', 'auszubildende', 'azubi', 'duales studium', 'dualer student',
-    'apprentice', 'apprenticeship', 'berufsausbildung', 'lehrstelle',
-  ],
-  entry: [
-    'junior', 'einsteiger', 'berufseinsteiger', 'entry level', 'entry-level',
-    'absolvent', 'graduate', 'trainee', 'nachwuchs', 'einstieg',
-  ],
-};
-
-// Keyword hints appended to the query so the sources return these postings at all.
-// Filtering a result set that never contained a single working-student role would
-// simply return nothing.
-const EMPLOYMENT_QUERY_HINT = {
-  werkstudent: 'Werkstudent',
-  praktikum:   'Praktikum',
-  ausbildung:  'Ausbildung',
-  entry:       'Junior',
-};
-
-function jobMatchesEmployment(job, employment) {
-  if (!employment || employment === 'all') return true;
-  const terms = EMPLOYMENT_TERMS[employment];
-  if (!terms) return true;
-  const hay = `${job.title || ''} ${job.description || ''}`.toLowerCase();
-  return terms.some(t => hay.includes(t));
-}
+const { EMPLOYMENT_TERMS, EMPLOYMENT_QUERY_HINT, jobMatchesEmployment } = require('./server/employment.js');
 
 // Unambiguous: these words belong to the guarding trade and to nothing else, so
 // they disqualify wherever they appear, title or description.
@@ -3908,6 +3873,12 @@ const server = http.createServer(async (req, res) => {
     const sector   = parsedUrl.searchParams.get('sector')   || 'all';
     const platform = parsedUrl.searchParams.get('platform') || 'bundesagentur';
     const distance = parsedUrl.searchParams.get('distance') || 'all';
+    // /api/scrape-all has honoured this since Werkstudent filtering was added; this
+    // endpoint accepted the same parameter and silently dropped it, so a caller
+    // asking for working-student roles got the unfiltered list back and no
+    // indication why. Nothing reported it: an ignored query parameter looks exactly
+    // like an applied one.
+    const employment = parsedUrl.searchParams.get('employment') || 'all';
     const location = buildSearchLocation(parsedUrl.searchParams);
     const keyword  = buildSearchKeyword(parsedUrl.searchParams);
     const depth    = pageDepth(parsedUrl.searchParams);
@@ -4001,6 +3972,10 @@ const server = http.createServer(async (req, res) => {
     }
 
     // Keep only jobs that are on-topic for the chosen domain (e.g. Cybersecurity).
+    if (employment && employment !== 'all' && jobs.length > 0) {
+      jobs = jobs.filter(job => jobMatchesEmployment(job, employment));
+    }
+
     if (sector && sector !== 'all' && jobs.length > 0) {
       jobs = jobs.filter(job => jobMatchesSector(job, sector));
     }
@@ -4014,7 +3989,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (platform !== 'all') logScrape(`■ ${platform}: ${jobs.length} offers returned`);
-    sendJson(res, 200, { jobs, source, platformBreakdown, profileUsed: !!profileText, query: { region, sector, platform, distance, location } });
+    sendJson(res, 200, { jobs, source, platformBreakdown, profileUsed: !!profileText, query: { region, sector, employment, platform, distance, location } });
     return;
   }
 
