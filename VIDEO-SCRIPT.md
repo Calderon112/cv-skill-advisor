@@ -1,7 +1,7 @@
 # Demo video — shot list and narration
 
-**Target: 2:00.** The submission asks for two to three minutes; the existing
-recording runs 5:08. This is not a trim of that take, it is a shorter film — the
+**Target: 2:00.** Two minutes is what a prospect will give an unfamiliar product
+before deciding; the existing recording runs 5:08. This is not a trim of that take, it is a shorter film — the
 cuts below drop whole scenes rather than shortening each one.
 
 **Principle.** Every shot must show something the viewer could not have assumed.
@@ -148,8 +148,8 @@ The bracketed markers are pauses, not words. ElevenLabs and most others honour a
 line break as a short breath; the marks are there so you can hear where the shot
 changes even before the picture is cut.
 
-**297 words — about 2:00 at a normal reading pace.** If your take runs long, the
-cut is the third paragraph, not the fourth.
+**201 words — about 80 seconds of voice.** The remaining forty seconds are shot holds
+and breathing room. If a take runs long, cut the third paragraph, not the fourth.
 
 ```
 Applying for a security job in Germany means doing the same work over and over.
