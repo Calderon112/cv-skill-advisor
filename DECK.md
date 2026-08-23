@@ -1,4 +1,4 @@
-# CyberCareer — Sprint 3 defence deck
+# CareerAI — pitch deck
 
 Fourteen slides, seven minutes. Spoken lines are quoted. Lines marked **Stage** are for you.
 Every figure was measured against the running system; nothing here is estimated.
@@ -75,7 +75,7 @@ Everything else — eleven job boards, the career chart, the cover-letter agent 
 > ⚠ Read this before you click anything.
 
 - Both free LLM quotas — Gemini and OpenRouter — are spent. **Do not generate a cover letter live**,
-  and **do not run the LangGraph pipeline**. The jury would watch an HTTP 429.
+  and **do not run the LangGraph pipeline**. The room would watch an HTTP 429.
 - Scrape **once**. Arbeitnow rate-limits the second search of a session and reports zero.
 - Read every count **off the screen**. They move between runs.
 - The embeddings quota is separate and still works: **semantic ranking is safe to demo**.
@@ -93,7 +93,7 @@ Everything else — eleven job boards, the career chart, the cover-letter agent 
 > Seventy-five green tests never saw it. My test file contained **its own copy** of the matcher.
 > The tests exercised a clone, not the code I ship.
 
-**Stage.** Nobody expects a student to open with their own defects. This buys the jury's trust for
+**Stage.** Almost nobody opens with their own defects. This buys the room's trust for
 every number that follows.
 
 ---
