@@ -2526,6 +2526,33 @@ function pullTextFromStream(streamStr, out) {
   }
 }
 
+/**
+ * PDF text extraction, in three attempts that fall through to each other.
+ *
+ * A cascade rather than one library because CVs arrive from everywhere and the
+ * failure modes do not overlap. Each attempt below exists because a real file
+ * defeated the one above it:
+ *
+ *   1. pdf-parse       Word, Canva and Acrobat exports. These carry UTF-16 text
+ *                      and CMap tables, which the manual reader below cannot
+ *                      decode at all — it returns mojibake, not an error.
+ *   2. BT/ET + inflate Simple and FlateDecode-compressed PDFs. Covers files
+ *                      pdf-parse rejects outright, and runs with no dependency,
+ *                      so an install without the optional package still works.
+ *   3. raw ASCII       Last resort. Produces something imperfect rather than
+ *                      nothing, which for a CV upload is the better failure: the
+ *                      user can see and correct a poor extraction, but has no
+ *                      recourse against an empty one.
+ *
+ * `pdfParse` is optional at require time (see the top of this file), so attempt 1
+ * is skipped rather than fatal when the package is absent.
+ *
+ * This lived at the repository root as PATCH-pdf-fix.js, a set of step-by-step
+ * instructions for editing this function, kept beside the code it described. It
+ * was applied here long ago and the file stayed behind as a stale duplicate — a
+ * Sprint-1 reviewer flagged the workflow. The reasoning it carried is above; the
+ * file is gone.
+ */
 async function extractPdfText(buffer) {
   // Tentative 1 : pdf-parse (gère UTF-16, CMap, PDFs modernes)
   if (pdfParse) {
