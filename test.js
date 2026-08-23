@@ -8,6 +8,7 @@ const zlib   = require('zlib');
 const crypto = require('crypto');
 const agents = require('./server/agents.js');
 const reasoning = require('./server/reasoning.js');
+const employment = require('./server/employment.js');
 const dedup  = require('./server/dedup.js');
 const rerank = require('./rerank.js');
 const { buildReport } = require('./server/report.js');
@@ -674,6 +675,44 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
   // ───────────────────────────────────────────────────────────────────────
   // Skill-Gap Recommendations (Sprint-2 feature: concrete "learn Y" advice)
   // ───────────────────────────────────────────────────────────────────────
+  section('Position type — Werkstudent and friends');
+
+  // The filter existed and /api/scrape-all honoured it, while /api/jobs accepted
+  // the same parameter and dropped it: a caller asking for working-student roles
+  // got the unfiltered list and no indication why.
+  {
+    const m = (title, description, kind) => employment.jobMatchesEmployment({ title, description }, kind);
+
+    test('werkstudent: matches the German title', () => {
+      assert(m('Werkstudent IT-Security (m/w/d)', '', 'werkstudent'), 'Werkstudent detected');
+    });
+    test('werkstudent: matches the English equivalent', () => {
+      assert(m('Working Student Cyber Security', '', 'werkstudent'), 'working student detected');
+    });
+    test('werkstudent: matches a body-only mention under a full-time title', () => {
+      assert(m('IT Security Engineer', 'Auch als studentische Hilfskraft moeglich', 'werkstudent'),
+        'German postings open the role in the body, not the title');
+    });
+    test('werkstudent: rejects a senior posting', () => {
+      assert(!m('Head of IT-Security', 'Vollzeit, unbefristet', 'werkstudent'), 'senior role excluded');
+    });
+    test('werkstudent: does not swallow an internship', () => {
+      assert(!m('Praktikum Informationssicherheit', '', 'werkstudent'), 'Praktikum is its own category');
+    });
+    test('praktikum and ausbildung are distinct categories', () => {
+      assert(m('Praktikum Informationssicherheit', '', 'praktikum'), 'Praktikum matches its own kind');
+      assert(m('Duales Studium Cyber Security', '', 'ausbildung'), 'duales Studium is Ausbildung');
+    });
+    test('all: filters nothing', () => {
+      assert(m('Head of IT-Security', '', 'all'), 'the default keeps every posting');
+    });
+    test('every category carries a query hint, or the sources never return it', () => {
+      Object.keys(employment.EMPLOYMENT_TERMS).forEach((k) => {
+        assert(employment.EMPLOYMENT_QUERY_HINT[k], `${k} has a query hint`);
+      });
+    });
+  }
+
   section('Skill matching — negation');
 
   // "No CISSP" registered as a CISSP hit: the matcher tested for the surface form
