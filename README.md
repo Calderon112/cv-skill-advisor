@@ -139,6 +139,61 @@ The Writer revises until the draft clears the bar or the revision limit is reach
 The final score and the number of revisions are both displayed, so a weak letter is
 visible rather than quietly handed over.
 
+#### Why an agent pipeline, and what was rejected
+
+An agent architecture is more expensive than a single call and slower than none.
+Three simpler designs were considered first; each fails on something specific.
+
+**One well-built prompt that scores the job and writes the letter.** Cheaper,
+faster, and about a hundred lines shorter. It fails on three counts:
+
+- *It cannot decline.* When the Matcher finds no job, the graph's conditional edge
+  routes straight to END and no letter is written. A single call has no way to
+  return nothing — asked to write, it writes, and produces a letter addressed to a
+  posting that was never found.
+- *It has nowhere to put a second attempt.* Revision needs somewhere to keep the
+  previous draft, the objections against it, and a count. That is state, and state
+  between steps is what a graph is.
+- *It has no independent judge.* Measured on this codebase: from a CV saying only
+  "Splunk and Python", the Writer alone produced "40+ custom detection rules", a
+  22% false-positive reduction and 30% triage savings — none of them in the input.
+  With the Critic reading the same CV, those three claims are named, the score is
+  capped at 38, and the letter goes back for revision. A model cannot audit its own
+  output in the same breath as producing it.
+
+**Retrieval only, no generation.** Rank the postings, show the gaps, let the
+candidate write. This is a defensible product and a different one: writing the
+letter is the work being outsourced, and the ranking already exists here without a
+model — it is the deterministic score.
+
+**An LLM that scores the match end to end.** This would delete scorer.js and, with
+it, the ability to tell a candidate why a posting scored 62. The weights are
+published precisely so the number can be checked and reproduced. Replacing them
+with a model trades the one property a hiring tool cannot afford to lose.
+
+##### Where the agent stops
+
+The pipeline is not agentic everywhere, and the line is drawn on purpose: the model
+is used where variability is useful and verifiable, never where it destroys an
+explanation.
+
+- The **match score** is arithmetic. Same CV, same posting, same number tomorrow.
+- **Scout and Matcher** deliberate on top of a deterministic core that stays
+  authoritative — inferring a skill, judging eligibility — and every deliberation
+  is checked against the source before it counts.
+- **Writer and Critic** are the only nodes whose output is not verifiable by
+  computation, which is exactly why they are two nodes and not one.
+
+##### What it costs
+
+Honesty about the price, since the alternative is cheaper. Over the eight measured
+runs the loop spent eight additional model calls, and 38% of letters still finished
+below the quality bar. Those are shown to the user rather than hidden: a weak draft
+arrives with its score and its revision count attached.
+
+The trade is one extra model call per rejected draft against a letter the applicant
+would have had to defend in an interview.
+
 #### How often does the loop actually fire?
 
 A reviewer asked the question this project asks of its own salary panel: if the
