@@ -19,7 +19,12 @@ const EMPLOYMENT_TERMS = {
     'shk', 'hiwi', 'wissenschaftliche hilfskraft', 'student assistant', 'studentenjob',
   ],
   praktikum: [
-    'praktikum', 'praktikant', 'internship', 'intern ', 'trainee', 'pflichtpraktikum',
+    // "intern " was here for the English noun and matched the German adverb, which
+    // means "internally" and appears in most postings: "Weiterbildungen sowohl
+    // intern als auch extern", "leitest Schulungen intern wie extern". It returned
+    // a Teamleiter and a Manager as internships. "internship" covers the English
+    // case without the collision.
+    'praktikum', 'praktikant', 'internship', 'trainee', 'pflichtpraktikum',
     'praxissemester', 'volontariat',
   ],
   ausbildung: [

@@ -1896,11 +1896,19 @@ function buildSearchLocation(searchParams) {
 function buildSearchKeyword(searchParams) {
   // User's free-text keyword takes priority
   const keyword = searchParams.get('keyword');
-  if (keyword && keyword.trim()) return keyword.trim();
+  const base = (keyword && keyword.trim())
+    ? keyword.trim()
+    // Fall back to domain mapping
+    : (DOMAIN_KEYWORDS[searchParams.get('sector') || 'all'] || '');
 
-  // Fall back to domain mapping
-  const sector = searchParams.get('sector') || 'all';
-  return DOMAIN_KEYWORDS[sector] || '';
+  // The position type has to reach the QUERY, not only the filter that runs after
+  // it. /api/scrape-all did this inline; /api/jobs filtered a result set the hint
+  // had never been added to, so a Werkstudent search matched a list containing no
+  // working-student roles and returned zero — which reads as "there are none" and
+  // is really "none were asked for". Applied here so every caller gets it.
+  const employment = searchParams.get('employment') || 'all';
+  const hint = EMPLOYMENT_QUERY_HINT[employment] || '';
+  return hint ? `${hint} ${base}`.trim() : base;
 }
 
 // Relevance terms per domain — used to FILTER scraped results so a chosen
@@ -3921,6 +3929,13 @@ const server = http.createServer(async (req, res) => {
     const employment = parsedUrl.searchParams.get('employment') || 'all';
     const location = buildSearchLocation(parsedUrl.searchParams);
     const keyword  = buildSearchKeyword(parsedUrl.searchParams);
+    // Written back onto the params, because not every source reads the value
+    // computed above. buildBundesQueryParams() takes searchParams and pulls
+    // `keyword` out of it itself, so the position-type hint never reached the query
+    // on the default platform: the source held 13 Werkstudent postings for this
+    // search and the endpoint returned none, having asked for something else and
+    // then filtered the answer to it.
+    if (keyword) parsedUrl.searchParams.set('keyword', keyword);
     const depth    = pageDepth(parsedUrl.searchParams);
 
     let jobs = [];
@@ -4370,10 +4385,10 @@ const server = http.createServer(async (req, res) => {
         // Build searchParams for Bundesagentur helper (includes keyword + location)
         const sp = new URLSearchParams({ region: region || 'germany', sector: sector || 'all', keyword: keyword || '', location: searchLocation });
         if (pages) sp.set('pages', String(pages));
-        // Filtering a result set that never contained a working-student role would
-        // return nothing, so the hint goes into the query as well as the filter.
-        const empHint = EMPLOYMENT_QUERY_HINT[employment] || '';
-        if (empHint) sp.set('keyword', `${empHint} ${sp.get('keyword') || ''}`.trim());
+        // buildSearchKeyword() prefixes the position-type hint for every caller
+        // now, rather than only this one. It reads the value from the params, so it
+        // has to be put there — this endpoint receives it in the JSON body.
+        if (employment && employment !== 'all') sp.set('employment', employment);
         const searchKeyword  = buildSearchKeyword(sp);
         const depth          = pageDepth(sp);
 
