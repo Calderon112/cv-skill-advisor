@@ -52,6 +52,41 @@ posting. Candidates must:
 The result is a slow, repetitive process in which the effort goes into logistics
 rather than into the applications themselves.
 
+### The problem, measured
+
+Assertions about a problem are cheap, and "applying for jobs is tedious" describes
+most of the labour market. These figures come from the official Bundesagentur für
+Arbeit API, queried through this application's own `/api/job-count`, on 2026-08-24:
+
+| Query | Open positions in Germany |
+|---|---|
+| IT-Sicherheit | **5,802** |
+| Cyber Security | 801 |
+| **Werkstudent IT-Sicherheit** | **13** |
+
+The last row is the product. A student looking for a working-student role in
+security is looking for **thirteen postings inside five thousand eight hundred**,
+spread across eleven portals that share no interface and no vocabulary — and the
+thirteen are not identifiable from a title, because German postings routinely carry
+a full-time title and open the role to students in the body of the text.
+
+That is a search problem with a signal-to-noise ratio of roughly 1 in 450, and it is
+why the filters in this application match on the description and not only the title.
+
+Two consequences shape everything downstream. Someone who finds four plausible
+postings out of that volume cannot afford to send a generic letter to any of them,
+which is what the Writer/Critic loop exists for. And a candidate reading a posting
+that lists twenty requirements has no way to tell which of the twenty they already
+meet, which is what the published score exists for.
+
+Reproduce the table:
+
+```
+curl "https://careerai-jk.duckdns.org/api/job-count?keyword=Werkstudent%20IT-Sicherheit&region=germany"
+```
+
+The counts move daily. The ratio does not.
+
 ### Motivation
 
 A Large Language Model can read a posting the way a person does. It does not merely
