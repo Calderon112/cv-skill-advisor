@@ -327,3 +327,112 @@ line without regenerating the shot.
 Generate ambience only, keep the narration on a separate text-to-speech track, and
 duck the ambience under the voice in the edit. The voiceover text is above, already
 written for that workflow.
+
+---
+
+## Step 2 — the three reference images
+
+Generate these as stills first, approve them, and only then feed them to Veo as
+image-to-video inputs. Veo carries no memory between clips: a text prompt run twice
+produces two different people, and an audience reads that as a continuity error
+rather than as two characters.
+
+Three images cover the whole film because only two locations and one person recur.
+
+**Frame wider than the shot you want.** Veo moves the camera inside the image it is
+given, and a tightly framed still leaves it nothing to move into. Every prompt below
+asks for headroom and space on one side.
+
+**No text anywhere in frame.** No signage, no book spines, no visible screen
+content, no logos. Generated lettering is the single most obvious artefact, and once
+a viewer notices it they stop watching the argument.
+
+---
+
+### Reference A — the candidate
+
+Used in the opening and, with a changed pose, in the close.
+
+```
+Photorealistic portrait of a woman in her mid-twenties seated at a plain wooden
+table, facing three-quarters toward camera, hands resting near a closed notebook.
+Neutral expression, relaxed shoulders, looking slightly off-camera to the left.
+Dark curly hair, simple dark green sweater, no jewellery, no visible branding.
+
+Framing: medium shot from chest up, generous headroom, empty space to her right.
+Lens: 35mm, aperture f/2.8, subject sharp and background gently soft.
+Lighting: single warm key light from camera left at 45 degrees, soft cool fill from
+the right, no hard shadow across the face.
+Colour: muted, slightly desaturated, warm skin tones against a cool background.
+Background: an out-of-focus domestic interior, no text, no posters, no screens.
+```
+
+Check before approving: **both hands fully visible and correct**, symmetrical eyes,
+no melted detail where the sweater meets the neck. Regenerate rather than accept a
+near miss — every clip inherits whatever is wrong here.
+
+### Reference B — the desk at night
+
+The opening location. This is where the problem is felt.
+
+```
+Photorealistic interior of a small kitchen at night, seen from across the room. A
+plain wooden table by a window, a closed laptop on it, one warm desk lamp lit at the
+left edge of frame, a cold mug beside the laptop. The room is otherwise dark. No
+person in frame.
+
+Framing: wide shot, the table occupying the lower right third, the empty room
+falling away to the left.
+Lens: 28mm, deep focus, slight vignetting at the corners.
+Lighting: the lamp is the only practical source, pooling warm light on the table;
+the window is black; deep shadow fills the upper left.
+Colour: warm amber against near-black, high contrast.
+Mood: late, quiet, unfinished.
+```
+
+The laptop is **closed** on purpose. An open one means a screen, and a screen means
+generated text.
+
+### Reference C — the desk in the morning
+
+The closing location. The same room, answered.
+
+```
+Photorealistic interior of the same small kitchen in the morning, seen from the same
+position across the room. The same wooden table by the window, now with a closed
+laptop pushed to one side and a coat over the back of the chair. Bright daylight
+through the window. No person in frame.
+
+Framing: wide shot, identical camera position and height to the night version, the
+table in the lower right third.
+Lens: 28mm, deep focus.
+Lighting: natural morning sun through the window, slightly blown out, soft bounce
+filling the room evenly. No lamp.
+Colour: cool daylight, low contrast, clean.
+Mood: resolved, unhurried.
+```
+
+Generate C **from B as an input image** if the tool allows it, rather than from text.
+The whole point of the pair is that a viewer recognises the same room; two
+independently generated kitchens will not read as one place, and the reversal —
+night and stuck, morning and leaving — is the only structural idea the film has.
+
+---
+
+### Approving the set
+
+Put the three side by side before generating a single clip and check:
+
+**Light direction agrees.** If the key light falls from camera left in A, it must
+fall from camera left in B, or the candidate will look composited into her own
+kitchen.
+
+**Colour temperature is deliberate.** A and B share warm-against-dark; C breaks to
+cool daylight. That break is the point and should be visible when the three are seen
+together.
+
+**The same room twice.** Window in the same place, table the same wood, chair the
+same shape. This is the check that most often fails, and the one worth regenerating
+for.
+
+Only then move to step 3.
