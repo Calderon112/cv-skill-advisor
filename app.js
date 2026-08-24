@@ -442,7 +442,12 @@ function setModalTab(tab) {
   $('modal-reset')?.classList.toggle('active',  tab === 'reset');
   // Hiding the tabs while resetting stops someone wandering off mid-flow and
   // losing a single-use link they cannot get back.
-  document.querySelector('.modal-tabs')?.classList.toggle('hidden', tab === 'reset');
+  // Never un-hides them when local sign-in is off. toggle() with a false second
+  // argument REMOVES the class, so every tab change was undoing hideLocalAuthUi()
+  // and bringing back forms the server refuses.
+  if (!state.localAuthOff) {
+    document.querySelector('.modal-tabs')?.classList.toggle('hidden', tab === 'reset');
+  }
 }
 
 document.querySelectorAll('.modal-tab').forEach(b =>
@@ -570,7 +575,24 @@ async function loadAuthProviders() {
   try {
     const r = await fetch(`${baseUrl}/api/auth/providers`);
     const d = await r.json();
-    if (!d.available || !d.providers.length) return;   // block stays hidden
+      // localAuth is handled first, because the early return below skips everything
+      // after it. oidc-only with no reachable provider is a locked door with a
+      // working-looking handle: the forms render, the server answers 403, and the
+      // message tells the user to press a provider button that is not on screen.
+      const localOff = d.localAuth === false;
+      if (localOff) hideLocalAuthUi();
+
+      if (!d.available || !d.providers.length) {
+        if (localOff) {
+          const note = $('auth-provider-note');
+          if (note) {
+            note.textContent = 'Sign-in is delegated to an identity provider, and none is reachable '
+              + 'right now. Local sign-in is disabled on this server, so please try again shortly.';
+            note.classList.remove('hidden');
+          }
+        }
+        return;
+      }
 
     // Two buttons per provider: sign in, and — when the provider can host a sign-up
     // form — create an account. Both are plain navigations, never fetch: the
@@ -598,14 +620,25 @@ async function loadAuthProviders() {
     // password panels rather than leaving forms the server answers with 403.
     // oidc-only: the two buttons are the whole screen. No explanatory note — where
     // sign-in is handled is plumbing, and the user has no decision to make about it.
-    if (d.localAuth === false) {
-      document.querySelector('.modal-tabs')?.classList.add('hidden');
-      document.querySelectorAll('.modal-panel').forEach(el => el.classList.add('hidden'));
-      sep?.classList.add('hidden');
-    } else {
-      sep?.classList.remove('hidden');
-    }
+      if (localOff) sep?.classList.add('hidden');
+      else sep?.classList.remove('hidden');
   } catch (_) { /* offline or no server — password login still works */ }
+}
+
+
+// Take the local sign-in UI off the screen for good.
+//
+// Called before the provider list is even inspected, because a server running
+// oidc-only refuses these forms whether or not a provider answered. Leaving them
+// visible produces the worst possible screen: a filled-in email, a Send button,
+// and a 403 telling the user to press a provider button that is not there.
+//
+// state.localAuthOff is what stops setModalTab() putting the tabs back — it
+// un-hides them on every tab change, which quietly undid this.
+function hideLocalAuthUi() {
+  state.localAuthOff = true;
+  document.querySelector('.modal-tabs')?.classList.add('hidden');
+  document.querySelectorAll('.modal-panel').forEach(el => el.classList.add('hidden'));
 }
 
 // The callback hands us the token in the URL fragment (never a query string, so it
