@@ -2747,6 +2747,10 @@ function scoreJob(job, analysis) {
   const profile = {
     skills: (analysis.foundSkills || []).map(s => s.key),
     targetRoles: (analysis.roles || []).slice(0, 1).map(r => r.name),
+    // Supplied at last. scorer.js has always read this and nothing ever set it,
+    // so scoreSeniority() saw 0 for every candidate and ten of the hundred points
+    // were decided by a value the system had not measured.
+    experienceYears: analysis.experienceYears || 0,
   };
   const jobText = normalize([job.title, job.description, job.sector, job.board, job.company].filter(Boolean).join(' '));
   const jobSkillKeys = findSkills(jobText).map(s => s.key);
