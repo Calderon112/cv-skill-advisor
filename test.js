@@ -917,6 +917,22 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
       assert(m('Praktikum Informationssicherheit', '', 'praktikum'), 'Praktikum matches its own kind');
       assert(m('Duales Studium Cyber Security', '', 'ausbildung'), 'duales Studium is Ausbildung');
     });
+    // "intern " was in the Praktikum list for the English noun and matched the
+    // German adverb, which means "internally": "Weiterbildungen sowohl intern als
+    // auch extern". A live search returned a Teamleiter and a Manager as
+    // internships because of it.
+    test('praktikum: the German adverb "intern" is not an internship', () => {
+      assert(!m('Teamleiter IT Sicherheit', 'Wir bieten Weiterbildungen sowohl intern als auch extern an', 'praktikum'),
+        'internally-versus-externally does not make a posting an internship');
+      assert(!m('Manager Projekt IT-Sicherheit', 'leitest Schulungen intern wie extern', 'praktikum'),
+        'nor does running training internally');
+    });
+
+    test('praktikum: the English noun still matches', () => {
+      assert(m('Security Internship 2026', '', 'praktikum'), 'internship detected');
+      assert(m('Praktikum Informationssicherheit', '', 'praktikum'), 'and the German one');
+    });
+
     test('all: filters nothing', () => {
       assert(m('Head of IT-Security', '', 'all'), 'the default keeps every posting');
     });
