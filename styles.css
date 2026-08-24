@@ -3572,3 +3572,42 @@ option   { color: var(--text); background: var(--bg-card); }
   cursor: pointer;
 }
 .forgot-link:hover { color: var(--cyan); text-decoration: underline; }
+
+/* ── CV sections, rendered from the imported document ──────────────────────
+   The fixed profile form has its own layout; these are the blocks built from
+   whatever headings a CV actually carries, so the styling has to work for a
+   section this file has never seen. */
+.pf-section {
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 12px;
+  padding: 14px 14px 10px;
+  margin-bottom: 14px;
+}
+/* The heading is an input, not a label: it is the candidate's own word, and a CV
+   calling a block "PROJEKTE & LABORE" should keep saying that. Styled to read as a
+   heading so it does not look like one more thing to fill in. */
+.pf-heading {
+  font-weight: 700;
+  font-size: 0.95rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border: none;
+  border-bottom: 2px solid var(--accent, #2a7a96);
+  border-radius: 0;
+  padding-left: 0;
+  margin-bottom: 10px;
+  background: transparent;
+}
+.pf-entry { padding: 8px 0; border-top: 1px dashed var(--border, #e2e8f0); }
+.pf-entry:first-of-type { border-top: 0; }
+.pf-row { display: flex; gap: 8px; margin-bottom: 8px; }
+.pf-row .field { flex: 1; min-width: 0; }
+.pf-third { flex: 0 0 34%; }
+#cv-schema-body textarea.field { margin-bottom: 8px; }
+
+/* One column below the phone breakpoint: two side-by-side fields at 360px leave
+   room for neither. */
+@media (max-width: 560px) {
+  .pf-row { flex-direction: column; }
+  .pf-third { flex: 1 1 auto; }
+}

@@ -799,6 +799,20 @@
           </div>
         </div>
 
+        <!-- The CV's own sections, rendered from what the document actually
+             contains. Empty until a CV is imported; the fixed form below stays the
+             way in for anyone typing a profile by hand, where there is no document
+             to read a shape from. -->
+        <div id="cv-schema-panel" class="card hidden">
+          <div class="card-header">
+            <h2>Your CV, section by section</h2>
+            <span class="pill" id="cv-schema-pill">—</span>
+          </div>
+          <p class="lede" id="cv-schema-note">Built from the headings your CV carries. Edit anything here; it feeds the generated documents.</p>
+          <div id="cv-schema-body"></div>
+          <div id="cv-schema-dropped" class="pf-warn hidden"></div>
+        </div>
+
         <!-- Manual mode -->
         <div id="profile-manual" class="profile-mode-panel">
           <div class="card">

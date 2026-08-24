@@ -1258,6 +1258,10 @@ async function analyzeCV() {
   const result = localAnalyze(text);
 
   state.analysis = result;
+  // Build the form from this CV's own headings. Deliberately not awaited: the
+  // profile is already usable, and a model round trip should not hold up the
+  // screen the user is looking at.
+  loadCvSchema(text);
   renderAnalysisResults(result);
   renderLearningSuggestions(result);
 
@@ -3317,6 +3321,9 @@ const emptyProfile = () => ({
   // The CV's own skills block, label and values as written. Distinct from `skills`,
   // which is the taxonomy-matched list the job scoring needs.
   skillRows: [],
+  // Sections read from the imported CV, in its own headings and order. Empty for a
+  // profile typed by hand, which uses the fixed fields above.
+  cvSchema: [],
   skills: [], experience: [], education: [], certifications: [], projects: []
 });
 
@@ -3327,6 +3334,159 @@ function loadProfile() {
 
 function saveProfileToStorage() {
   localStorage.setItem(PROFILE_KEY, JSON.stringify(state.profile));
+}
+
+// ── The CV's own sections, as an editable form ─────────────────────────────
+//
+// The fixed form below assumes a shape — name, title, skills, experience,
+// education, certifications — and that assumption is wrong as often as it is
+// right. A student CV leads with PROJEKTE and has almost no employment history; a
+// career changer has WEITERBILDUNG and no certifications; a German CV separates
+// SOFT SKILLS from TECHNISCHE FÄHIGKEITEN and an English one does not. Whatever
+// did not fit the shape was lost, and whatever was never there showed as an empty
+// box.
+//
+// So an imported CV builds its own form. The fixed one stays for manual entry,
+// where there is no document to take a shape from.
+//
+// Everything rendered here is editable and written straight back into
+// state.profile.cvSchema, which the CV generator reads before falling back to the
+// fixed fields.
+
+// esc() is the one declared near the top of this file — same escaping, and a second
+// copy here shadowed nothing and only collided.
+function renderCvSchema(schema, meta) {
+  const panel = $('cv-schema-panel');
+  const body  = $('cv-schema-body');
+  if (!panel || !body) return;
+
+  if (!schema || !schema.length) { panel.classList.add('hidden'); return; }
+  panel.classList.remove('hidden');
+
+  const pill = $('cv-schema-pill');
+  if (pill) pill.textContent = `${schema.length} section${schema.length > 1 ? 's' : ''}`;
+  const note = $('cv-schema-note');
+  if (note && meta && meta.structured === false) {
+    note.textContent = 'Built from the headings your CV carries. Field layout needs an API key, '
+      + 'so each section is shown as plain text you can edit.';
+  }
+
+  body.innerHTML = schema.map((sec, si) => {
+    const rows = (function () {
+      if (sec.kind === 'rows') {
+        return sec.items.map((r, i) => `
+          <div class="pf-row" data-s="${si}" data-i="${i}">
+            <input class="field pf-third" data-f="label" value="${esc(r.label)}" placeholder="Label">
+            <input class="field" data-f="value" value="${esc(r.value)}" placeholder="Value">
+          </div>`).join('');
+      }
+      if (sec.kind === 'list') {
+        return `<textarea class="field" data-s="${si}" data-f="list" rows="${Math.min(8, sec.items.length + 1)}"
+                  placeholder="One per line">${esc(sec.items.join('\n'))}</textarea>`;
+      }
+      if (sec.kind === 'text') {
+        return `<textarea class="field" data-s="${si}" data-f="text" rows="4">${esc(sec.items.join('\n\n'))}</textarea>`;
+      }
+      return sec.items.map((e, i) => `
+        <div class="pf-entry" data-s="${si}" data-i="${i}">
+          <div class="pf-row">
+            <input class="field pf-third" data-f="period" value="${esc(e.period)}" placeholder="Period">
+            <input class="field" data-f="title" value="${esc(e.title)}" placeholder="Title">
+          </div>
+          <input class="field" data-f="org" value="${esc(e.org)}" placeholder="Organisation">
+          <textarea class="field" data-f="bullets" rows="${Math.min(6, (e.bullets || []).length + 1)}"
+            placeholder="One bullet per line">${esc((e.bullets || []).join('\n'))}</textarea>
+        </div>`).join('');
+    })();
+
+    // The heading is editable too. It is the candidate's word, and a CV that calls
+    // the block "PROJEKTE & LABORE" should keep saying that in the generated
+    // document rather than being normalised into "Projects".
+    return `
+      <div class="pf-section" data-s="${si}">
+        <input class="field pf-heading" data-f="heading" value="${esc(sec.heading)}">
+        ${rows}
+      </div>`;
+  }).join('');
+
+  // Rejections are shown, not swallowed. If the model proposed a line the CV does
+  // not contain, the person whose CV it is should know it was proposed.
+  const warn = $('cv-schema-dropped');
+  if (warn) {
+    const d = (meta && meta.dropped) || [];
+    if (d.length) {
+      warn.textContent = `${d.length} item${d.length > 1 ? 's were' : ' was'} discarded for not appearing in your CV: `
+        + d.slice(0, 3).map(x => x.text || x.why).join(' · ');
+      warn.classList.remove('hidden');
+    } else {
+      warn.classList.add('hidden');
+    }
+  }
+
+  body.addEventListener('input', collectCvSchema);
+  collectCvSchema();
+}
+
+/** Read the panel back into the profile. Called on every edit. */
+function collectCvSchema() {
+  const body = $('cv-schema-body');
+  if (!body) return;
+  const out = [];
+  body.querySelectorAll('.pf-section').forEach((secEl) => {
+    const heading = secEl.querySelector('.pf-heading')?.value.trim() || '';
+    const listTa  = secEl.querySelector('[data-f="list"]');
+    const textTa  = secEl.querySelector('[data-f="text"]');
+    const rowEls  = secEl.querySelectorAll('.pf-row[data-i]');
+    const entryEls = secEl.querySelectorAll('.pf-entry');
+
+    if (listTa) {
+      out.push({ heading, kind: 'list', items: listTa.value.split('\n').map(s => s.trim()).filter(Boolean) });
+    } else if (textTa) {
+      out.push({ heading, kind: 'text', items: [textTa.value.trim()].filter(Boolean) });
+    } else if (entryEls.length) {
+      out.push({ heading, kind: 'entries', items: [...entryEls].map((el) => ({
+        period: el.querySelector('[data-f="period"]')?.value.trim() || '',
+        title:  el.querySelector('[data-f="title"]')?.value.trim() || '',
+        org:    el.querySelector('[data-f="org"]')?.value.trim() || '',
+        bullets: (el.querySelector('[data-f="bullets"]')?.value || '')
+          .split('\n').map(s => s.trim()).filter(Boolean),
+      })) });
+    } else if (rowEls.length) {
+      out.push({ heading, kind: 'rows', items: [...rowEls].map((el) => ({
+        label: el.querySelector('[data-f="label"]')?.value.trim() || '',
+        value: el.querySelector('[data-f="value"]')?.value.trim() || '',
+      })) });
+    }
+  });
+  if (!state.profile) state.profile = emptyProfile();
+  state.profile.cvSchema = out;
+  saveProfileToStorage();
+}
+
+/**
+ * Ask the server for the sections, then render them.
+ *
+ * Best-effort throughout: no session, no key, a refused answer — each degrades to
+ * the fixed form, which is still there. A CV import that used to produce a profile
+ * must never produce nothing because this step failed.
+ */
+async function loadCvSchema(cvText) {
+  if (!cvText || cvText.trim().length < 40) return;
+  try {
+    const r = await fetch(`${baseUrl}/api/cv-schema`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ cvText }),
+    });
+    if (!r.ok) return;
+    const data = await r.json();
+    // The structured layout when the model produced one, the raw blocks otherwise —
+    // a section per heading, its text in one editable box.
+    const schema = data.schema || (data.sections || []).map(s => ({
+      heading: s.heading, kind: 'text', items: [s.body],
+    }));
+    renderCvSchema(schema, { structured: data.structured, dropped: data.dropped });
+  } catch (_) { /* the fixed form is still there */ }
 }
 
 // ── Reading a CV's own sections, verbatim ───────────────────────────────────

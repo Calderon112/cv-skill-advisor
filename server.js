@@ -60,6 +60,7 @@ const usage = require('./server/usage.js');
 const oidc = require('./server/oidc.js');
 const salaryBand = require('./server/salary-band.js');
 const scoreExplainer = require('./server/score-explainer.js');
+const cvSchema = require('./server/cv-schema.js');
 
 // Per-role salary bands. Measured from live ads, so worth re-reading occasionally,
 // but not on every page view — the same role gives the same answer to everyone.
@@ -3512,6 +3513,38 @@ const server = http.createServer(async (req, res) => {
     // listed five by hand; a sixth added later would have been left behind.
     await repo.deleteAccount(username);
     sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  // ── The form, built from the CV's own headings ──────────────────────────────
+  //
+  // Returns the sections a document actually has, so the import view can render an
+  // editable block per heading instead of a fixed set of boxes. The deterministic
+  // split is always returned; `schema` is the structured version and is absent
+  // whenever no model is configured or its answer failed the verbatim check, in
+  // which case the caller renders the raw blocks and loses only the field layout.
+  if (parsedUrl.pathname === '/api/cv-schema' && req.method === 'POST') {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const { cvText } = JSON.parse(body || '{}');
+        const text = String(cvText || '');
+        if (text.trim().length < 40) { sendJson(res, 400, { error: 'cvText is required' }); return; }
+
+        const sections = cvSchema.detectSections(text);
+        const built = await cvSchema.buildSchema({ cvText: text, sections }, llm);
+
+        sendJson(res, 200, {
+          sections,
+          schema: built ? built.sections : null,
+          dropped: built ? built.dropped : [],
+          structured: !!built,
+        });
+      } catch (error) {
+        sendJson(res, 400, { error: 'Invalid request payload' });
+      }
+    });
     return;
   }
 

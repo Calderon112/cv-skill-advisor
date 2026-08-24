@@ -10,6 +10,7 @@ const agents = require('./server/agents.js');
 const reasoning = require('./server/reasoning.js');
 const employment = require('./server/employment.js');
 const explainer = require('./server/score-explainer.js');
+const cvSchema = require('./server/cv-schema.js');
 const experience = require('./server/experience.js');
 const Scorer = require('./scorer.js');
 const dedup  = require('./server/dedup.js');
@@ -824,6 +825,81 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
       const job = { title: 'Senior IT Security Engineer', description: 'SIEM, Splunk' };
       const at = (y) => Scorer.scoreJob(job, { skills: ['siem'], targetRoles: [], experienceYears: y }, ['siem']).score;
       assert(at(5) > at(0), 'five years scores above the zero everyone used to get');
+    });
+  }
+
+  section('CV schema — the form is built from the document');
+
+  {
+    const CV = [
+      'BERUFSERFAHRUNG',
+      '02.2023 - 09.2023', 'Praktikum Softwareentwicklung', 'DIGITAL-X Suarl, Douala',
+      'Entwicklung von Webanwendungen mit HTML, SCSS und PHP',
+      'TECHNISCHE FÄHIGKEITEN',
+      'Security Tools: Kali Linux, Wireshark, IDA Pro',
+      'PROJEKTE',
+      'Uni-Projekt: VPN-Konfiguration', 'Westfälische Hochschule Gelsenkirchen, 2025',
+      'SOFT SKILLS', 'Analytisches Denken', 'Teamfähigkeit',
+    ].join('\n');
+
+    const secs = () => cvSchema.detectSections(CV);
+    const say = (obj) => ({ isAvailable: () => true, chat: async () => JSON.stringify(obj) });
+
+    test('headings are found without a model at all', () => {
+      const found = secs().map(s => s.heading);
+      assertIncludes(found, 'BERUFSERFAHRUNG', 'German heading');
+      assertIncludes(found, 'TECHNISCHE FÄHIGKEITEN', 'with umlauts');
+      assertIncludes(found, 'PROJEKTE', 'the section the fixed form has no box for');
+      assertEqual(found.length, 4, 'four sections, no more');
+    });
+
+    test('a sentence is not a heading', () => {
+      assert(!cvSchema.looksLikeHeading('Entwicklung von Webanwendungen mit HTML, SCSS und PHP.'),
+        'length and the full stop rule it out');
+      assert(cvSchema.looksLikeHeading('WEITERBILDUNG'), 'a short capitalised label is');
+    });
+
+    await atest('a section the CV does not have is dropped', async () => {
+      const out = await cvSchema.buildSchema({ cvText: CV, sections: secs() },
+        say({ sections: [{ heading: 'ZERTIFIKATE', kind: 'list', items: ['CISSP'] }] }));
+      assertEqual(out, null, 'an invented heading leaves nothing to render');
+    });
+
+    await atest('an invented entry is dropped', async () => {
+      const out = await cvSchema.buildSchema({ cvText: CV, sections: secs() },
+        say({ sections: [{ heading: 'BERUFSERFAHRUNG', kind: 'entries', items: [
+          { title: 'Senior Security Engineer', org: 'Siemens AG', period: '2019 - 2023', bullets: [] },
+        ] }] }));
+      assertEqual(out, null, 'a job the CV never mentions cannot reach the form');
+    });
+
+    await atest('one invented bullet does not sink a real entry', async () => {
+      // A real job with one fabricated line is still a real job. The line goes, the
+      // job stays, and the removal is reported rather than done in silence.
+      const out = await cvSchema.buildSchema({ cvText: CV, sections: secs() },
+        say({ sections: [{ heading: 'BERUFSERFAHRUNG', kind: 'entries', items: [
+          { title: 'Praktikum Softwareentwicklung', org: 'DIGITAL-X Suarl, Douala',
+            period: '02.2023 - 09.2023',
+            bullets: ['Entwicklung von Webanwendungen mit HTML, SCSS und PHP',
+                      'Leitung eines Teams von acht Entwicklern'] },
+        ] }] }));
+      assertEqual(out.sections[0].items[0].bullets.length, 1, 'only the real bullet survives');
+      assert(out.dropped.some(d => /bullet/.test(d.why)), 'and the removal is reported');
+    });
+
+    await atest('faithful content passes through unchanged', async () => {
+      const out = await cvSchema.buildSchema({ cvText: CV, sections: secs() },
+        say({ sections: [{ heading: 'TECHNISCHE FÄHIGKEITEN', kind: 'rows', items: [
+          { label: 'Security Tools', value: 'Kali Linux, Wireshark, IDA Pro' },
+        ] }] }));
+      assertEqual(out.sections[0].kind, 'rows', 'the shape the model chose');
+      assertEqual(out.sections[0].items[0].value, 'Kali Linux, Wireshark, IDA Pro', 'verbatim');
+    });
+
+    await atest('no model configured still yields the sections', async () => {
+      const out = await cvSchema.buildSchema({ cvText: CV, sections: secs() }, { isAvailable: () => false });
+      assertEqual(out, null, 'the caller falls back to the deterministic split');
+      assert(secs().length === 4, 'which is still four editable blocks');
     });
   }
 
