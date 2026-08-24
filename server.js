@@ -3955,6 +3955,18 @@ const server = http.createServer(async (req, res) => {
     } else if (platform === 'bundesagentur') {
       const result = await fetchBundesJobs(parsedUrl.searchParams, depth);
       jobs   = result?.jobs || [];
+      // The search endpoint returns a pointer, not a posting: every row comes back
+      // with the same 31 characters, "Weitere Infos auf der Jobseite." The detail
+      // endpoint holds the real text, and the `all` branch above already fetches it
+      // — this branch never did, and it is the DEFAULT platform.
+      //
+      // Everything downstream reads that description. The Matcher's eligibility
+      // check needs 120 characters before it will judge at all, so it silently did
+      // nothing here; the Critic graded letters against a sentence containing no
+      // requirements; and the missing-skills list was computed from a string with no
+      // skills in it. Measured before this line existed: 500 results, zero usable
+      // descriptions.
+      if (jobs.length) await enrichBundesJobs(jobs, 40);
       source = 'bundesagentur';
 
     } else if (platform === 'arbeitnow') {
