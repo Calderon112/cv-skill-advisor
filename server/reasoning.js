@@ -38,7 +38,27 @@ const MAX_INFERRED = 8;
 
 // Only the top of the ranking is adjudicated. Blockers matter for the jobs a user
 // will actually read; spending a model call on match #40 buys nothing.
-const ADJUDICATE_TOP_N = 3;
+// How far down the ranking eligibility is judged. `0` means every match — the
+// Matcher then deliberates on the whole result set rather than on its head.
+//
+// Costed rather than guessed: one model call per posting, run with concurrency, so
+// a search returning 500 rows is 500 calls. At the default of 25 a search spends at
+// most 25, which covers roughly the first two screens a user scrolls — past that
+// nobody has read the posting, so a verdict on it buys nothing.
+//
+// Set GRAPH_ADJUDICATE_TOP_N=0 to judge everything, which is what an unmetered
+// provider makes reasonable. Read lazily: server.js parses .env before requiring
+// its modules now, but a value read at import time cannot be changed by a test.
+const ADJUDICATE_TOP_N = () => {
+  const raw = process.env.GRAPH_ADJUDICATE_TOP_N;
+  if (raw === undefined || raw === '') return 25;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : 25;
+};
+
+// Calls are issued in batches of this size. Without it, "judge everything" opens
+// one connection per posting at once and the provider rate-limits the whole search.
+const ADJUDICATE_CONCURRENCY = 6;
 
 /** Parse a model reply that should be JSON, tolerating a ```json fence. */
 function parseJson(text) {
@@ -206,4 +226,4 @@ async function adjudicate({ job, jobDescription, foundKeys, score }, llm) {
   return { verdict, blockers, reason };
 }
 
-module.exports = { inferSkills, adjudicate, ADJUDICATE_TOP_N, MIN_CONFIDENCE };
+module.exports = { inferSkills, adjudicate, ADJUDICATE_TOP_N, ADJUDICATE_CONCURRENCY, MIN_CONFIDENCE };
