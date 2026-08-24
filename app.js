@@ -3656,6 +3656,11 @@ function extractProfileFromCV(text, analysis, llmProfile) {
       p.skills = analysis.foundSkills.map(sk => ({ key: sk.key, label: sk.label, category: sk.category || '' }));
     }
     if (!p.title && analysis && analysis.roles && analysis.roles.length) p.title = analysis.roles[0].name;
+    // The document's own sections, on this path too. They fill only what the model
+    // left empty, and skipping them here is the reason an imported CV came back
+    // without its projects or its skills block on every machine where an API key was
+    // configured: this branch always wins there, and the parsing sat below it.
+    applyCvSections(p, text);
     state.profile = p;
     saveProfileToStorage();
     renderProfileForm();
@@ -3762,39 +3767,58 @@ function extractProfileFromCV(text, analysis, llmProfile) {
   // them. The generated CV renders all three, and on a student CV the projects
   // section is usually the strongest evidence on the page: no employer yet, but
   // three university projects naming Ghidra, Wireshark and a VPN configuration.
-  // Projects, read by structure rather than by bullet glyph — see parseProjectBlock.
-  if (!p.projects || !p.projects.length) {
-    const projects = parseProjectBlock(cvSection(text, 'PROJECTS|PROJEKTE|PROJETS'));
-    if (projects.length) p.projects = projects;
-  }
 
-  // The technical-skills block, in the candidate's own words and the candidate's own
-  // groupings. Kept separate from p.skills, which stays the taxonomy-matched list the
-  // job scoring needs: that list is right for matching and wrong for a document,
-  // having once turned "Kali Linux, Wireshark, IDA Pro, Ghidra, EDB" into labels
-  // including a "Medical documentation" matched from "technische Dokumentation".
-  if (!p.skillRows || !p.skillRows.length) {
-    const rows = parseSkillRows(cvSection(text, 'SKILLS|KOMPETENZEN|COMPETENCES|TECHNISCHE FÄHIGKEITEN|TECHNISCHE FAEHIGKEITEN'));
-    if (rows.length) p.skillRows = rows;
-  }
 
-  // Short, one-per-line sections. Capped at ten entries and eighty characters: a
-  // heading this parser mistook for a list would otherwise pour a whole paragraph
-  // into the rail, where there is no room for it.
-  const listSection = (names) => cvSection(text, names)
-    .split(/\r?\n/)
-    .map((l) => l.trim().replace(/^[•▸·*-]\s*/, ''))
-    .filter((l) => l && l.length < 80)
-    .slice(0, 10)
-    .join('\n');
 
-  if (!p.softSkills) { const v = listSection('SOFT SKILLS|SOFTSKILLS|PERSONAL SKILLS'); if (v) p.softSkills = v; }
-  if (!p.interests)  { const v = listSection('INTERESTS|HOBBIES|INTERESSEN');           if (v) p.interests = v; }
-  if (!p.languages)  { const v = listSection('LANGUAGES|SPRACHEN|LANGUES');             if (v) p.languages = v; }
+  applyCvSections(p, text);
 
   state.profile = p;
   saveProfileToStorage();
   renderProfileForm();
+}
+
+/**
+ * The CV's own sections, applied to a profile however that profile was built.
+ *
+ * This used to sit inline at the end of extractProfileFromCV(), below an early
+ * return taken whenever the model had produced a profile. With an API key
+ * configured that branch always wins, so projects, the skills block, soft skills
+ * and interests were parsed by code that never ran — and the generated CV was
+ * missing exactly those sections on every machine where the AI path succeeded.
+ *
+ * Every assignment below is conditional on the field being empty, so this adds to
+ * the model's result rather than overwriting it.
+ */
+function applyCvSections(p, text) {
+// Projects, read by structure rather than by bullet glyph — see parseProjectBlock.
+if (!p.projects || !p.projects.length) {
+  const projects = parseProjectBlock(cvSection(text, 'PROJECTS|PROJEKTE|PROJETS'));
+  if (projects.length) p.projects = projects;
+}
+
+// The technical-skills block, in the candidate's own words and the candidate's own
+// groupings. Kept separate from p.skills, which stays the taxonomy-matched list the
+// job scoring needs: that list is right for matching and wrong for a document,
+// having once turned "Kali Linux, Wireshark, IDA Pro, Ghidra, EDB" into labels
+// including a "Medical documentation" matched from "technische Dokumentation".
+if (!p.skillRows || !p.skillRows.length) {
+  const rows = parseSkillRows(cvSection(text, 'SKILLS|KOMPETENZEN|COMPETENCES|TECHNISCHE FÄHIGKEITEN|TECHNISCHE FAEHIGKEITEN'));
+  if (rows.length) p.skillRows = rows;
+}
+
+// Short, one-per-line sections. Capped at ten entries and eighty characters: a
+// heading this parser mistook for a list would otherwise pour a whole paragraph
+// into the rail, where there is no room for it.
+const listSection = (names) => cvSection(text, names)
+  .split(/\r?\n/)
+  .map((l) => l.trim().replace(/^[•▸·*-]\s*/, ''))
+  .filter((l) => l && l.length < 80)
+  .slice(0, 10)
+  .join('\n');
+
+if (!p.softSkills) { const v = listSection('SOFT SKILLS|SOFTSKILLS|PERSONAL SKILLS'); if (v) p.softSkills = v; }
+if (!p.interests)  { const v = listSection('INTERESTS|HOBBIES|INTERESSEN');           if (v) p.interests = v; }
+if (!p.languages)  { const v = listSection('LANGUAGES|SPRACHEN|LANGUES');             if (v) p.languages = v; }
 }
 
 // Build a plain-text CV from the structured profile (for the Resume generator)
