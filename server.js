@@ -3624,7 +3624,13 @@ const server = http.createServer(async (req, res) => {
           + '}';
         const system = 'You are a precise CV parser. Extract the candidate\'s details into a single JSON object matching the given schema exactly. '
           + 'Respond with ONLY the JSON object — no markdown fences, no commentary. Use "" for any missing string and [] for any missing list. '
-          + 'Keep dates exactly as written in the CV. Never invent information that is not present.';
+          + 'Keep dates exactly as written in the CV. Never invent information that is not present. '
+          // The generated CV prints one bullet per line. Returning "desc" as flowing
+          // prose collapsed a role's two bullets into a single run-on sentence, and
+          // nothing downstream could recover the split: the source line breaks are
+          // the only record of where one point ends and the next begins.
+          + 'In "desc", put each bullet point of a role on its OWN LINE, separated by a newline. '
+          + 'Do not merge two bullets into one sentence and do not add connecting words.';
         const user = `Extract this CV into the exact JSON schema below.\n\nSchema:\n${schema}\n\nCV:\n"""\n${text.slice(0, 12000)}\n"""`;
         const raw = await llm.chat({ system, user, maxTokens: 2000, temperature: 0 });
         const profile = parseJsonObject(raw);
