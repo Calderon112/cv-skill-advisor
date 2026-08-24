@@ -1100,6 +1100,20 @@ function setupDropZone() {
 
 async function handleCvFile(file) {
   const ta = $('cv-input');
+
+  // Said before the file is read, not after the server refuses it. Parsing a PDF
+  // runs server-side and needs a session; without one the upload used to look like
+  // it had started — progress strip up, status pill changed — and then failed with
+  // a message the user had to connect back to a button they pressed a moment ago.
+  // A .txt or pasted text needs no session, so the check is scoped to PDFs.
+  const needsServer = file.name.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf';
+  if (needsServer && !state.token) {
+    toast('Sign in first — reading a PDF happens on the server. You can paste the text instead.', 'error');
+    $('cv-status-pill').textContent = 'Sign in required';
+    ta?.focus();
+    return;
+  }
+
   setCvProgressStep('parsing');
 
   // Keep a handle on the original file so "Open original PDF" can show it next to the
@@ -1151,11 +1165,22 @@ async function handleCvFile(file) {
       toast('File loaded.', 'success');
     }
     state.cvText = ta.value;
-    $('cv-status-pill').textContent = 'Ready';
-    setCvProgressStep('done');
+
+    // Straight on into the analysis, rather than stopping with the text sitting in
+    // a textarea and waiting for a second click.
+    //
+    // The progress strip lists four steps — Reading CV, Analyzing skills, Building
+    // profile, Done — and setCvProgressStep('done') marks every earlier one
+    // completed. Ending here therefore drew ticks against two steps that had not
+    // run: the user saw a finished bar, an empty profile, and no reason for either.
+    // Either the strip was lying or the import was unfinished; it was both.
+    await analyzeCV();
   } catch (e) {
     toast('Could not read file: ' + e.message, 'error');
     $('cv-status-pill').textContent = 'Error';
+    // The strip stops where it failed. A completed-looking bar over a failed import
+    // is the same lie in the other direction.
+    setCvProgressStep('parsing');
   }
 }
 
@@ -3335,7 +3360,10 @@ function parseCvEntries(block, withDesc) {
     } else if (cur) {
       const looksLocation = !cur._loc && line.length < 45 && !/[.!]$/.test(line) && /[A-ZÄÖÜ]/.test(line);
       if (looksLocation) { cur.location = line; cur._loc = true; }
-      else if (withDesc) cur.desc = (cur.desc ? cur.desc + ' ' : '') + line;
+      // Joined with a newline, not a space. The generated CV renders one bullet
+      // per line; joining with a space collapsed an entry's two bullets into a
+      // single run-on sentence and there was no way to recover the split.
+      else if (withDesc) cur.desc = (cur.desc ? cur.desc + '\n' : '') + line;
     }
   }
   if (cur) { delete cur._loc; entries.push(cur); }
@@ -3375,7 +3403,10 @@ function extractProfileFromCV(text, analysis, llmProfile) {
   if (llmProfile && typeof llmProfile === 'object') {
     applyLlmProfile(p, llmProfile);
     if (analysis && analysis.foundSkills && analysis.foundSkills.length) {
-      p.skills = analysis.foundSkills.map(sk => ({ key: sk.key, label: sk.label }));
+      // Category carried through. The generated CV groups skills the way a German
+      // CV does — "Security Tools: Kali, Wireshark, Ghidra" — and without it every
+      // skill fell into one undifferentiated "Kenntnisse" row.
+      p.skills = analysis.foundSkills.map(sk => ({ key: sk.key, label: sk.label, category: sk.category || '' }));
     }
     if (!p.title && analysis && analysis.roles && analysis.roles.length) p.title = analysis.roles[0].name;
     state.profile = p;
@@ -3413,7 +3444,7 @@ function extractProfileFromCV(text, analysis, llmProfile) {
 
   // Skills from analysis
   if (analysis?.foundSkills?.length) {
-    p.skills = analysis.foundSkills.map(s => ({ key: s.key, label: s.label }));
+    p.skills = analysis.foundSkills.map(s => ({ key: s.key, label: s.label, category: s.category || '' }));
   }
   // Title from top role
   if (!p.title && analysis?.roles?.length) p.title = analysis.roles[0].name;
@@ -3836,7 +3867,7 @@ function buildProfilePdfDoc(profile, overrides) {
     p.location    ? ['Ort', p.location] : null,
     p.email       ? ['E-Mail', p.email] : null,
     p.phone       ? ['Tel', p.phone] : null,
-    p.nationality ? ['Nationalitaet', p.nationality] : null,
+    p.nationality ? ['Nationalität', p.nationality] : null,
   ].filter(Boolean);
 
   if (contact.length) {
@@ -3862,7 +3893,16 @@ function buildProfilePdfDoc(profile, overrides) {
 
   if (p.languages) {
     railSection('Sprachen');
-    splitLines(p.languages).forEach(function (l) {
+    // Commas count as separators here and nowhere else. The profile form holds
+    // languages in a single-line <input>, so the parser has to join them with ", "
+    // — and rendering that verbatim produced one run-on paragraph where the CV
+    // shows three lines. A description may legitimately contain commas, which is
+    // why this is not in splitLines().
+    const langs = splitLines(p.languages)
+      .reduce(function (acc, line) { return acc.concat(line.split(/\s*,\s*/)); }, [])
+      .map(function (l) { return l.trim(); })
+      .filter(Boolean);
+    langs.forEach(function (l) {
       write(l, SIDE_X, SIDE_W, 8.5, 'normal', DARK, 12);
     });
   }
@@ -3892,7 +3932,7 @@ function buildProfilePdfDoc(profile, overrides) {
   }
 
   if (p.skills && p.skills.length) {
-    mainSection('Technische Faehigkeiten');
+    mainSection('Technische Fähigkeiten');
     // Grouped by category where the taxonomy supplies one, because that is the
     // shape the reader expects — "Security Tools: Kali, Wireshark, Ghidra" — and
     // one flat row where it does not.
