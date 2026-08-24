@@ -3285,7 +3285,11 @@ const PROFILE_KEY = 'careerai-profile';
 const emptyProfile = () => ({
   firstName: '', lastName: '', email: '', phone: '', location: '', nationality: '',
   languages: '', title: '', summary: '', photo: '',
-  skills: [], experience: [], education: [], certifications: []
+  // Rendered by the generated CV when present, filled by the CV parser. The
+  // manual form does not expose them yet, so a hand-built profile simply omits
+  // those sections instead of printing empty headings.
+  softSkills: '', interests: '',
+  skills: [], experience: [], education: [], certifications: [], projects: []
 });
 
 function loadProfile() {
@@ -3298,7 +3302,11 @@ function saveProfileToStorage() {
 }
 
 // ── CV section parsing (best-effort, tuned for structured CVs) ──────────────
-const CV_SECTION_NAMES = 'PROFILE|PROFIL|SUMMARY|OBJECTIVE|SKILLS|KOMPETENZEN|COMPETENCES|EXPERIENCE|WORK EXPERIENCE|ERFAHRUNG|BERUFSERFAHRUNG|EDUCATION|AUSBILDUNG|STUDIUM|FORMATION|CERTIFICATIONS|CERTIFICATES|ZERTIFIKATE|ZERTIFIZIERUNGEN|LANGUAGES|SPRACHEN|LANGUES|INTERESTS|HOBBIES|REFERENCES|PROJECTS|PROJEKTE';
+// Longest first: this is a regex alternation, and a heading is only a boundary
+// if its whole name is listed. SOFT SKILLS, INTERESSEN, WEITERBILDUNG and
+// PROJETS were missing, so nothing stopped the preceding block — a SPRACHEN
+// section ran on and swallowed the soft skills and the interests beneath it.
+const CV_SECTION_NAMES = 'WORK EXPERIENCE|BERUFSERFAHRUNG|PERSONAL SKILLS|CERTIFICATIONS|ZERTIFIZIERUNGEN|SOFT SKILLS|SOFTSKILLS|WEITERBILDUNG|KOMPETENZEN|COMPETENCES|CERTIFICATES|ZERTIFIKATE|REFERENCES|EXPERIENCE|ERFAHRUNG|EDUCATION|AUSBILDUNG|INTERESSEN|LANGUAGES|OBJECTIVE|FORMATION|INTERESTS|PROJECTS|PROJEKTE|SUMMARY|STUDIUM|SPRACHEN|HOBBIES|PROFILE|PROJETS|LANGUES|SKILLS|PROFIL';
 
 // Grab the text block under a section heading, up to the next known heading.
 function cvSection(text, names) {
@@ -3470,6 +3478,56 @@ function extractProfileFromCV(text, analysis, llmProfile) {
     if (certs.length) p.certifications = certs;
   }
 
+  // Projects, soft skills and interests. These section names were already listed
+  // in CV_SECTION_NAMES — used as boundaries, so a PROJEKTE heading would stop the
+  // BERUFSERFAHRUNG block from running on — but nothing ever read what sat between
+  // them. The generated CV renders all three, and on a student CV the projects
+  // section is usually the strongest evidence on the page: no employer yet, but
+  // three university projects naming Ghidra, Wireshark and a VPN configuration.
+  if (!p.projects || !p.projects.length) {
+    const block = cvSection(text, 'PROJECTS|PROJEKTE|PROJETS');
+    if (block) {
+      const BULLET = /^[•▸·*-]\s*/;
+      const projects = [];
+      let cur = null;
+      block.split(/\r?\n/).forEach((raw) => {
+        const line = raw.trim();
+        if (!line) return;
+        if (BULLET.test(line)) {
+          if (!cur) return;
+          cur.desc = (cur.desc ? cur.desc + '\n' : '') + line.replace(BULLET, '');
+          return;
+        }
+        // An unbulleted line directly under a title is the institution and year
+        // ("Westfälische Hochschule Gelsenkirchen, 2025"), not a description.
+        if (cur && !cur.org && !cur.desc) {
+          const ym = line.match(/(\d{4})\s*$/);
+          cur.org = line.replace(/,?\s*\d{4}\s*$/, '').trim();
+          cur.year = ym ? ym[1] : '';
+          return;
+        }
+        cur = { name: line, org: '', year: '', desc: '' };
+        projects.push(cur);
+      });
+      const kept = projects.filter((x) => x.name && (x.desc || x.org));
+      if (kept.length) p.projects = kept;
+    }
+  }
+
+  // Short, one-per-line sections. Capped at ten entries and eighty characters: a
+  // heading this parser mistook for a list would otherwise pour a whole paragraph
+  // into the rail, where there is no room for it.
+  const listSection = (names) => cvSection(text, names)
+    .split(/\r?\n/)
+    .map((l) => l.trim().replace(/^[•▸·*-]\s*/, ''))
+    .filter((l) => l && l.length < 80)
+    .slice(0, 10)
+    .join('\n');
+
+  if (!p.softSkills) { const v = listSection('SOFT SKILLS|SOFTSKILLS|PERSONAL SKILLS'); if (v) p.softSkills = v; }
+  if (!p.interests)  { const v = listSection('INTERESTS|HOBBIES|INTERESSEN');           if (v) p.interests = v; }
+  if (!p.languages)  { const v = listSection('LANGUAGES|SPRACHEN|LANGUES');             if (v) p.languages = v; }
+
   state.profile = p;
   saveProfileToStorage();
   renderProfileForm();
@@ -3631,101 +3689,254 @@ function buildProfilePdfDoc(profile, overrides) {
   const doc = new lib.jsPDF({ unit: 'pt', format: 'a4' });
   const PAGE_W = doc.internal.pageSize.getWidth();
   const PAGE_H = doc.internal.pageSize.getHeight();
-  const M = 48;                 // margin
-  const W = PAGE_W - M * 2;     // content width
-  let y = M;
 
-  const PURPLE = [124, 58, 237];
-  const DARK   = [15, 23, 42];
-  const GREY   = [71, 85, 105];
-  const LIGHT  = [148, 163, 184];
+  // Two columns, in the proportions a German Lebenslauf uses: the narrow rail on
+  // the right carries the facts a recruiter scans for — contact, education,
+  // languages — and the wide column carries the evidence.
+  const M = 40;
+  const GAP = 18;
+  const SIDE_W = 168;
+  const MAIN_X = M;
+  const MAIN_W = PAGE_W - M * 2 - SIDE_W - GAP;
+  const SIDE_X = PAGE_W - M - SIDE_W;
 
-  function ensure(space) {
-    if (y + space > PAGE_H - M) { doc.addPage(); y = M; }
+  const TEAL  = [42, 122, 150];
+  const DARK  = [28, 40, 56];
+  const GREY  = [100, 116, 139];
+  const RAIL  = [238, 242, 245];
+  const WHITE = [255, 255, 255];
+
+  let yMain = 0, ySide = 0;
+
+  // The rail's grey field, repainted on every page — including pages where it
+  // holds nothing, because a column that vanishes halfway through a document
+  // reads as a rendering fault rather than as a design.
+  function paintRail(from) {
+    doc.setFillColor(RAIL[0], RAIL[1], RAIL[2]);
+    doc.rect(SIDE_X - 10, from - 12, SIDE_W + 20, PAGE_H - from - M + 12, 'F');
   }
-  function text(str, x, size, style, color, maxW) {
+
+  function setFont(size, style, color) {
     doc.setFont('helvetica', style || 'normal');
     doc.setFontSize(size);
     doc.setTextColor(color[0], color[1], color[2]);
-    const lines = doc.splitTextToSize(String(str), maxW || W);
-    lines.forEach(line => { ensure(size + 4); doc.text(line, x, y); y += size + 4; });
-  }
-  function sectionTitle(t) {
-    y += 8; ensure(22);
-    doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
-    doc.setTextColor(PURPLE[0], PURPLE[1], PURPLE[2]);
-    doc.text(t.toUpperCase(), M, y);
-    y += 6;
-    doc.setDrawColor(226, 232, 240); doc.setLineWidth(1);
-    doc.line(M, y, M + W, y);
-    y += 12;
   }
 
-  // Photo (top-right) if present
-  const PHOTO_W = 90, PHOTO_H = 110;
-  let headerRight = M + W;
+  function nextPage() {
+    doc.addPage();
+    paintRail(M);
+    yMain = M;
+    ySide = M;
+  }
+
+  // Wrapped text inside one column. Each column paginates on its own cursor;
+  // when either runs out of room both restart at the top of a new page, which
+  // keeps the two from drifting onto different sheets.
+  function write(str, x, w, size, style, color, lead) {
+    setFont(size, style, color);
+    const lines = doc.splitTextToSize(String(str), w);
+    const step = lead || size + 3;
+    const isMain = (x === MAIN_X);
+    lines.forEach(function (line) {
+      let y = isMain ? yMain : ySide;
+      if (y + step > PAGE_H - M) { nextPage(); y = M; }
+      doc.text(line, x, y);
+      y += step;
+      if (isMain) yMain = y; else ySide = y;
+    });
+  }
+
+  // Main-column heading: white on a filled teal bar.
+  function mainSection(label) {
+    yMain += 10;
+    if (yMain + 30 > PAGE_H - M) nextPage();
+    doc.setFillColor(TEAL[0], TEAL[1], TEAL[2]);
+    doc.rect(MAIN_X, yMain - 2, MAIN_W, 17, 'F');
+    setFont(9.5, 'bold', WHITE);
+    doc.text(String(label).toUpperCase(), MAIN_X + 8, yMain + 10);
+    yMain += 28;
+  }
+
+  // Rail heading: teal type over a hairline rather than a second filled bar. The
+  // rail is already a block of colour and a bar inside it would fight the one
+  // opposite for the reader's eye.
+  function railSection(label) {
+    ySide += 12;
+    if (ySide + 28 > PAGE_H - M) nextPage();
+    setFont(9.5, 'bold', TEAL);
+    doc.text(String(label).toUpperCase(), SIDE_X, ySide);
+    ySide += 4;
+    doc.setDrawColor(TEAL[0], TEAL[1], TEAL[2]);
+    doc.setLineWidth(0.8);
+    doc.line(SIDE_X, ySide, SIDE_X + SIDE_W, ySide);
+    ySide += 13;
+  }
+
+  // The dot is drawn separately and the body indented past it, so a wrapped
+  // second line aligns under the first word instead of under the bullet.
+  function bulletList(items, x, w) {
+    const isMain = (x === MAIN_X);
+    (items || []).forEach(function (raw) {
+      const line = String(raw).trim();
+      if (!line) return;
+      let y = isMain ? yMain : ySide;
+      if (y + 12 > PAGE_H - M) { nextPage(); y = M; }
+      setFont(9, 'normal', DARK);
+      doc.text('•', x, y);
+      const lines = doc.splitTextToSize(line, w - 10);
+      lines.forEach(function (l) {
+        if (y + 12 > PAGE_H - M) { nextPage(); y = M; }
+        doc.text(l, x + 10, y);
+        y += 12;
+      });
+      y += 2;
+      if (isMain) yMain = y; else ySide = y;
+    });
+  }
+
+  // A description may arrive as an array, or as one string holding several
+  // points. Both shapes exist in saved profiles: the CV parser produces lines,
+  // the manual form produces a textarea.
+  function splitLines(value) {
+    if (Array.isArray(value)) return value;
+    return String(value || '').split(/\r?\n|;|·|•/).map(function (s) { return s.trim(); }).filter(Boolean);
+  }
+
+  // ── Header ────────────────────────────────────────────────────────────────
+  const PHOTO = 96;
+  let y = M;
   if (p.photo) {
-    try {
-      const px = M + W - PHOTO_W;
-      doc.addImage(p.photo, 'JPEG', px, y - 6, PHOTO_W, PHOTO_H);
-      headerRight = px - 12;
-    } catch (_) { /* ignore bad image */ }
+    try { doc.addImage(p.photo, 'JPEG', PAGE_W - M - PHOTO, y, PHOTO, PHOTO); }
+    catch (_) { /* an unreadable photo must not cost the whole document */ }
   }
-  const headerW = headerRight - M;
+  const headW = PAGE_W - M * 2 - (p.photo ? PHOTO + 20 : 0);
 
-  // Header
-  doc.setFont('helvetica', 'bold'); doc.setFontSize(24);
-  doc.setTextColor(DARK[0], DARK[1], DARK[2]);
-  doc.text(name, M, y); y += 26;
-  if (p.title) { text(p.title, M, 13, 'bold', PURPLE, headerW); }
-  const contact = [p.email, p.phone, p.location, p.nationality].filter(Boolean).join('   •   ');
-  if (contact) text(contact, M, 10, 'normal', GREY, headerW);
-  if (p.languages) text('Languages: ' + p.languages, M, 10, 'normal', GREY, headerW);
-  // Make sure we clear the photo height before the divider
-  if (p.photo && y < M + PHOTO_H) y = M + PHOTO_H;
-  y += 6;
-  doc.setDrawColor(PURPLE[0], PURPLE[1], PURPLE[2]); doc.setLineWidth(2);
-  doc.line(M, y, M + W, y); y += 8;
-
-  // Summary
-  if (p.summary) { sectionTitle('Profile'); text(p.summary, M, 11, 'normal', DARK); }
-
-  // Skills
-  if (p.skills && p.skills.length) {
-    sectionTitle('Skills');
-    text((p.skills.map(s => s.label || s)).join('  •  '), M, 11, 'normal', DARK);
+  setFont(23, 'bold', DARK);
+  doc.splitTextToSize(name, headW).forEach(function (l) { doc.text(l, M, y + 20); y += 26; });
+  if (p.title) {
+    setFont(12.5, 'bold', TEAL);
+    doc.splitTextToSize(p.title, headW).forEach(function (l) { doc.text(l, M, y + 12); y += 16; });
   }
+  if (p.summary) {
+    setFont(9.5, 'normal', GREY);
+    doc.splitTextToSize(p.summary, headW).slice(0, 3).forEach(function (l) { doc.text(l, M, y + 10); y += 13; });
+  }
+  y = Math.max(y + 12, M + (p.photo ? PHOTO + 14 : 0));
+  doc.setDrawColor(TEAL[0], TEAL[1], TEAL[2]);
+  doc.setLineWidth(2);
+  doc.line(M, y, PAGE_W - M, y);
 
-  // Experience
-  if (p.experience && p.experience.length) {
-    sectionTitle('Experience');
-    p.experience.forEach(x => {
-      const head = [x.role, x.org].filter(Boolean).join(' — ');
-      const dates = [x.start, x.end].filter(Boolean).join(' – ');
-      if (head) text(head + (dates ? `   (${dates})` : ''), M, 11, 'bold', DARK);
-      if (x.location) text(x.location, M, 10, 'italic', LIGHT);
-      if (x.desc) text(x.desc, M, 10, 'normal', GREY);
-      y += 4;
+  const headerBottom = y + 22;
+  paintRail(headerBottom);
+  yMain = headerBottom;
+  ySide = headerBottom;
+
+  // ── Rail ──────────────────────────────────────────────────────────────────
+  const contact = [
+    p.location    ? ['Ort', p.location] : null,
+    p.email       ? ['E-Mail', p.email] : null,
+    p.phone       ? ['Tel', p.phone] : null,
+    p.nationality ? ['Nationalitaet', p.nationality] : null,
+  ].filter(Boolean);
+
+  if (contact.length) {
+    railSection('Kontakt');
+    contact.forEach(function (kv) {
+      write(kv[0] + ':', SIDE_X, SIDE_W, 8.5, 'bold', DARK, 11);
+      write(kv[1], SIDE_X, SIDE_W, 8.5, 'normal', GREY, 11);
+      ySide += 3;
     });
   }
 
-  // Education
   if (p.education && p.education.length) {
-    sectionTitle('Education');
-    p.education.forEach(x => {
-      const head = [x.degree, x.org].filter(Boolean).join(' — ');
+    railSection('Ausbildung');
+    p.education.forEach(function (x) {
       const dates = [x.start, x.end].filter(Boolean).join(' – ');
-      if (head) text(head + (dates ? `   (${dates})` : ''), M, 11, 'bold', DARK);
-      if (x.location) text(x.location, M, 10, 'italic', LIGHT);
-      y += 4;
+      if (dates)    write(dates, SIDE_X, SIDE_W, 8, 'normal', GREY, 10);
+      if (x.degree) write(x.degree, SIDE_X, SIDE_W, 9, 'bold', DARK, 11);
+      const sub = [x.org, x.grade ? 'Note: ' + x.grade : ''].filter(Boolean).join(' | ');
+      if (sub)      write(sub, SIDE_X, SIDE_W, 8.5, 'normal', GREY, 11);
+      ySide += 5;
     });
   }
 
-  // Certifications
+  if (p.languages) {
+    railSection('Sprachen');
+    splitLines(p.languages).forEach(function (l) {
+      write(l, SIDE_X, SIDE_W, 8.5, 'normal', DARK, 12);
+    });
+  }
+
+  if (p.softSkills && splitLines(p.softSkills).length) {
+    railSection('Soft Skills');
+    bulletList(splitLines(p.softSkills), SIDE_X, SIDE_W);
+  }
+
+  if (p.interests && splitLines(p.interests).length) {
+    railSection('Interessen');
+    bulletList(splitLines(p.interests), SIDE_X, SIDE_W);
+  }
+
+  // ── Main column ───────────────────────────────────────────────────────────
+  if (p.experience && p.experience.length) {
+    mainSection('Berufserfahrung');
+    p.experience.forEach(function (x) {
+      const dates = [x.start, x.end].filter(Boolean).join(' – ');
+      if (dates)  write(dates, MAIN_X, MAIN_W, 8, 'normal', GREY, 11);
+      if (x.role) write(x.role, MAIN_X, MAIN_W, 10.5, 'bold', TEAL, 13);
+      const org = [x.org, x.location].filter(Boolean).join(', ');
+      if (org)    write(org, MAIN_X, MAIN_W, 9.5, 'bold', DARK, 12);
+      if (x.desc) bulletList(splitLines(x.desc), MAIN_X, MAIN_W);
+      yMain += 6;
+    });
+  }
+
+  if (p.skills && p.skills.length) {
+    mainSection('Technische Faehigkeiten');
+    // Grouped by category where the taxonomy supplies one, because that is the
+    // shape the reader expects — "Security Tools: Kali, Wireshark, Ghidra" — and
+    // one flat row where it does not.
+    const groups = {};
+    p.skills.forEach(function (s) {
+      const label = s.label || s.key || s;
+      const cat = String(s.category || '').trim() || 'Kenntnisse';
+      (groups[cat] = groups[cat] || []).push(label);
+    });
+    Object.keys(groups).forEach(function (cat) {
+      const LABEL_W = 104;
+      if (yMain + 14 > PAGE_H - M) nextPage();
+      setFont(9, 'bold', TEAL);
+      doc.text(cat + ':', MAIN_X, yMain);
+      const lines = doc.splitTextToSize(groups[cat].join(', '), MAIN_W - LABEL_W);
+      setFont(9, 'normal', DARK);
+      let y1 = yMain;
+      lines.forEach(function (l) {
+        if (y1 + 12 > PAGE_H - M) { nextPage(); y1 = M; }
+        doc.text(l, MAIN_X + LABEL_W, y1);
+        y1 += 12;
+      });
+      yMain = y1 + 5;
+    });
+  }
+
+  if (p.projects && p.projects.length) {
+    mainSection('Projekte');
+    p.projects.forEach(function (x) {
+      if (x.name) write(x.name, MAIN_X, MAIN_W, 10, 'bold', TEAL, 13);
+      const sub = [x.org, x.year].filter(Boolean).join(', ');
+      if (sub)    write(sub, MAIN_X, MAIN_W, 8, 'normal', GREY, 11);
+      if (x.desc) bulletList(splitLines(x.desc), MAIN_X, MAIN_W);
+      yMain += 6;
+    });
+  }
+
   if (p.certifications && p.certifications.length) {
-    sectionTitle('Certifications');
-    p.certifications.forEach(x => {
-      text([x.name, x.year].filter(Boolean).join(' · '), M, 11, 'normal', DARK);
+    mainSection('Weiterbildung');
+    p.certifications.forEach(function (x) {
+      const head = [x.name, x.year].filter(Boolean).join(' – ');
+      if (head)   write(head, MAIN_X, MAIN_W, 9.5, 'bold', TEAL, 12);
+      if (x.desc) bulletList(splitLines(x.desc), MAIN_X, MAIN_W);
+      yMain += 3;
     });
   }
 
