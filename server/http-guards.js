@@ -136,6 +136,7 @@ function createGuards({ authenticate, getToken, publicBaseUrl, publicDir }) {
     '/api/chat', '/api/generate-cover', '/api/generate-cv', '/api/generate-roadmap',
     '/api/generate-interview', '/api/extract-profile', '/api/job-consult',
     '/api/market-report', '/api/pipeline', '/api/graph-run', '/api/graph-stream',
+    '/api/explain-score',
     '/api/semantic-match',
     // CPU, and a large upload.
     '/api/parse-pdf', '/api/analyze',
