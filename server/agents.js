@@ -98,17 +98,39 @@ const ScoutAgent = {
   async reason(analysis, input, deps) {
     if (!deps || !deps.reasoning || !deps.llm) return analysis;
 
-    // Experience, but only where arithmetic found nothing. A CV written in prose
-    // — "worked in a SOC for three years before returning to study" — carries the
-    // fact without a single parseable date, and that is the one case worth a model
-    // call. Where dates exist they win: they are reproducible and it is not.
+    // Experience. The model is consulted on EVERY run, not only when the date
+    // arithmetic came back empty — but what happens to its answer depends on
+    // whether there was arithmetic to compare it against.
+    //
+    //   no dates parsed  → the model's figure becomes the value, with its quote
+    //   dates parsed     → the computed figure stands, and the model's becomes a
+    //                      second opinion recorded beside it
+    //
+    // The asymmetry is not timidity about the model. experienceYears feeds the
+    // match score, and a figure that can come back 3 on one run and 3.5 on the next
+    // makes the same CV against the same posting score differently — which is the
+    // one property this product sells. So the model always speaks, and where a
+    // reproducible number exists it does not overwrite it.
+    //
+    // A disagreement is worth surfacing rather than hiding: it usually means the CV
+    // lists dates the parser could read and prose the parser could not, and the
+    // candidate is the only one who can say which is right.
     let years = analysis.experienceYears;
     let source = analysis.experienceSource || 'unknown';
     let yearsEvidence = '';
+    let yearsOpinion = null;
+
+    const opinion = await experience.inferExperienceYears((input && input.cvText) || '', deps.llm)
+      .catch(() => null);
+
     if (years === null || years === undefined) {
-      const got = await experience.inferExperienceYears((input && input.cvText) || '', deps.llm)
-        .catch(() => null);
-      if (got) { years = got.years; source = 'inferred'; yearsEvidence = got.evidence; }
+      if (opinion) { years = opinion.years; source = 'inferred'; yearsEvidence = opinion.evidence; }
+    } else if (opinion) {
+      yearsOpinion = opinion.years;
+      yearsEvidence = opinion.evidence;
+      // Half a year is rounding and parser noise; beyond that the two are reading
+      // different things and the run should say so.
+      if (Math.abs(opinion.years - years) > 0.5) source = 'dates (model disagrees)';
     }
 
     const vocabulary = typeof deps.allSkills === 'function'
@@ -122,7 +144,7 @@ const ScoutAgent = {
     }, deps.llm);
     if (!out || !out.inferred.length) {
       return { ...analysis, experienceYears: years, experienceSource: source,
-               yearsEvidence, inferred: [], rejected: (out && out.rejected) || [] };
+               yearsEvidence, yearsOpinion, inferred: [], rejected: (out && out.rejected) || [] };
     }
 
     // Inferred skills join foundSkills so everything downstream — the Matcher's
@@ -141,7 +163,7 @@ const ScoutAgent = {
     const recommendations = typeof deps.recommend === 'function' ? deps.recommend(roles) : analysis.recommendations;
 
     return { foundSkills, foundKeys, missingSkills, roles, recommendations,
-             experienceYears: years, experienceSource: source, yearsEvidence,
+             experienceYears: years, experienceSource: source, yearsEvidence, yearsOpinion,
              inferred: out.inferred, rejected: out.rejected };
   },
 };
@@ -178,18 +200,30 @@ const MatcherAgent = {
     const matches = Array.isArray(matching.matches) ? matching.matches : [];
     if (!matches.length) return matching;
 
-    const topN = deps.reasoning.ADJUDICATE_TOP_N || 3;
-    const head = matches.slice(0, topN);
+    // 0 means every match. The cap is a budget, not a design limit: eligibility is
+    // worth judging wherever a user might read the posting, and where they will not,
+    // a verdict buys nothing but a model call.
+    const cfg = deps.reasoning.ADJUDICATE_TOP_N;
+    const topN = typeof cfg === 'function' ? cfg() : (cfg || 25);
+    const head = topN === 0 ? matches : matches.slice(0, topN);
     const foundKeys = (input && input.analysis && input.analysis.foundKeys) || [];
 
-    const verdicts = await Promise.all(head.map(m =>
-      deps.reasoning.adjudicate({
-        job: m.job,
-        // The posting text lives under different keys depending on the source.
-        jobDescription: m.job?.description || m.job?.snippet || '',
-        foundKeys,
-        score: m.score,
-      }, deps.llm).catch(() => null)));
+    // Batched rather than one Promise.all over the whole list. With the cap lifted
+    // that would open one connection per posting simultaneously, and the provider
+    // rate-limits the entire search instead of slowing it down.
+    const size = deps.reasoning.ADJUDICATE_CONCURRENCY || 6;
+    const verdicts = [];
+    for (let i = 0; i < head.length; i += size) {
+      const batch = await Promise.all(head.slice(i, i + size).map(m =>
+        deps.reasoning.adjudicate({
+          job: m.job,
+          // The posting text lives under different keys depending on the source.
+          jobDescription: m.job?.description || m.job?.snippet || '',
+          foundKeys,
+          score: m.score,
+        }, deps.llm).catch(() => null)));
+      verdicts.push(...batch);
+    }
 
     let blockedCount = 0;
     const judged = matches.map((m, i) => {
