@@ -196,3 +196,134 @@ Check that one line before recording the whole take.
 **Voice choice.** Pick one and stay with it across the whole video. A warm, level
 delivery suits this material; anything with sales energy fights the content, which
 is arguing that the numbers can be checked.
+
+---
+
+## Generating the atmosphere shots with Veo
+
+Veo 3.1 does text-to-video and image-to-video with native audio, in clips of about
+eight seconds. A ninety-second film is therefore assembled, not generated: roughly
+five generated clips carrying atmosphere and transitions, and the product shown by
+real screen capture in between.
+
+**The split is not a matter of taste.** Generative video cannot render legible
+interface text — labels come out as plausible-looking nonsense. A film arguing that
+this product's numbers can be checked, illustrated with a fabricated interface,
+refutes itself in the one place a viewer looks closely. So:
+
+| Beat | Source |
+|---|---|
+| 0:00–0:12 · the problem | **Veo** — no product on screen yet |
+| 0:12–0:30 · the CV goes in | **Capture** — the real upload and the extracted skills |
+| 0:30–0:50 · one search | **Veo** for a 3s transition, then **capture** for the merged list |
+| 0:50–1:15 · the score | **Capture only.** This is the shot the film exists for |
+| 1:15–1:45 · the graded letter | **Capture** — the agent trace and the visible score |
+| 1:45–2:00 · close | **Veo** — one atmospheric hold under the closing line |
+
+Never generate a shot of the product. Generate the world around it.
+
+### Writing prompts Veo responds to
+
+Six things, in this order: subject, action, camera, lens and framing, lighting, and
+audio. Vague prompts produce stock-looking results; the specificity is what buys
+the cinematic quality. Keep one sentence per element rather than one long clause.
+
+Say what the camera does. "Slow dolly in" and "static wide, no camera movement" are
+instructions Veo follows; "cinematic" on its own is not.
+
+---
+
+### Clip 1 — the problem, opening (8s)
+
+```
+A young woman sits alone at a kitchen table late at night, laptop open, three
+browser windows overlapping on the screen. She scrolls, stops, rubs her eyes, and
+scrolls again. Her expression is tired rather than dramatic.
+
+Camera: slow push in from a medium-wide shot to a medium shot, ending slightly
+above her eyeline.
+Lens: 35mm, shallow depth of field, the room falling out of focus behind her.
+Lighting: single warm lamp off-frame left, cool blue laptop glow on her face, deep
+shadow in the rest of the room.
+Mood: quiet fatigue, not despair.
+Audio: room tone, a fridge hum, occasional keyboard clicks. No music, no dialogue.
+```
+
+**On the laptop screen:** ask for it out of focus or angled away. A readable screen
+here is a screen Veo will get wrong.
+
+### Clip 2 — the problem, the pile (8s)
+
+```
+Extreme close-up of a printed job advertisement on a desk, dense paragraphs of
+requirements running off the bottom of the frame. A hand slides a second printed
+page on top of it, then a third, then a fourth. The pile grows unevenly.
+
+Camera: static top-down shot, locked off, no movement.
+Lens: 50mm macro, the paper texture visible, edges soft.
+Lighting: hard directional desk lamp from the right, sharp shadows between the
+sheets.
+Mood: accumulating weight.
+Audio: paper sliding on paper, the dry sound of pages settling. Nothing else.
+```
+
+Printed pages rather than screens: real paper is a thing Veo renders well, and the
+requirements do not need to be legible for the shot to say "twenty of these".
+
+### Clip 3 — transition into the search (3s, trim from 8s)
+
+```
+Abstract shot of many small points of light drifting in dark space, slowly
+converging toward a single brighter point at the centre of frame. The motion is
+smooth and unhurried, suggesting consolidation rather than speed.
+
+Camera: slow orbit around the convergence point.
+Lens: 85mm, heavy bokeh on the out-of-focus points.
+Lighting: the points are the only light source; the background is near-black.
+Mood: order emerging from scatter.
+Audio: a low sustained tone rising slightly in pitch. No percussion.
+```
+
+This is the one place a generated abstract shot beats a screen recording: eleven
+sources merging into one list is an idea, not a picture. Trim to three seconds — an
+abstract shot outlives its welcome quickly.
+
+### Clip 4 — the close (8s)
+
+```
+A man in his late twenties closes a laptop on a desk by a window, picks up a coat
+from the back of the chair and walks out of frame. Morning light. The desk is left
+tidy. He does not look back at the laptop.
+
+Camera: static medium-wide, locked off. He exits frame right.
+Lens: 35mm, deep focus, the window blown out slightly.
+Lighting: natural morning sun through the window, cool fill from the left.
+Mood: resolved, unhurried. The work is finished.
+Audio: a chair moving, a door, distant street noise. No music.
+```
+
+The close mirrors the open deliberately: same kind of room, same kind of desk,
+opposite posture. Night to morning, alone and stuck to finished and leaving.
+
+---
+
+### Two things to check on every generated clip
+
+**Hands and text.** These are where generative video still fails visibly. Reject a
+take with six fingers or with signage in it, however good the rest looks — a viewer
+who notices stops watching the argument and starts watching the artefact.
+
+**Continuity of person.** Veo has no memory between clips. The woman in clip 1 and
+the man in clip 4 are different people on purpose; if you want the same person
+twice, generate from a reference image rather than from text, or the audience will
+read two characters as a continuity error.
+
+### Audio
+
+Veo 3.1 generates audio with the picture, which is useful for room tone and
+incidental sound and unreliable for narration — you cannot iterate on one word of a
+line without regenerating the shot.
+
+Generate ambience only, keep the narration on a separate text-to-speech track, and
+duck the ambience under the voice in the edit. The voiceover text is above, already
+written for that workflow.
