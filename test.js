@@ -10,6 +10,8 @@ const agents = require('./server/agents.js');
 const reasoning = require('./server/reasoning.js');
 const employment = require('./server/employment.js');
 const explainer = require('./server/score-explainer.js');
+const experience = require('./server/experience.js');
+const Scorer = require('./scorer.js');
 const dedup  = require('./server/dedup.js');
 const rerank = require('./rerank.js');
 const { buildReport } = require('./server/report.js');
@@ -676,6 +678,65 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
   // ───────────────────────────────────────────────────────────────────────
   // Skill-Gap Recommendations (Sprint-2 feature: concrete "learn Y" advice)
   // ───────────────────────────────────────────────────────────────────────
+  section('Experience — seniority had been reading a value nobody set');
+
+  // scorer.js gives seniority 10 of its 100 points and reads profile.experienceYears.
+  // scoreJob() never supplied it, so every candidate was scored as having none.
+  {
+    const NOW = new Date('2026-08-24T00:00:00Z');
+    const years = (text) => experience.deriveExperienceYears(text, NOW);
+
+    const STUDENT = [
+      'BERUFSERFAHRUNG',
+      '02.2023 - 09.2023', 'Praktikum Softwareentwicklung', 'Beispiel Suarl, Douala',
+      '',
+      'AUSBILDUNG',
+      '05.2025 - heute', 'M.Sc. Internet-Sicherheit', 'Westfaelische Hochschule GE',
+      '09.2017 - 02.2021', 'B.Sc. Computer Science', 'Uni Beispiel | Note: 3,4',
+      '06.2021 - 01.2024', 'Deutsch A1-C1', 'Sprachlerninstitut Bafoussam',
+    ].join('\n');
+
+    test('a study period is not work experience', () => {
+      // Seven months of internship. Counting the education block as well would
+      // report nine years and present a student as a senior hire.
+      assertEqual(years(STUDENT), 0.6, 'only the internship counts');
+    });
+
+    test('consecutive roles add up', () => {
+      const cv = '01.2021 - heute\nIT-Security Analyst\nMuster GmbH\n\n03.2018 - 12.2020\nSysadmin\nAndere GmbH';
+      assert(years(cv) > 8 && years(cv) < 8.5, `about 8.3 years, got ${years(cv)}`);
+    });
+
+    test('overlapping roles are counted once', () => {
+      // Two jobs held in the same year are one year of experience, not two.
+      assertEqual(years('01.2022 - 12.2022 Analyst\n06.2022 - 12.2022 Berater'), 0.9, 'merged, not summed');
+    });
+
+    test('an open range runs to today', () => {
+      assert(years('05.2025 - heute\nIT-Security Analyst\nMuster GmbH') > 1, 'heute resolves to now');
+    });
+
+    test('month names are understood, German and English', () => {
+      assertEqual(years('Feb 2023 - Sep 2023\nPraktikum\nMuster GmbH'), 0.6, 'Feb-Sep is seven months');
+    });
+
+    test('a CV with no parseable date reports null, not zero', () => {
+      // The distinction the model exists for: "no date I could read" is a question,
+      // "no experience" is an answer.
+      assertEqual(years('Kenntnisse: Python, Linux, Wireshark'), null, 'unknown stays unknown');
+    });
+
+    test('a reversed range is discarded rather than counted backwards', () => {
+      assertEqual(years('09.2023 - 02.2023 Praktikum\nMuster GmbH'), null, 'typo ignored');
+    });
+
+    test('the value actually moves the score it feeds', () => {
+      const job = { title: 'Senior IT Security Engineer', description: 'SIEM, Splunk' };
+      const at = (y) => Scorer.scoreJob(job, { skills: ['siem'], targetRoles: [], experienceYears: y }, ['siem']).score;
+      assert(at(5) > at(0), 'five years scores above the zero everyone used to get');
+    });
+  }
+
   section('Score explanation — the model describes, the formula decides');
 
   // The match score is deterministic and published; this layer only puts it into

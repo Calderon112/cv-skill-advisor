@@ -31,6 +31,10 @@
 
 'use strict';
 
+// Required rather than injected: it is pure arithmetic over text with no
+// configuration and no I/O, so a test gains nothing from substituting it.
+const experience = require('./experience.js');
+
 /** Shared communication channel between agents (carries data + status log). */
 class AgentContext {
   constructor() {
@@ -65,7 +69,20 @@ const ScoutAgent = {
     // recommender is injected. Optional, so the agent stays usable without it.
     const recommendations = typeof deps.recommend === 'function' ? deps.recommend(roles) : [];
 
-    return { foundSkills, foundKeys, missingSkills, roles, recommendations };
+    // Seniority is ten of the hundred points in scorer.js and was reading an
+    // experienceYears nobody set, so `|| 0` fired every time and every candidate
+    // scored as having no experience. Derived here, from date ranges in the CV, by
+    // arithmetic — the score has to stay reproducible, so a model may not produce
+    // this number while a job is being scored.
+    const experienceYears = experience.deriveExperienceYears(input.cvText);
+
+    return {
+      foundSkills, foundKeys, missingSkills, roles, recommendations,
+      // null, not 0. "No date I could parse" and "no experience" are different
+      // findings, and only the first one is worth asking a model about.
+      experienceYears,
+      experienceSource: experienceYears === null ? 'unknown' : 'dates',
+    };
   },
 
   /**
@@ -80,6 +97,20 @@ const ScoutAgent = {
    */
   async reason(analysis, input, deps) {
     if (!deps || !deps.reasoning || !deps.llm) return analysis;
+
+    // Experience, but only where arithmetic found nothing. A CV written in prose
+    // — "worked in a SOC for three years before returning to study" — carries the
+    // fact without a single parseable date, and that is the one case worth a model
+    // call. Where dates exist they win: they are reproducible and it is not.
+    let years = analysis.experienceYears;
+    let source = analysis.experienceSource || 'unknown';
+    let yearsEvidence = '';
+    if (years === null || years === undefined) {
+      const got = await experience.inferExperienceYears((input && input.cvText) || '', deps.llm)
+        .catch(() => null);
+      if (got) { years = got.years; source = 'inferred'; yearsEvidence = got.evidence; }
+    }
+
     const vocabulary = typeof deps.allSkills === 'function'
       ? deps.allSkills().map(s => ({ key: s.key, label: s.label }))
       : [];
@@ -90,7 +121,8 @@ const ScoutAgent = {
       vocabulary,
     }, deps.llm);
     if (!out || !out.inferred.length) {
-      return { ...analysis, inferred: [], rejected: (out && out.rejected) || [] };
+      return { ...analysis, experienceYears: years, experienceSource: source,
+               yearsEvidence, inferred: [], rejected: (out && out.rejected) || [] };
     }
 
     // Inferred skills join foundSkills so everything downstream — the Matcher's
@@ -109,6 +141,7 @@ const ScoutAgent = {
     const recommendations = typeof deps.recommend === 'function' ? deps.recommend(roles) : analysis.recommendations;
 
     return { foundSkills, foundKeys, missingSkills, roles, recommendations,
+             experienceYears: years, experienceSource: source, yearsEvidence,
              inferred: out.inferred, rejected: out.rejected };
   },
 };
