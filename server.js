@@ -59,6 +59,7 @@ const graph = require('./server/graph.js');
 const usage = require('./server/usage.js');
 const oidc = require('./server/oidc.js');
 const salaryBand = require('./server/salary-band.js');
+const scoreExplainer = require('./server/score-explainer.js');
 
 // Per-role salary bands. Measured from live ads, so worth re-reading occasionally,
 // but not on every page view — the same role gives the same answer to everyone.
@@ -3499,6 +3500,41 @@ const server = http.createServer(async (req, res) => {
     // listed five by hand; a sixth added later would have been left behind.
     await repo.deleteAccount(username);
     sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  // ── Explain a match score in words (the formula still produces the number) ──
+  //
+  // Takes a job and the caller's analysis, recomputes the score here rather than
+  // trusting a number posted by the client — an explanation of a figure the server
+  // did not calculate would describe whatever the caller claimed.
+  if (parsedUrl.pathname === '/api/explain-score' && req.method === 'POST') {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const { job, analysis, language } = JSON.parse(body || '{}');
+        if (!job || !analysis) { sendJson(res, 400, { error: 'job and analysis are required' }); return; }
+
+        const { score, breakdown } = scoreJob(job, analysis);
+        const score100 = Math.round(score * 100);
+
+        // The breakdown is returned whether or not the model is reachable. It is
+        // the answer; the sentences are a convenience on top of it.
+        const out = await scoreExplainer.explainScore(
+          { score100, breakdown, job, language }, llm,
+        );
+        sendJson(res, 200, {
+          score100,
+          breakdown,
+          explanation: out ? out.text : '',
+          weakest: out ? out.worst : '',
+          explained: !!out,
+        });
+      } catch (error) {
+        sendJson(res, 400, { error: 'Invalid request payload' });
+      }
+    });
     return;
   }
 

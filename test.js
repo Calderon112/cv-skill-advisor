@@ -9,6 +9,7 @@ const crypto = require('crypto');
 const agents = require('./server/agents.js');
 const reasoning = require('./server/reasoning.js');
 const employment = require('./server/employment.js');
+const explainer = require('./server/score-explainer.js');
 const dedup  = require('./server/dedup.js');
 const rerank = require('./rerank.js');
 const { buildReport } = require('./server/report.js');
@@ -675,6 +676,68 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
   // ───────────────────────────────────────────────────────────────────────
   // Skill-Gap Recommendations (Sprint-2 feature: concrete "learn Y" advice)
   // ───────────────────────────────────────────────────────────────────────
+  section('Score explanation — the model describes, the formula decides');
+
+  // The match score is deterministic and published; this layer only puts it into
+  // words. A caption that disagrees with the figure printed above it is worse than
+  // no caption, because the reader cannot tell which of the two to believe.
+  {
+    const BD = {
+      points:  { skills: 28, role: 20, location: 10, remote: 10, seniority: 5, salary: 2.5 },
+      weights: { skills: 45, role: 20, location: 10, remote: 10, seniority: 10, salary: 5 },
+      skillsMatched: ['python', 'linux', 'wireshark'],
+      skillsMissing: ['splunk', 'siem'],
+    };
+    const JOB = { title: 'SOC Analyst', company: 'Acme' };
+    const say = (reply) => ({ isAvailable: () => true, chat: async () => reply });
+    const run = (reply, score) => explainer.explainScore(
+      { score100: score === undefined ? 76 : score, breakdown: BD, job: JOB, language: 'en' }, say(reply));
+
+    await atest('accepts an explanation that stays inside the breakdown', async () => {
+      const r = await run('You cover the technical core with Python and Linux, but Splunk is missing, which costs 17 of the 45 skill points.');
+      assert(r && /Splunk/.test(r.text), 'faithful explanation kept');
+      assertEqual(r.worst, 'skills', 'largest shortfall identified by arithmetic, not by the model');
+    });
+
+    await atest('accepts the scale itself — "76 out of 100"', async () => {
+      const r = await run('You scored 76 out of 100. The gap is in skills.');
+      assert(r, '100 is the scale, not an invented figure');
+    });
+
+    await atest('accepts a count of the missing skills', async () => {
+      const r = await run('You are missing 2 of the skills this posting asks for.');
+      assert(r, 'list lengths are derivable from the breakdown');
+    });
+
+    await atest('rejects an invented percentage', async () => {
+      const r = await run('Your real match is closer to 78% once the home lab is counted.');
+      assertEqual(r, null, 'a figure absent from the breakdown is refused');
+    });
+
+    await atest('rejects an explanation that contradicts the total', async () => {
+      const r = await run('This role matches you at 91 out of 100.');
+      assertEqual(r, null, 'the total is final');
+    });
+
+    await atest('no model configured leaves the breakdown to speak for itself', async () => {
+      const r = await explainer.explainScore(
+        { score100: 76, breakdown: BD, job: JOB }, { isAvailable: () => false });
+      assertEqual(r, null, 'the table is the answer; the sentences are a convenience');
+    });
+
+    await atest('a model failure is not an error the caller has to handle', async () => {
+      const boom = { isAvailable: () => true, chat: async () => { throw new Error('boom'); } };
+      const r = await explainer.explainScore({ score100: 76, breakdown: BD, job: JOB }, boom);
+      assertEqual(r, null, 'degrades instead of throwing');
+    });
+
+    await atest('the explainer never produces a score of its own', async () => {
+      const r = await run('Skills are the weak point: 28 of 45.');
+      assert(r && r.score === undefined && r.score100 === undefined,
+        'it returns text and a component name, never a number');
+    });
+  }
+
   section('Position type — Werkstudent and friends');
 
   // The filter existed and /api/scrape-all honoured it, while /api/jobs accepted
