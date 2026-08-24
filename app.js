@@ -4119,14 +4119,14 @@ function buildProfilePdfDoc(profile, overrides) {
       doc.text('•', x, y);
       const lines = doc.splitTextToSize(line, w - 10);
       lines.forEach(function (l) {
-        if (y + 12.5 > PAGE_H - M) { nextPage(); y = M; }
+        if (y + 11.5 > PAGE_H - M) { nextPage(); y = M; }
         doc.text(l, x + 10, y);
-        y += 12.5;
+        y += 11.5;
       });
       // Five points between bullets, not two. At two, a bullet that wraps onto a
       // second line is indistinguishable from the next bullet starting, and a
       // three-bullet entry reads as one block of grey.
-      y += 5;
+      y += 2.5;
       if (isMain) yMain = y; else ySide = y;
     });
   }
@@ -4235,7 +4235,7 @@ function buildProfilePdfDoc(profile, overrides) {
       if (x.desc) bulletList(splitLines(x.desc), MAIN_X, MAIN_W);
       // Entries need more air between them than bullets do inside one, or the
       // reader cannot see where a job ends and the next begins.
-      yMain += 14;
+      yMain += 16;
     });
   }
 
@@ -4287,7 +4287,7 @@ function buildProfilePdfDoc(profile, overrides) {
       if (x.desc) bulletList(splitLines(x.desc), MAIN_X, MAIN_W);
       // Entries need more air between them than bullets do inside one, or the
       // reader cannot see where a job ends and the next begins.
-      yMain += 14;
+      yMain += 16;
     });
   }
 
