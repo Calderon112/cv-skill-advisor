@@ -678,6 +678,96 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
   // ───────────────────────────────────────────────────────────────────────
   // Skill-Gap Recommendations (Sprint-2 feature: concrete "learn Y" advice)
   // ───────────────────────────────────────────────────────────────────────
+  section('Deliberation coverage — the model runs on every pass');
+
+  {
+    const CV = [
+      'BERUFSERFAHRUNG', '02.2023 - 09.2023', 'Praktikum Softwareentwicklung',
+      'Muster GmbH, Essen', 'Entwicklung von Webanwendungen im agilen Team.',
+      '', 'Kenntnisse: Python, Linux, Wireshark.',
+    ].join('\n');
+
+    const baseDeps = {
+      findSkills: () => [{ key: 'python', label: 'Python' }],
+      analyzeRoles: () => [{ name: 'SOC Analyst', missing: [] }],
+      allSkills: () => [{ key: 'python', label: 'Python' }],
+      scoreJob: (j) => ({ score: j.s, breakdown: {} }),
+      recommend: () => [],
+    };
+    const yearsLlm = (years, evidence) => ({
+      isAvailable: () => true,
+      chat: async ({ system }) => (/PROFESSIONAL experience/.test(system)
+        ? JSON.stringify({ years, evidence }) : '[]'),
+    });
+    const scoutReason = (llm) => agents.ScoutAgent.reason(
+      agents.ScoutAgent.run({ cvText: CV }, null, baseDeps), { cvText: CV },
+      { ...baseDeps, reasoning, llm });
+
+    await atest('Scout consults the model even when the dates already parsed', async () => {
+      const r = await scoutReason(yearsLlm(0.6, 'Praktikum Softwareentwicklung'));
+      assertEqual(r.yearsOpinion, 0.6, 'the model was asked and answered');
+    });
+
+    await atest('a disagreeing model does not change the number that is scored', async () => {
+      // experienceYears feeds the match score. A figure that varies run to run makes
+      // the same CV score differently against the same posting, which is the one
+      // property the product sells.
+      const r = await scoutReason(yearsLlm(4, 'Praktikum Softwareentwicklung'));
+      assertEqual(r.experienceYears, 0.6, 'the computed value still stands');
+      assertEqual(r.yearsOpinion, 4, 'the disagreement is recorded, not discarded');
+      assert(/disagree/.test(r.experienceSource), 'and it is visible in the source');
+    });
+
+    await atest('an opinion quoting something absent from the CV is dropped entirely', async () => {
+      const r = await scoutReason(yearsLlm(4, 'drei Jahre im SOC bei Siemens'));
+      assertEqual(r.yearsOpinion, null, 'no evidence, no opinion');
+      assertEqual(r.experienceYears, 0.6, 'and nothing downstream moved');
+    });
+
+    // The Matcher's cap is a budget, not a design limit: one model call per posting.
+    {
+      const jobs = Array.from({ length: 12 }, (_, i) => ({ title: 'Job ' + i, s: 1 - i / 100, description: 'x'.repeat(200) }));
+      const withCap = (topN) => {
+        let calls = 0;
+        const deps = {
+          scoreJob: (j) => ({ score: j.s, breakdown: {} }),
+          llm: { isAvailable: () => true },
+          reasoning: {
+            ADJUDICATE_TOP_N: () => topN,
+            ADJUDICATE_CONCURRENCY: 4,
+            adjudicate: async () => { calls++; return { verdict: 'ok', blockers: [], reason: '' }; },
+          },
+        };
+        return { deps, calls: () => calls };
+      };
+
+      await atest('cap 0 judges every match, not just the head', async () => {
+        const { deps, calls } = withCap(0);
+        const base = agents.MatcherAgent.run({ analysis: { foundKeys: [] }, jobs }, null, deps);
+        const r = await agents.MatcherAgent.reason(base, { analysis: { foundKeys: [] } }, deps);
+        assertEqual(calls(), 12, 'one call per posting');
+        assertEqual(r.adjudicated, 12, 'and all of them reported as judged');
+      });
+
+      await atest('a cap below the result count still stops there', async () => {
+        const { deps, calls } = withCap(5);
+        const base = agents.MatcherAgent.run({ analysis: { foundKeys: [] }, jobs }, null, deps);
+        await agents.MatcherAgent.reason(base, { analysis: { foundKeys: [] } }, deps);
+        assertEqual(calls(), 5, 'the budget is respected');
+      });
+    }
+
+    test('GRAPH_ADJUDICATE_TOP_N is read at call time, not at import', () => {
+      const before = process.env.GRAPH_ADJUDICATE_TOP_N;
+      process.env.GRAPH_ADJUDICATE_TOP_N = '7';
+      assertEqual(reasoning.ADJUDICATE_TOP_N(), 7, 'a value set after require still applies');
+      process.env.GRAPH_ADJUDICATE_TOP_N = 'nonsense';
+      assertEqual(reasoning.ADJUDICATE_TOP_N(), 25, 'an unparseable value falls back to the default');
+      if (before === undefined) delete process.env.GRAPH_ADJUDICATE_TOP_N;
+      else process.env.GRAPH_ADJUDICATE_TOP_N = before;
+    });
+  }
+
   section('Experience — seniority had been reading a value nobody set');
 
   // scorer.js gives seniority 10 of its 100 points and reads profile.experienceYears.
