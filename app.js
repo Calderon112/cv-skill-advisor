@@ -3564,7 +3564,20 @@ function parseProjectBlock(block) {
       // Stop where the next project starts, which is again a line whose successor
       // carries an institution and a year.
       if (lines[j + 1] && ORG_YEAR.test(lines[j + 1])) break;
-      body.push(lines[j].replace(/^[•▸·*-]\s*/, ''));
+      const line = lines[j].replace(/^[•▸·*-]\s*/, '');
+      // A source line is not a bullet. The PDF wraps long ones, so
+      // "…mit IDA Pro und Ghidra (Disassemblierung," and "Code-Analyse)" arrive as
+      // two lines and became two bullets, the second of them a fragment ending in a
+      // stray bracket. A line continues the previous one when it opens in lower
+      // case, closes a bracket the previous one opened, or follows a line left
+      // hanging on a comma or a hyphen.
+      const prev = body.length ? body[body.length - 1] : '';
+      const opens = (prev.match(/\(/g) || []).length - (prev.match(/\)/g) || []).length;
+      const continues = prev && (
+        /^[a-zäöüß)]/.test(line) || opens > 0 || /[,;–-]$/.test(prev)
+      );
+      if (continues) body[body.length - 1] = prev.replace(/[-–]$/, '') + ' ' + line;
+      else body.push(line);
     }
     project.desc = body.join('\n');
     projects.push(project);
@@ -4073,11 +4086,14 @@ function buildProfilePdfDoc(profile, overrides) {
       doc.text('•', x, y);
       const lines = doc.splitTextToSize(line, w - 10);
       lines.forEach(function (l) {
-        if (y + 12 > PAGE_H - M) { nextPage(); y = M; }
+        if (y + 12.5 > PAGE_H - M) { nextPage(); y = M; }
         doc.text(l, x + 10, y);
-        y += 12;
+        y += 12.5;
       });
-      y += 2;
+      // Five points between bullets, not two. At two, a bullet that wraps onto a
+      // second line is indistinguishable from the next bullet starting, and a
+      // three-bullet entry reads as one block of grey.
+      y += 5;
       if (isMain) yMain = y; else ySide = y;
     });
   }
@@ -4144,7 +4160,7 @@ function buildProfilePdfDoc(profile, overrides) {
       if (x.degree) write(x.degree, SIDE_X, SIDE_W, 9, 'bold', DARK, 11);
       const sub = [x.org, x.grade ? 'Note: ' + x.grade : ''].filter(Boolean).join(' | ');
       if (sub)      write(sub, SIDE_X, SIDE_W, 8.5, 'normal', GREY, 11);
-      ySide += 5;
+      ySide += 8;
     });
   }
 
@@ -4184,7 +4200,9 @@ function buildProfilePdfDoc(profile, overrides) {
       const org = [x.org, x.location].filter(Boolean).join(', ');
       if (org)    write(org, MAIN_X, MAIN_W, 9.5, 'bold', DARK, 12);
       if (x.desc) bulletList(splitLines(x.desc), MAIN_X, MAIN_W);
-      yMain += 6;
+      // Entries need more air between them than bullets do inside one, or the
+      // reader cannot see where a job ends and the next begins.
+      yMain += 14;
     });
   }
 
@@ -4234,7 +4252,9 @@ function buildProfilePdfDoc(profile, overrides) {
       const sub = [x.org, x.year].filter(Boolean).join(', ');
       if (sub)    write(sub, MAIN_X, MAIN_W, 8, 'normal', GREY, 11);
       if (x.desc) bulletList(splitLines(x.desc), MAIN_X, MAIN_W);
-      yMain += 6;
+      // Entries need more air between them than bullets do inside one, or the
+      // reader cannot see where a job ends and the next begins.
+      yMain += 14;
     });
   }
 
