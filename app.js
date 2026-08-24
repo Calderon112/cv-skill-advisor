@@ -3314,6 +3314,9 @@ const emptyProfile = () => ({
   // manual form does not expose them yet, so a hand-built profile simply omits
   // those sections instead of printing empty headings.
   softSkills: '', interests: '',
+  // The CV's own skills block, label and values as written. Distinct from `skills`,
+  // which is the taxonomy-matched list the job scoring needs.
+  skillRows: [],
   skills: [], experience: [], education: [], certifications: [], projects: []
 });
 
@@ -3326,12 +3329,96 @@ function saveProfileToStorage() {
   localStorage.setItem(PROFILE_KEY, JSON.stringify(state.profile));
 }
 
+// ── Reading a CV's own sections, verbatim ───────────────────────────────────
+//
+// Two parsers that work on the text a PDF extractor actually produces, which is
+// not the text the document appears to contain.
+//
+// Bullet glyphs are the trap. In a two-column CV the "•" characters are laid out
+// separately from the text they belong to, and every extractor this project has
+// been tried with returns them collected at the END of the page:
+//
+//     Entwicklung von Webanwendungen mit HTML, SCSS, PHP …
+//     Mitarbeit im agilen Entwicklungsteam an Kundenprojekten
+//     …
+//     •  •  •  •  •  •  •  •  •  •  •  •  •  •
+//
+// So a description line never starts with a bullet, and any parser keyed on one
+// finds nothing. Structure has to carry the meaning instead: position, a trailing
+// year, a colon.
+
+// "Security Tools: Kali Linux, Wireshark, IDA Pro, Ghidra, EDB"
+// The label before the colon is the group the CV chose; the values after it are
+// the candidate's own words.
+const SKILL_ROW = /^([A-Za-zÄÖÜäöüß][A-Za-zÄÖÜäöüß \/&+-]{2,34}):\s*(.+)$/;
+
+/**
+ * The CV's technical-skills block, exactly as written.
+ *
+ * The taxonomy matcher runs separately and is what the job scoring needs — it maps
+ * free text onto canonical keys. It is the wrong source for the generated CV: it
+ * replaced "Kali Linux, Wireshark, IDA Pro, Ghidra, EDB" with the labels of
+ * whatever it matched, including a "Medical documentation" that came from a
+ * health-domain entry triggered by the words "technische Dokumentation". The
+ * document has to say what the candidate says.
+ */
+function parseSkillRows(block) {
+  const rows = [];
+  let current = null;
+  String(block || '').split(/\r?\n/).forEach((raw) => {
+    const line = raw.trim();
+    if (!line) return;
+    const m = line.match(SKILL_ROW);
+    if (m) {
+      current = { category: m[1].trim(), values: m[2].trim() };
+      rows.push(current);
+      return;
+    }
+    // A wrapped continuation of the previous row: "Penetration Testing, Malware-
+    // Analyse, Digitale Forensik, ARP-" / "Spoofing".
+    if (current) current.values += (/[-–]$/.test(current.values) ? '' : ' ') + line;
+  });
+  return rows
+    .map((r) => ({ category: r.category, values: r.values.replace(/\s{2,}/g, ' ').trim() }))
+    .filter((r) => r.values);
+}
+
+/**
+ * The PROJEKTE block.
+ *
+ * A project is recognised by its second line, not its first: the institution and
+ * year sit directly under the title — "Westfälische Hochschule Gelsenkirchen,
+ * 2025". Everything between that and the next such pair is the description.
+ */
+function parseProjectBlock(block) {
+  const lines = String(block || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const ORG_YEAR = /^(.*?),\s*((?:19|20)\d{2})\s*$/;
+  const projects = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const next = lines[i + 1] ? lines[i + 1].match(ORG_YEAR) : null;
+    if (!next) continue;
+    const project = { name: lines[i], org: next[1].trim(), year: next[2], desc: '' };
+    const body = [];
+    for (let j = i + 2; j < lines.length; j++) {
+      // Stop where the next project starts, which is again a line whose successor
+      // carries an institution and a year.
+      if (lines[j + 1] && ORG_YEAR.test(lines[j + 1])) break;
+      body.push(lines[j].replace(/^[•▸·*-]\s*/, ''));
+    }
+    project.desc = body.join('\n');
+    projects.push(project);
+    i += 1 + body.length;
+  }
+  return projects.filter((p) => p.name && p.name.length < 140);
+}
+
 // ── CV section parsing (best-effort, tuned for structured CVs) ──────────────
 // Longest first: this is a regex alternation, and a heading is only a boundary
 // if its whole name is listed. SOFT SKILLS, INTERESSEN, WEITERBILDUNG and
 // PROJETS were missing, so nothing stopped the preceding block — a SPRACHEN
 // section ran on and swallowed the soft skills and the interests beneath it.
-const CV_SECTION_NAMES = 'WORK EXPERIENCE|BERUFSERFAHRUNG|PERSONAL SKILLS|CERTIFICATIONS|ZERTIFIZIERUNGEN|SOFT SKILLS|SOFTSKILLS|WEITERBILDUNG|KOMPETENZEN|COMPETENCES|CERTIFICATES|ZERTIFIKATE|REFERENCES|EXPERIENCE|ERFAHRUNG|EDUCATION|AUSBILDUNG|INTERESSEN|LANGUAGES|OBJECTIVE|FORMATION|INTERESTS|PROJECTS|PROJEKTE|SUMMARY|STUDIUM|SPRACHEN|HOBBIES|PROFILE|PROJETS|LANGUES|SKILLS|PROFIL';
+const CV_SECTION_NAMES = 'TECHNISCHE FÄHIGKEITEN|TECHNISCHE FAEHIGKEITEN|WORK EXPERIENCE|BERUFSERFAHRUNG|PERSONAL SKILLS|CERTIFICATIONS|ZERTIFIZIERUNGEN|SOFT SKILLS|SOFTSKILLS|WEITERBILDUNG|KOMPETENZEN|COMPETENCES|CERTIFICATES|ZERTIFIKATE|REFERENCES|EXPERIENCE|ERFAHRUNG|EDUCATION|AUSBILDUNG|INTERESSEN|LANGUAGES|OBJECTIVE|FORMATION|INTERESTS|PROJECTS|PROJEKTE|SUMMARY|STUDIUM|SPRACHEN|HOBBIES|PROFILE|PROJETS|LANGUES|SKILLS|PROFIL';
 
 // Grab the text block under a section heading, up to the next known heading.
 function cvSection(text, names) {
@@ -3515,34 +3602,20 @@ function extractProfileFromCV(text, analysis, llmProfile) {
   // them. The generated CV renders all three, and on a student CV the projects
   // section is usually the strongest evidence on the page: no employer yet, but
   // three university projects naming Ghidra, Wireshark and a VPN configuration.
+  // Projects, read by structure rather than by bullet glyph — see parseProjectBlock.
   if (!p.projects || !p.projects.length) {
-    const block = cvSection(text, 'PROJECTS|PROJEKTE|PROJETS');
-    if (block) {
-      const BULLET = /^[•▸·*-]\s*/;
-      const projects = [];
-      let cur = null;
-      block.split(/\r?\n/).forEach((raw) => {
-        const line = raw.trim();
-        if (!line) return;
-        if (BULLET.test(line)) {
-          if (!cur) return;
-          cur.desc = (cur.desc ? cur.desc + '\n' : '') + line.replace(BULLET, '');
-          return;
-        }
-        // An unbulleted line directly under a title is the institution and year
-        // ("Westfälische Hochschule Gelsenkirchen, 2025"), not a description.
-        if (cur && !cur.org && !cur.desc) {
-          const ym = line.match(/(\d{4})\s*$/);
-          cur.org = line.replace(/,?\s*\d{4}\s*$/, '').trim();
-          cur.year = ym ? ym[1] : '';
-          return;
-        }
-        cur = { name: line, org: '', year: '', desc: '' };
-        projects.push(cur);
-      });
-      const kept = projects.filter((x) => x.name && (x.desc || x.org));
-      if (kept.length) p.projects = kept;
-    }
+    const projects = parseProjectBlock(cvSection(text, 'PROJECTS|PROJEKTE|PROJETS'));
+    if (projects.length) p.projects = projects;
+  }
+
+  // The technical-skills block, in the candidate's own words and the candidate's own
+  // groupings. Kept separate from p.skills, which stays the taxonomy-matched list the
+  // job scoring needs: that list is right for matching and wrong for a document,
+  // having once turned "Kali Linux, Wireshark, IDA Pro, Ghidra, EDB" into labels
+  // including a "Medical documentation" matched from "technische Dokumentation".
+  if (!p.skillRows || !p.skillRows.length) {
+    const rows = parseSkillRows(cvSection(text, 'SKILLS|KOMPETENZEN|COMPETENCES|TECHNISCHE FÄHIGKEITEN|TECHNISCHE FAEHIGKEITEN'));
+    if (rows.length) p.skillRows = rows;
   }
 
   // Short, one-per-line sections. Capped at ten entries and eighty characters: a
@@ -3931,17 +4004,28 @@ function buildProfilePdfDoc(profile, overrides) {
     });
   }
 
-  if (p.skills && p.skills.length) {
+  // The CV's own rows when the parser found them, the taxonomy match otherwise.
+  //
+  // The order matters. The taxonomy list is built for job scoring: it maps free text
+  // onto canonical keys, and printing those keys turned "Kali Linux, Wireshark, IDA
+  // Pro, Ghidra, EDB" into a single "Kenntnisse" row that included a "Medical
+  // documentation" matched from "technische Dokumentation". A document has to say
+  // what the candidate wrote, in the groups the candidate chose.
+  const rows = (p.skillRows && p.skillRows.length)
+    ? p.skillRows.reduce(function (acc, r) { acc[r.category] = [r.values]; return acc; }, {})
+    : null;
+
+  if (rows || (p.skills && p.skills.length)) {
     mainSection('Technische Fähigkeiten');
-    // Grouped by category where the taxonomy supplies one, because that is the
-    // shape the reader expects — "Security Tools: Kali, Wireshark, Ghidra" — and
-    // one flat row where it does not.
-    const groups = {};
-    p.skills.forEach(function (s) {
-      const label = s.label || s.key || s;
-      const cat = String(s.category || '').trim() || 'Kenntnisse';
-      (groups[cat] = groups[cat] || []).push(label);
-    });
+    const groups = rows || (function () {
+      const g = {};
+      p.skills.forEach(function (s) {
+        const label = s.label || s.key || s;
+        const cat = String(s.category || '').trim() || 'Kenntnisse';
+        (g[cat] = g[cat] || []).push(label);
+      });
+      return g;
+    })();
     Object.keys(groups).forEach(function (cat) {
       const LABEL_W = 104;
       if (yMain + 14 > PAGE_H - M) nextPage();
