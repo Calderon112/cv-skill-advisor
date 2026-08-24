@@ -290,35 +290,77 @@
   </div>
 </section>
 
+<section id="why">
+  <div class="wrap">
+    <h2>Why choose CareerAI</h2>
+    <p class="lede">Four claims, each one checkable on this page or in the repository.
+      That is the whole pitch: not that the software is clever, but that you can see why
+      it said what it said.</p>
+
+    <div class="grid">
+      <div class="card">
+        <h3>A score you can argue with</h3>
+        <p>The match percentage comes from a fixed, published formula — skills 45, role 20,
+          location 10, remote 10, seniority 10, pay 5 — not from a language model. The same CV
+          and the same posting give the same number tomorrow, and every card opens into the
+          breakdown that produced it.</p>
+      </div>
+
+      <div class="card">
+        <h3>A letter that is graded before you see it</h3>
+        <p>One agent writes it, a second scores it out of 100 against the posting itself and
+          sends it back below the bar. In testing, half the letters were returned at least once.
+          A claim your CV does not support cannot pass at all — and the score and revision count
+          are shown beside the letter, so a weak draft is visible rather than quietly handed
+          over.</p>
+      </div>
+
+      <div class="card">
+        <h3>Numbers that admit when they are missing</h3>
+        <p>Salary bands are measured from the postings actually found, not estimated. Where too
+          few of them state pay to compute anything honest, the interface says so instead of
+          showing a plausible figure in the same typeface as a measured one.</p>
+      </div>
+
+      <div class="card">
+        <h3>Your CV does not leave German infrastructure</h3>
+        <p>A CV is name, address and employment history — personal data under the GDPR. The
+          model runs on the academic computing centre in Göttingen rather than a commercial
+          service outside the EU. That is a different answer to “where does the applicant CV end
+          up”, and one that survives being asked twice.</p>
+      </div>
+    </div>
+
+    <p class="lede" style="margin-top:1.6rem">
+      What it does not do is listed further down, with the same specificity.
+    </p>
+  </div>
+</section>
+
 <section id="video">
   <div class="wrap">
     <h2>See it running</h2>
     <p class="lede">Two minutes, from an empty profile to a finished application.</p>
+    <figure class="shot">
+      <img src="screenshot-dashboard.png" alt="CareerAI dashboard: postings ranked by match score, each showing its skill breakdown"
+           width="1400" height="900" loading="lazy" decoding="async">
+      <figcaption>Postings ranked by match score. Every number opens into the breakdown that produced it.</figcaption>
+    </figure>
     <div class="video">
-      <!-- ── TO ADD THE VIDEO ───────────────────────────────────────────────
-           Unlike the README, this page is ours: an iframe or a <video> both work.
+      <!-- TO ADD THE VIDEO: replace the .todo div below with ONE of these.
+           The container is already 16:9 and the iframe is already positioned, so
+           either line drops straight in.
 
-           A) The file lives in the repo (keeps the page self-contained):
-              <video controls preload="metadata" poster="video-poster.jpg">
-                <source src="demo.mp4" type="video/mp4">
-              </video>
-              Put demo.mp4 in docs/ next to this file. GitHub Pages serves files
-              up to 100 MB, and nothing leaves the visitor's connection to us.
+           YouTube — note the -nocookie host. The standard player sets tracking
+           cookies before the visitor has pressed anything, which is exactly what
+           the consent notice in the app promises not to do:
+             <iframe src="https://www.youtube-nocookie.com/embed/VIDEO_ID"
+                     title="CareerAI demo" allowfullscreen loading="lazy"></iframe>
 
-           B) YouTube, if the file is large:
-              <iframe src="https://www.youtube-nocookie.com/embed/YOUR_ID"
-                      title="CareerAI demo" allowfullscreen loading="lazy"></iframe>
-              Use youtube-nocookie.com, not youtube.com: the standard player sets
-              tracking cookies before the visitor has pressed anything, which is
-              exactly what the consent notice in the app promises not to do.
-
-           Delete the placeholder div below once either is in place.
-           ──────────────────────────────────────────────────────────────────── -->
-      <figure class="shot">
-        <img src="screenshot-dashboard.png" alt="CareerAI dashboard: postings ranked by match score, each showing its skill breakdown"
-             width="1400" height="900" loading="lazy" decoding="async">
-        <figcaption>Postings ranked by match score. Every number opens into the breakdown that produced it.</figcaption>
-      </figure>
+           Self-hosted — put demo.mp4 in docs/ beside this file. Pages serves up
+           to 100 MB and nothing leaves the visitor's connection to us:
+             <video controls preload="metadata" poster="video-poster.jpg">
+               <source src="demo.mp4" type="video/mp4"></video> -->
       <div class="todo">Product video — coming shortly.<br>
         Meanwhile, the app is live at
         <a href="https://careerai-jk.duckdns.org">careerai-jk.duckdns.org</a>.</div>
