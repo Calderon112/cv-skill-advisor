@@ -1294,7 +1294,12 @@ async function analyzeCV() {
   // Build the form from this CV's own headings. Deliberately not awaited: the
   // profile is already usable, and a model round trip should not hold up the
   // screen the user is looking at.
-  loadCvSchema(text);
+  // The sections land in Manual Editing, which is where a profile is corrected. The
+  // import panel is a drop zone and a log; leaving the editable result there would
+  // ask the user to edit their profile in the place they came to upload a file.
+  loadCvSchema(text).then(function (built) {
+    if (built) setProfileMode('manual');
+  });
   renderAnalysisResults(result);
   renderLearningSuggestions(result);
 
@@ -3519,7 +3524,9 @@ async function loadCvSchema(cvText) {
       heading: s.heading, kind: 'text', items: [s.body],
     }));
     renderCvSchema(schema, { structured: data.structured, dropped: data.dropped });
-  } catch (_) { /* the fixed form is still there */ }
+    return schema.length > 0;
+    return false;
+  } catch (_) { return false; /* the fixed form is still there */ }
 }
 
 // ── Reading a CV's own sections, verbatim ───────────────────────────────────
@@ -3624,7 +3631,7 @@ function parseProjectBlock(block) {
 // if its whole name is listed. SOFT SKILLS, INTERESSEN, WEITERBILDUNG and
 // PROJETS were missing, so nothing stopped the preceding block — a SPRACHEN
 // section ran on and swallowed the soft skills and the interests beneath it.
-const CV_SECTION_NAMES = 'TECHNISCHE FÄHIGKEITEN|TECHNISCHE FAEHIGKEITEN|WORK EXPERIENCE|BERUFSERFAHRUNG|PERSONAL SKILLS|CERTIFICATIONS|ZERTIFIZIERUNGEN|SOFT SKILLS|SOFTSKILLS|WEITERBILDUNG|KOMPETENZEN|COMPETENCES|CERTIFICATES|ZERTIFIKATE|REFERENCES|EXPERIENCE|ERFAHRUNG|EDUCATION|AUSBILDUNG|INTERESSEN|LANGUAGES|OBJECTIVE|FORMATION|INTERESTS|PROJECTS|PROJEKTE|SUMMARY|STUDIUM|SPRACHEN|HOBBIES|PROFILE|PROJETS|LANGUES|SKILLS|PROFIL';
+const CV_SECTION_NAMES = 'TECHNISCHE FÄHIGKEITEN|TECHNISCHE FAEHIGKEITEN|KONTAKTDATEN|KONTAKT|CONTACT|COORDONNEES|WORK EXPERIENCE|BERUFSERFAHRUNG|PERSONAL SKILLS|CERTIFICATIONS|ZERTIFIZIERUNGEN|SOFT SKILLS|SOFTSKILLS|WEITERBILDUNG|KOMPETENZEN|COMPETENCES|CERTIFICATES|ZERTIFIKATE|REFERENCES|EXPERIENCE|ERFAHRUNG|EDUCATION|AUSBILDUNG|INTERESSEN|LANGUAGES|OBJECTIVE|FORMATION|INTERESTS|PROJECTS|PROJEKTE|SUMMARY|STUDIUM|SPRACHEN|HOBBIES|PROFILE|PROJETS|LANGUES|SKILLS|PROFIL';
 
 // Grab the text block under a section heading, up to the next known heading.
 function cvSection(text, names) {
@@ -3855,12 +3862,34 @@ if (!p.skillRows || !p.skillRows.length) {
 // Short, one-per-line sections. Capped at ten entries and eighty characters: a
 // heading this parser mistook for a list would otherwise pour a whole paragraph
 // into the rail, where there is no room for it.
-const listSection = (names) => cvSection(text, names)
-  .split(/\r?\n/)
-  .map((l) => l.trim().replace(/^[•▸·*-]\s*/, ''))
-  .filter((l) => l && l.length < 80)
-  .slice(0, 10)
-  .join('\n');
+// A list stops at the first line that is not a list item, rather than filtering the
+// whole block by length.
+//
+// The extracted text interleaves both columns and both pages: the page-1 rail ends
+// with INTERESSEN and page 2 resumes the MAIN column, so everything after "Sport"
+// belonged to a project and was collected as an interest. Length alone cannot tell
+// them apart — "Verschlüsselungsverfahren" is short and still wrong.
+//
+// An item in these sections is a label: no year in it, and short. The first line
+// breaking either rule ends the list, because a CV does not resume a list of
+// interests after a paragraph.
+// Named rather than written inline: every attempt to splice these regexes through a
+// shell heredoc turned the escapes into real newlines and broke the file.
+const NEWLINE_RE = new RegExp(String.fromCharCode(92) + String.fromCharCode(114) + "?" + String.fromCharCode(92) + "n");
+const BULLET_RE  = /^[•▸·*-]s*/;
+const YEAR_RE    = /(19|20)d{2}/;
+const NL = String.fromCharCode(10);
+const listSection = (names) => {
+  const out = [];
+  for (const raw of cvSection(text, names).split(NEWLINE_RE)) {
+    const line = raw.trim().replace(BULLET_RE, '');
+    if (!line) continue;
+    if (line.length > 55 || YEAR_RE.test(line)) break;
+    out.push(line);
+    if (out.length >= 10) break;
+  }
+  return out.join(NL);
+};
 
 if (!p.softSkills) { const v = listSection('SOFT SKILLS|SOFTSKILLS|PERSONAL SKILLS'); if (v) p.softSkills = v; }
 if (!p.interests)  { const v = listSection('INTERESTS|HOBBIES|INTERESSEN');           if (v) p.interests = v; }
