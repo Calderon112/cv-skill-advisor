@@ -109,6 +109,41 @@
                'ausbildung', 'weiterbildung', 'sprachen', 'softskills', 'interessen'],
       },
     },
+
+    // A coloured rail running the full height of the sheet, with the photo and the
+    // facts set on it in white. This is the shape the commercial CV builders sell,
+    // and it is reachable with the drawing primitives already in use — a filled
+    // rectangle from edge to edge, and light text on it.
+    //
+    // What it deliberately does NOT copy is the rating dots those builders print
+    // beside every language and tool. A CV says "Deutsch – Fließend (C1)"; it does
+    // not say four bars out of five. Rendering four would be this application
+    // inventing a self-assessment the candidate never made, which is the one thing
+    // every other guard in this project exists to prevent.
+    modern: {
+      id: 'modern',
+      name: 'Modern',
+      note: 'Farbige Seitenspalte über die ganze Seite, Foto darin. Für Initiativbewerbungen und Portfolios.',
+      rail: 'left',
+      railWidth: 185,
+      margin: 38,
+      gap: 24,
+      accent: [23, 58, 95],
+      dark: [24, 34, 48],
+      grey: [104, 118, 134],
+      railFill: [23, 58, 95],
+      // Set on the rail's own colour, so the rail needs its own text colours.
+      railText: [255, 255, 255],
+      railMuted: [176, 198, 219],
+      railBleed: true,
+      mainHeading: 'rule',
+      railHeading: 'rule',
+      photo: 'rail',
+      layout: {
+        rail: ['kontakt', 'sprachen', 'softskills', 'interessen'],
+        main: ['berufserfahrung', 'skills', 'projekte', 'ausbildung', 'weiterbildung'],
+      },
+    },
   };
 
   const DEFAULT_ID = 'klassisch';
@@ -137,16 +172,21 @@
     const m = 9;
     const railW = theme.rail === 'none' ? 0 : Math.round(W * 0.31);
     const gap = railW ? 6 : 0;
+    const onLeft = theme.rail === 'left';
     const mainW = W - m * 2 - railW - gap;
-    const mainX = m;
-    const railX = W - m - railW;
+    const mainX = onLeft ? W - m - mainW : m;
+    const railX = onLeft ? m : W - m - railW;
     const acc = rgb(theme.accent);
     const parts = [];
 
     parts.push('<rect width="' + W + '" height="' + H + '" fill="#fff"/>');
     if (railW && theme.railFill) {
-      parts.push('<rect x="' + (railX - 4) + '" y="' + (m + 26) + '" width="' + (railW + 8) +
-                 '" height="' + (H - m - 26) + '" fill="' + rgb(theme.railFill) + '"/>');
+      // A bleeding rail runs the whole sheet, edge to edge, and is the first thing
+      // drawn — the header sits on top of it rather than beside it.
+      const bleed = !!theme.railBleed;
+      parts.push('<rect x="' + (bleed ? railX - m : railX - 4) + '" y="' + (bleed ? 0 : m + 26) +
+                 '" width="' + (bleed ? railW + m + 4 : railW + 8) +
+                 '" height="' + (bleed ? H : H - m - 26) + '" fill="' + rgb(theme.railFill) + '"/>');
     }
 
     // Header: name, subtitle, and the photo where the theme puts one.

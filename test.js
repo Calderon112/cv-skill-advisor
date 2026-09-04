@@ -933,6 +933,26 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
       assertEqual(ats.photo, 'none', 'no photo');
     });
 
+    test('a bleeding rail carries its own text colours', () => {
+      // Body dark and muted grey both disappear on a strong colour, so a theme that
+      // paints one has to say what to write on it.
+      T.list().filter(t => t.railBleed).forEach((t) => {
+        assert(t.railText, `${t.id} declares a text colour for the rail`);
+        assert(t.railMuted, `${t.id} declares a muted one`);
+        assert(t.railFill, `${t.id} actually fills the rail`);
+      });
+    });
+
+    test('no theme prints a self-assessment the CV never made', () => {
+      // The commercial builders draw four-of-five dots beside every language and
+      // tool. A CV says "Deutsch – Fließend (C1)"; it does not say four out of five.
+      // Rendering five would be this application inventing a rating, which is the
+      // one thing every other guard here exists to prevent.
+      T.list().forEach((t) => {
+        assert(!('ratings' in t) && !('dots' in t), `${t.id} declares no rating scale`);
+      });
+    });
+
     test('every theme carries a note saying when to use it', () => {
       T.list().forEach(t => assert(t.note && t.note.length > 20, `${t.id} has advice`));
     });

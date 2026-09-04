@@ -4290,6 +4290,10 @@ function buildProfilePdfDoc(profile, overrides) {
   const DARK  = T.dark;
   const GREY  = T.grey;
   const RAIL  = T.railFill || [238, 242, 245];
+  // A rail painted in a strong colour needs its own text colours: the body dark
+  // and the muted grey both disappear on it.
+  const RAIL_TEXT  = T.railText  || DARK;
+  const RAIL_MUTED = T.railMuted || GREY;
   const WHITE = [255, 255, 255];
 
   let yMain = 0, ySide = 0;
@@ -4305,6 +4309,13 @@ function buildProfilePdfDoc(profile, overrides) {
   function paintRail(from) {
     if (!HAS_RAIL) return;
     doc.setFillColor(RAIL[0], RAIL[1], RAIL[2]);
+    if (T.railBleed) {
+      // Edge to edge and top to bottom. A coloured band that stops at the margin
+      // reads as a mistake rather than as a design, and the header has to sit on
+      // the band, not beside it.
+      doc.rect(SIDE_X - M, 0, SIDE_W + M + 10, PAGE_H, 'F');
+      return;
+    }
     doc.rect(SIDE_X - 10, from - 12, SIDE_W + 20, PAGE_H - from - M + 12, 'F');
   }
 
@@ -4371,12 +4382,13 @@ function buildProfilePdfDoc(profile, overrides) {
     if (!HAS_RAIL) return mainSection(label);
     ySide += 12;
     if (ySide + 28 > PAGE_H - M) nextPage();
-    setFont(9.5, 'bold', TEAL);
+    setFont(9.5, 'bold', T.railBleed ? RAIL_TEXT : TEAL);
     doc.text(String(label).toUpperCase(), SIDE_X, ySide);
     ySide += 4;
-    doc.setDrawColor(TEAL[0], TEAL[1], TEAL[2]);
+    const rc = T.railBleed ? RAIL_MUTED : TEAL;
+    doc.setDrawColor(rc[0], rc[1], rc[2]);
     doc.setLineWidth(0.8);
-    doc.line(SIDE_X, ySide, SIDE_X + SIDE_W, ySide);
+    doc.line(SIDE_X, ySide, SIDE_X + SIDE_W_R, ySide);
     ySide += 13;
   }
 
@@ -4416,32 +4428,50 @@ function buildProfilePdfDoc(profile, overrides) {
   // ── Header ────────────────────────────────────────────────────────────────
   const PHOTO = 96;
   let y = M;
-  if (p.photo && T.photo !== 'none') {
+
+  // A bleeding rail is painted before anything else: the header sits on the band,
+  // not beside it, so the band has to exist first.
+  if (T.railBleed) paintRail(M);
+
+  // The photo belongs inside the rail on those themes, not in the top-right corner
+  // of a page whose top-right corner is the main column.
+  if (p.photo && T.photo === 'rail' && HAS_RAIL) {
+    try {
+      doc.addImage(p.photo, 'JPEG', SIDE_X, M, SIDE_W_R, SIDE_W_R);
+    } catch (_) { /* an unreadable photo must not cost the whole document */ }
+    ySide = M + SIDE_W_R + 18;
+  }
+
+  if (p.photo && T.photo === 'top-right') {
     try { doc.addImage(p.photo, 'JPEG', PAGE_W - M - PHOTO, y, PHOTO, PHOTO); }
     catch (_) { /* an unreadable photo must not cost the whole document */ }
   }
-  const showPhoto = !!p.photo && T.photo !== 'none';
-  const headW = PAGE_W - M * 2 - (showPhoto ? PHOTO + 20 : 0);
+  const showPhoto = !!p.photo && T.photo === 'top-right';
+  // On a bleeding rail the header starts where the main column starts, or the name
+  // would be printed across the coloured band.
+  const headX = T.railBleed ? MAIN_X : M;
+  const headW = (T.railBleed ? MAIN_W : PAGE_W - M * 2) - (showPhoto ? PHOTO + 20 : 0);
 
   setFont(23, 'bold', DARK);
-  doc.splitTextToSize(name, headW).forEach(function (l) { doc.text(l, M, y + 20); y += 26; });
+  doc.splitTextToSize(name, headW).forEach(function (l) { doc.text(l, headX, y + 20); y += 26; });
   if (p.title) {
     setFont(12.5, 'bold', TEAL);
-    doc.splitTextToSize(p.title, headW).forEach(function (l) { doc.text(l, M, y + 12); y += 16; });
+    doc.splitTextToSize(p.title, headW).forEach(function (l) { doc.text(l, headX, y + 12); y += 16; });
   }
   if (p.summary) {
     setFont(9.5, 'normal', GREY);
-    doc.splitTextToSize(p.summary, headW).slice(0, 3).forEach(function (l) { doc.text(l, M, y + 10); y += 13; });
+    doc.splitTextToSize(p.summary, headW).slice(0, 3).forEach(function (l) { doc.text(l, headX, y + 10); y += 13; });
   }
   y = Math.max(y + 12, M + (showPhoto ? PHOTO + 14 : 0));
   doc.setDrawColor(TEAL[0], TEAL[1], TEAL[2]);
   doc.setLineWidth(2);
-  doc.line(M, y, PAGE_W - M, y);
+  doc.line(headX, y, headX + headW + (showPhoto ? PHOTO + 20 : 0), y);
 
   const headerBottom = y + 22;
-  paintRail(headerBottom);
+  if (!T.railBleed) paintRail(headerBottom);
   yMain = headerBottom;
-  ySide = headerBottom;
+  // A rail carrying the photo has already advanced its own cursor past it.
+  if (!T.railBleed || ySide < headerBottom) ySide = headerBottom;
 
   // ── Sections, in the order the theme asks for ─────────────────────────────
   //
@@ -4460,8 +4490,8 @@ function buildProfilePdfDoc(profile, overrides) {
       if (contact.length) {
         railSection('Kontakt');
         contact.forEach(function (kv) {
-          write(kv[0] + ':', SIDE_X, SIDE_W_R, 8.5, 'bold', DARK, 11);
-          write(kv[1], SIDE_X, SIDE_W_R, 8.5, 'normal', GREY, 11);
+          write(kv[0] + ':', SIDE_X, SIDE_W_R, 8.5, 'bold', RAIL_TEXT, 11);
+          write(kv[1], SIDE_X, SIDE_W_R, 8.5, 'normal', RAIL_MUTED, 11);
           sideAdvance(3);
         });
       }
@@ -4492,7 +4522,7 @@ function buildProfilePdfDoc(profile, overrides) {
           .map(function (l) { return l.trim(); })
           .filter(Boolean);
         langs.forEach(function (l) {
-          write(l, SIDE_X, SIDE_W_R, 8.5, 'normal', DARK, 12);
+          write(l, SIDE_X, SIDE_W_R, 8.5, 'normal', RAIL_TEXT, 12);
         });
       }
     },
