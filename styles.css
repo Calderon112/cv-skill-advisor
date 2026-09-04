@@ -3652,3 +3652,93 @@ option   { color: var(--text); background: var(--bg-card); }
   .theme-picker { grid-template-columns: 1fr 1fr; }
   .theme-note { display: none; }   /* the name and the shape carry it at this size */
 }
+
+/* ── Template preview: zoom on hover ───────────────────────────────────────
+   The thumbnail is 132px wide, which is enough to tell one column from two and
+   not enough to judge anything else. Hovering lifts a large copy out of the card
+   so the actual proportions — heading weight, rail width, spacing — can be seen
+   without a click and without leaving the picker.
+
+   The enlargement is a second copy inside the card rather than a transform of the
+   thumbnail: scaling the original would either be clipped by the card or force
+   overflow visible on a grid, which breaks the layout of the row. */
+.theme-card { position: relative; }
+.theme-zoom {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 10px);
+  transform: translateX(-50%) scale(.94);
+  transform-origin: bottom center;
+  width: 300px;
+  padding: 10px;
+  background: var(--card, #fff);
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 12px;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, .28);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;      /* never steals the click from the card beneath it */
+  transition: opacity .16s ease, transform .16s ease, visibility .16s;
+  z-index: 40;
+}
+.theme-zoom svg { display: block; width: 100%; height: auto; }
+.theme-card:hover .theme-zoom,
+.theme-card:focus-visible .theme-zoom {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%) scale(1);
+}
+
+/* A pointer is not a promise. On touch there is no hover, and a panel that only
+   appears on hover would be unreachable — the card stays fully usable without it. */
+@media (hover: none) {
+  .theme-zoom { display: none; }
+}
+
+/* ── CV sections, redrawn ──────────────────────────────────────────────────
+   The first pass boxed everything: a bordered section containing a bordered
+   heading containing bordered fields. Three levels of frame around one sentence,
+   which reads as a form to fill rather than a document to correct.
+
+   Scoped to the panel and written after the base .field rules, so the heading
+   sheds its field chrome without needing !important. */
+#cv-schema-body .pf-section {
+  border: 0;
+  border-left: 3px solid var(--accent, #2a7a96);
+  border-radius: 0;
+  background: rgba(255, 255, 255, .02);
+  padding: 4px 0 14px 16px;
+  margin: 0 0 26px;
+}
+#cv-schema-body .pf-heading {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 2px 0 8px;
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  color: var(--accent, #2a7a96);
+}
+#cv-schema-body .pf-heading:focus {
+  background: transparent;
+  border-bottom: 1px solid var(--border-hi, #475569);
+}
+/* Entries are separated by space, not by a rule. A dashed line between every job
+   competes with the accent bar for the same job. */
+#cv-schema-body .pf-entry {
+  border: 0;
+  padding: 0;
+  margin-bottom: 18px;
+}
+#cv-schema-body .pf-entry:last-child { margin-bottom: 0; }
+#cv-schema-body .pf-row { margin-bottom: 6px; }
+#cv-schema-body textarea.field { margin-bottom: 0; min-height: 64px; resize: vertical; }
+/* The heading already says which section this is; the fields inside do not each
+   need a label repeating it. Placeholders carry that, and only while empty. */
+#cv-schema-body .field { font-size: 12.5px; padding: 7px 10px; }
+
+#cv-schema-panel .lede { margin-bottom: 18px; }
+#cv-schema-dropped { margin-top: 14px; }
