@@ -3630,7 +3630,15 @@ const server = http.createServer(async (req, res) => {
           // nothing downstream could recover the split: the source line breaks are
           // the only record of where one point ends and the next begins.
           + 'In "desc", put each bullet point of a role on its OWN LINE, separated by a newline. '
-          + 'Do not merge two bullets into one sentence and do not add connecting words.';
+          + 'Do not merge two bullets into one sentence and do not add connecting words. '
+          // Many CV templates set the dates in their own column. The extractor reads
+          // columns one after the other, so they arrive as a run of dates detached
+          // from the entries they describe, and pairing them by order attaches each
+          // one to whatever sits near it. One real CV had an education date printed
+          // against a sub-task of a job: plausible, and false.
+          + 'If several date ranges appear consecutively with no text between them, they come from a '
+          + 'separate date column and you CANNOT tell which entry each belongs to. Leave "start" and '
+          + '"end" empty in that case. An empty date is correct; a guessed one is not.';
         const user = `Extract this CV into the exact JSON schema below.\n\nSchema:\n${schema}\n\nCV:\n"""\n${text.slice(0, 12000)}\n"""`;
         const raw = await llm.chat({ system, user, maxTokens: 2000, temperature: 0 });
         const profile = parseJsonObject(raw);
