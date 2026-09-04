@@ -73,14 +73,14 @@ const skillGroups = [
     category: 'Healthcare & Nursing',
     skills: [
       { key: 'patient care',         label: 'Patient care / Pflege',         aliases: ['patientenpflege','pflege','pflegefachkraft','pflegehilfskraft','kranken','altenpflege','grundpflege','nursing'] },
-      { key: 'medical documentation', label: 'Medical documentation',         aliases: ['pflegedokumentation','medizinische dokumentation','dokumentation','pflegebericht'] },
+      { key: 'medical documentation', label: 'Medical documentation',         aliases: ['pflegedokumentation','medizinische dokumentation','pflegebericht'] },
       { key: 'anesthesia',            label: 'Anesthesia assistance',          aliases: ['anästhesie','anesthesia','narkose','operationssaal','op-saal'] },
       { key: 'obstetrics',            label: 'Obstetrics / Geburtshilfe',      aliases: ['entbindung','geburtshilfe','entbindungsstation','midwifery','hebamme'] },
       { key: 'first aid',             label: 'First aid / Erste Hilfe',        aliases: ['erste hilfe','notfallversorgung','notfallpflege','wundversorgung'] },
       { key: 'medication',            label: 'Medication administration',       aliases: ['medikamente','medikation','arzneimittel','injektionen','medication'] },
       { key: 'hygiene',               label: 'Hygiene & infection control',     aliases: ['desinfektion','infektionsschutz','sterilisation','hygienemaßnahmen'] },
       { key: 'empathy',               label: 'Empathy / Einfühlungsvermögen',   aliases: ['empathie','einfühlungsvermögen','einfühlsam','menschlich','mitgefühl'] },
-      { key: 'patient communication', label: 'Patient communication',           aliases: ['patientenkommunikation','beratung','betreuung','betreuungspflege','pflegeberatung'] },
+      { key: 'patient communication', label: 'Patient communication',           aliases: ['patientenkommunikation','betreuungspflege','pflegeberatung'] },
       { key: 'biology',               label: 'Biology / Biologie',              aliases: ['biologie','biologiekenntnisse','naturwissenschaft','anatomie','physiologie'] },
     ]
   },
@@ -354,14 +354,33 @@ function findSkillsLocal(text) {
   return SkillMatcher.findSkills(text, skillGroups);
 }
 
+// How many of the roles ask for a given skill. "communication" is required by ten
+// of the twenty-eight; "patient care" by five; "ghidra" by one. A skill wanted
+// everywhere says nothing about which role fits.
+const ROLE_SKILL_FREQ = (function () {
+  const f = {};
+  roles.forEach((r) => r.required.forEach((k) => { f[k] = (f[k] || 0) + 1; }));
+  return f;
+})();
+const GENERIC_IN_ROLES = 3;
+
 function analyzeRolesLocal(foundKeys) {
   return roles
     .map(role => {
       const missing = role.required.filter(k => !foundKeys.includes(k));
+      const matchedKeys = role.required.filter(k => foundKeys.includes(k));
       const score   = (role.required.length - missing.length) / role.required.length;
-      return { name: role.name, matched: role.required.length - missing.length, total: role.required.length, missing, score };
+      // A role has to be reached on something that distinguishes it. An IT-security
+      // CV was being offered "Pflegefachkraft" at 2/5, matched on "communication"
+      // and on a "medical documentation" that the keyword matcher had pulled out of
+      // "technische Dokumentation" — two skills almost every CV contains. The
+      // suggestion is worse than useless: it then told the candidate to close the
+      // gap in patient care and empathy with a TryHackMe path.
+      const distinctive = matchedKeys.some(k => (ROLE_SKILL_FREQ[k] || 0) <= GENERIC_IN_ROLES);
+      return { name: role.name, matched: role.required.length - missing.length,
+               total: role.required.length, missing, score, distinctive };
     })
-    .filter(r => r.score >= 0.35)
+    .filter(r => r.score >= 0.35 && r.distinctive)
     .sort((a, b) => b.score - a.score);
 }
 

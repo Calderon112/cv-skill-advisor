@@ -113,7 +113,12 @@
     'Professional & Soft Skills': { how: 'Practise on real deliverables', resource: 'write reports, present, and get feedback' },
   };
 
-  const DEFAULT = { how: 'Build hands-on experience', resource: 'a guided TryHackMe path or a focused online course' };
+    // The map above is keyed by security category, and this catches everything it
+    // does not cover — including skills from the other domains the taxonomy carries.
+    // It used to name TryHackMe, a cybersecurity range, so a candidate short of
+    // "Empathie" or "Patient care" was told to close the gap with a hacking lab. A
+    // fallback used for skills it knows nothing about must not name a platform.
+    const DEFAULT = { how: 'Build hands-on experience', resource: 'a focused course or supervised practice in the field' };
 
   /**
    * Turn a single (missing) skill into a concrete recommendation.
