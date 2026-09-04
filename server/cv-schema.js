@@ -48,6 +48,9 @@ const KNOWN = [
   // heading, so a document whose first section is not on this list loses it.
   'FÄHIGKEITEN', 'FAEHIGKEITEN', 'KENNTNISSE', 'HOBBYS UND INTERESSEN', 'HOBBYS',
   'PRAKTIKA', 'BERUFSPRAXIS', 'PERSÖNLICHE DATEN', 'ÜBER MICH', 'ZUSAMMENFASSUNG',
+  // Missing entirely from one generated CV because it was not on this list: a whole
+  // section of the source document, silently absent from the output.
+  'PRAKTISCHE KENNTNISSE', 'PRAKTISCHE ERFAHRUNG', 'IT-KENNTNISSE', 'EDV-KENNTNISSE',
 ];
 
 function looksLikeHeading(line) {
@@ -139,6 +142,8 @@ async function buildSchema({ cvText, sections }, llm) {
     '  bullets into one sentence, never expand an abbreviation.',
     '- Keep the section heading exactly as given to you.',
     '- A field with nothing to put in it is an empty string, not an invention.',
+    '- If several date ranges appear consecutively with no text between them, they come from a',
+    '  separate date column and you cannot tell which entry each belongs to. Leave "period" empty.',
     '- Return ONLY JSON, no prose, no fence:',
     '  {"sections":[{"heading":"<as given>","kind":"entries|rows|list|text",',
     '    "items":[{"title":"","org":"","period":"","bullets":[]}]}]}',

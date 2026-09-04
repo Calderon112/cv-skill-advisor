@@ -967,6 +967,60 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
     });
   }
 
+  section('Date columns — the timeline that belongs to no entry');
+
+  {
+    const appSrc = require('fs').readFileSync('./app.js', 'utf8');
+    // The three declarations are read and evaluated together. A regex literal match
+    // broke the moment DATE_ONLY became a composed `new RegExp(...)` across two
+    // lines, and an eval of `const` alone binds inside the eval, not out here.
+    const _di = appSrc.indexOf('const DATE_POINT =');
+    const DATE_ONLY = eval(appSrc.slice(_di, appSrc.indexOf(", 'i');", _di) + 7) + '; DATE_ONLY');
+    const grab = (n) => {
+      const i = appSrc.indexOf('function ' + n + '(');
+      let d = 0, j = appSrc.indexOf('{', i);
+      for (let k = j; k < appSrc.length; k++) {
+        if (appSrc[k] === '{') d++;
+        else if (appSrc[k] === '}') { d--; if (!d) return appSrc.slice(i, k + 1); }
+      }
+    };
+    eval(grab('detachedDateRun'));
+
+    test('a run of detached dates is recognised as a column', () => {
+      // Many CV templates set the dates in their own vertical column. The extractor
+      // reads columns one after the other, so five dates arrive in a row, detached
+      // from the five entries they describe.
+      const lines = [
+        'Werkstudent IT System Integration', 'Alberdingk-Boley, Krefeld',
+        'Nov. 2020 - Gegenwärtig', 'Juli 2019 - Dez. 2019', 'Nov. 2017 - Aug. 2018',
+        'Sep. 2010 - Juli 2017', 'Juni 2024 - Nov. 2024',
+      ];
+      assertEqual(detachedDateRun(lines).size, 5, 'all five dropped');
+    });
+
+    test('a date that belongs to its entry is kept', () => {
+      // The fix must not cost every CV its dates. One or two dates with content
+      // between them are an ordinary entry header.
+      const lines = ['02.2023 - 09.2023', 'Praktikum Softwareentwicklung', 'DIGITAL-X Suarl'];
+      assertEqual(detachedDateRun(lines).size, 0, 'nothing dropped');
+    });
+
+    test('two consecutive dates are not yet a column', () => {
+      // Two in a row happens in an ordinary block. Three is where a column starts.
+      assertEqual(detachedDateRun(['05.2025 - heute', '09.2017 - 02.2021']).size, 0, 'two kept');
+      assertEqual(detachedDateRun(['05.2025 - heute', '09.2017 - 02.2021', '06.2021 - 01.2024']).size, 3, 'three dropped');
+    });
+
+    test('the section a CV carries is not silently absent', () => {
+      // PRAKTISCHE KENNTNISSE was missing from a generated CV because it was not on
+      // the known-headings list: a whole section of the source, gone without a word.
+      assert(cvSchema.looksLikeHeading('PRAKTISCHE KENNTNISSE'), 'now recognised');
+      const cv = ['BERUFSERFAHRUNG', 'Werkstudent', 'PRAKTISCHE KENNTNISSE', 'Java, SQL'].join('\n');
+      const found = cvSchema.detectSections(cv).map(s => s.heading);
+      assertIncludes(found, 'PRAKTISCHE KENNTNISSE', 'and it survives detection');
+    });
+  }
+
   section('CV schema — the form is built from the document');
 
   {
