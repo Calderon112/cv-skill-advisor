@@ -1220,10 +1220,65 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
     assert(rec.resource && rec.resource.length > 0, 'resource is non-empty (from category fallback)');
   });
 
-  test('learningFor: returns DEFAULT for unknown category', () => {
+  // These two exercise the REAL role list and the real threshold from app.js. The
+  // harness above keeps a four-role copy for the older tests, and a copy is exactly
+  // how "Pflegefachkraft" could be offered to a security candidate without any test
+  // noticing — the copy has no healthcare roles in it.
+  {
+    const appSrc = require('fs').readFileSync('./app.js', 'utf8');
+    const realRoles = eval(appSrc.slice(
+      appSrc.indexOf('const roles = ['),
+      appSrc.indexOf('];', appSrc.indexOf('const roles = [')) + 2
+    ).replace('const roles =', ''));
+    const freq = {};
+    realRoles.forEach(r => r.required.forEach(k => { freq[k] = (freq[k] || 0) + 1; }));
+    const realAnalyze = (found) => realRoles
+      .map((r) => {
+        const missing = r.required.filter(k => !found.includes(k));
+        const matched = r.required.filter(k => found.includes(k));
+        return {
+          name: r.name,
+          score: (r.required.length - missing.length) / r.required.length,
+          distinctive: matched.some(k => (freq[k] || 0) <= 3),
+        };
+      })
+      .filter(r => r.score >= 0.35 && r.distinctive);
+
+    test('a role needs a distinctive skill, not just generic ones', () => {
+      // An IT-security CV was offered "Pflegefachkraft" at 2/5, reached on
+      // "communication" and a "medical documentation" the matcher had pulled out of
+      // "technische Dokumentation" — two things almost every CV contains.
+      const names = realAnalyze(['communication', 'documentation', 'linux', 'wireshark', 'penetration testing']).map(r => r.name);
+      assert(!names.some(n => /Pflege|Medical|OP-/.test(n)), 'no healthcare role: ' + names.join(', '));
+      assert(names.length > 0, 'security roles are still offered');
+    });
+
+    test('a healthcare CV still gets healthcare roles', () => {
+      // The fix must not amount to deleting the other domains from the taxonomy.
+      const names = realAnalyze(['patient care', 'medication', 'empathy', 'hygiene', 'communication']).map(r => r.name);
+      assert(names.some(n => /Pflege|Medical/.test(n)), 'got: ' + names.join(', '));
+    });
+
+    test('"technische Dokumentation" is not a medical skill', () => {
+      const groups = eval(appSrc.slice(
+        appSrc.indexOf('const skillGroups = ['),
+        appSrc.indexOf('];', appSrc.indexOf('const skillGroups = [')) + 2
+      ).replace('const skillGroups =', ''));
+      const found = skillMatcher.findSkills('UML-Modellierung und technische Dokumentation.', groups).map(x => x.label);
+      assert(!found.includes('Medical documentation'), 'got: ' + found.join(', '));
+      assertIncludes(found, 'Documentation', 'the ordinary one is still detected');
+    });
+  }
+
+  test('learningFor: the fallback names no platform', () => {
+    // This test used to require the fallback to mention TryHackMe, which is how the
+    // bug survived: the taxonomy covers more than security, and a candidate short of
+    // "Patient care" or "Empathie" was told to close the gap on a hacking range.
     const rec = SecurityLearning.learningFor({ key: 'xyz', label: 'Unknown', category: 'Unknown Category' });
     assert(rec.how === 'Build hands-on experience', 'DEFAULT how');
-    assert(rec.resource.includes('TryHackMe'), 'DEFAULT resource mentions TryHackMe');
+    assert(rec.resource && rec.resource.length > 0, 'the fallback still says something useful');
+    assert(!/TryHackMe|HackTheBox|PortSwigger|MITRE/i.test(rec.resource),
+      'a fallback for an unknown domain must not name a security platform');
   });
 
   test('recommendGaps: prioritises skills by how many target roles require them', () => {
