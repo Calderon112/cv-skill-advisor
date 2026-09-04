@@ -3465,6 +3465,7 @@ function renderCvSchema(schema, meta) {
 
   body.addEventListener('input', collectCvSchema);
   collectCvSchema();
+  syncSchemaFormMode(_showFixedFields);
 }
 
 /** Read the panel back into the profile. Called on every edit. */
@@ -3500,6 +3501,10 @@ function collectCvSchema() {
   });
   if (!state.profile) state.profile = emptyProfile();
   state.profile.cvSchema = out;
+  // Straight onto the fields the generator reads, so what is on screen is what the
+  // download contains. Without this the panel was a display of the profile rather
+  // than the profile itself.
+  applySchemaToProfile(state.profile, out);
   saveProfileToStorage();
 }
 
@@ -3987,7 +3992,7 @@ function setProfileMode(mode) {
   const imp = $('profile-import'); const man = $('profile-manual');
   if (imp) imp.classList.toggle('hidden', mode !== 'import');
   if (man) man.classList.toggle('hidden', mode !== 'manual');
-  if (mode === 'manual') { renderProfileForm(); renderThemePicker(); }
+  if (mode === 'manual') { renderProfileForm(); renderThemePicker(); syncSchemaFormMode(_showFixedFields); }
 }
 
 const _editExtractedBtn = $('profile-edit-extracted');
@@ -4055,6 +4060,141 @@ if (_pfReset) _pfReset.addEventListener('click', () => {
 // the rail where the rail is. A shrunken render of the real document at this size is
 // a smudge, while the thing a person is actually choosing between — one column or
 // two, where the facts sit, how loud the headings are — reads at a glance.
+
+
+// ── The edited sections feed the generated documents ────────────────────────
+//
+// Without this the panel was a display: editing "Werkstudent IT Support" there
+// changed nothing in the PDF, because the generator reads p.experience and the
+// panel wrote p.cvSchema. Two stores for one profile, and no way for a user to
+// tell which one the download would use.
+//
+// So every edit is mapped straight back onto the fields the generator already
+// reads. The section's own heading decides where it lands — the document said what
+// each block was, and that judgement is better than any guess made here.
+
+const SCHEMA_TARGET = [
+  [/BERUFSERFAHRUNG|BERUFSPRAXIS|WORK EXPERIENCE|EXPERIENCE|ERFAHRUNG|PRAKTIKA/i, 'experience'],
+  [/AUSBILDUNG|EDUCATION|STUDIUM/i,                                              'education'],
+  [/PROJEKTE|PROJECTS|PROJETS/i,                                                 'projects'],
+  [/WEITERBILDUNG|CERTIFICATION|ZERTIFIKATE/i,                                   'certifications'],
+  [/FÄHIGKEITEN|FAEHIGKEITEN|KENNTNISSE|SKILLS|KOMPETENZEN/i,                    'skills'],
+  [/SPRACHEN|LANGUAGES|LANGUES/i,                                                'languages'],
+  [/SOFT ?SKILLS/i,                                                              'softSkills'],
+  [/INTERESSEN|INTERESTS|HOBBY|HOBBIES/i,                                        'interests'],
+  [/PROFIL|SUMMARY|ÜBER MICH|ZUSAMMENFASSUNG/i,                                  'summary'],
+];
+
+function schemaTargetFor(heading) {
+  // SOFT SKILLS before SKILLS: the looser pattern would otherwise claim it, and the
+  // soft skills would be printed as technical ones.
+  const h = String(heading || '');
+  if (/SOFT ?SKILLS/i.test(h)) return 'softSkills';
+  const hit = SCHEMA_TARGET.find(([re]) => re.test(h));
+  return hit ? hit[1] : null;
+}
+
+/** "02.2023 – 09.2023" → { start, end }. A single date is a start with no end. */
+function splitPeriod(period) {
+  const parts = String(period || '').split(/\s*[–—-]\s*|\s+bis\s+/i);
+  return { start: (parts[0] || '').trim(), end: (parts[1] || '').trim() };
+}
+
+/**
+ * Write the panel's sections onto the profile fields the CV generator reads.
+ * Only sections that carry something are written, so an empty block never wipes a
+ * field that the CV parser filled correctly.
+ */
+function applySchemaToProfile(p, schema) {
+  (schema || []).forEach(function (sec) {
+    const target = schemaTargetFor(sec.heading);
+    if (!target || !sec.items || !sec.items.length) return;
+
+    if (target === 'experience' || target === 'education' || target === 'projects' || target === 'certifications') {
+      const rows = sec.items.filter(function (it) { return it && (it.title || it.org); });
+      if (!rows.length) return;
+
+      if (target === 'experience') {
+        p.experience = rows.map(function (it) {
+          const d = splitPeriod(it.period);
+          return { role: it.title, org: it.org, location: '', start: d.start, end: d.end,
+                   desc: (it.bullets || []).join('\n') };
+        });
+      } else if (target === 'education') {
+        p.education = rows.map(function (it) {
+          const d = splitPeriod(it.period);
+          return { degree: it.title, org: it.org, grade: '', start: d.start, end: d.end };
+        });
+      } else if (target === 'projects') {
+        p.projects = rows.map(function (it) {
+          const y = String(it.period || '').match(/(19|20)\d{2}/);
+          return { name: it.title, org: it.org, year: y ? y[0] : '',
+                   desc: (it.bullets || []).join('\n') };
+        });
+      } else {
+        p.certifications = rows.map(function (it) {
+          const y = String(it.period || '').match(/(19|20)\d{2}/);
+          return { name: it.title, year: y ? y[0] : '', desc: (it.bullets || []).join('\n') };
+        });
+      }
+      return;
+    }
+
+    if (target === 'skills') {
+      if (sec.kind === 'rows') {
+        p.skillRows = sec.items
+          .filter(function (r) { return r && r.value; })
+          .map(function (r) { return { category: r.label || 'Kenntnisse', values: r.value }; });
+      } else {
+        // A skills block written as a list or a paragraph is still the candidate's
+        // own words, and still belongs under the heading they chose.
+        const text = sec.items.map(function (i) { return typeof i === 'string' ? i : (i.value || ''); })
+          .filter(Boolean).join(', ');
+        if (text) p.skillRows = [{ category: sec.heading, values: text }];
+      }
+      return;
+    }
+
+    // languages, softSkills, interests, summary: plain text, one item per line.
+    const text = sec.items
+      .map(function (i) { return typeof i === 'string' ? i : (i.value || i.title || ''); })
+      .filter(Boolean).join(target === 'summary' ? '\n\n' : '\n');
+    if (text) p[target] = text;
+  });
+  return p;
+}
+
+// ── One form, not two ───────────────────────────────────────────────────────
+//
+// After an import the profile page showed the CV's own sections AND the fixed
+// Skills / Experience / Education / Certifications cards, holding the same data in
+// two shapes. Editing one did not change the other, and there was no way to tell
+// which of them the generated CV would use.
+//
+// So the fixed cards step aside for the sections the document actually has. They
+// are hidden, not removed: a CV with no PROJEKTE section still needs somewhere to
+// add one, and the toggle brings them back.
+const SCHEMA_COVERS = ['pf-card-skills', 'pf-card-experience', 'pf-card-education', 'pf-card-certifications'];
+
+function syncSchemaFormMode(forceShowFixed) {
+  const hasSchema = !!(state.profile && state.profile.cvSchema && state.profile.cvSchema.length);
+  const hide = hasSchema && !forceShowFixed;
+  SCHEMA_COVERS.forEach(function (id) {
+    const el = $(id);
+    if (el) el.classList.toggle('hidden', hide);
+  });
+  const btn = $('cv-schema-toggle');
+  if (btn) {
+    btn.classList.toggle('hidden', !hasSchema);
+    btn.textContent = hide ? 'Feste Felder zeigen' : 'Feste Felder ausblenden';
+  }
+}
+
+let _showFixedFields = false;
+$('cv-schema-toggle')?.addEventListener('click', function () {
+  _showFixedFields = !_showFixedFields;
+  syncSchemaFormMode(_showFixedFields);
+});
 
 function renderThemePicker() {
   const host = $('cv-theme-picker');

@@ -828,6 +828,75 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
     });
   }
 
+  section('Edited sections reach the generated CV');
+
+  {
+    // The panel writes p.cvSchema; the generator reads p.experience and friends.
+    // Without the mapping the panel was a display of the profile rather than the
+    // profile itself, and an edit there changed nothing in the download.
+    const src = require('fs').readFileSync('./app.js', 'utf8');
+    const grab = (n) => {
+      const i = src.indexOf('function ' + n + '(');
+      let d = 0, j = src.indexOf('{', i);
+      for (let k = j; k < src.length; k++) {
+        if (src[k] === '{') d++;
+        else if (src[k] === '}') { d--; if (!d) return src.slice(i, k + 1); }
+      }
+    };
+    const SCHEMA_TARGET = eval(src.slice(
+      src.indexOf('const SCHEMA_TARGET = ['),
+      src.indexOf('];', src.indexOf('const SCHEMA_TARGET = [')) + 2
+    ).replace('const SCHEMA_TARGET =', ''));
+    eval(grab('schemaTargetFor'));
+    eval(grab('splitPeriod'));
+    eval(grab('applySchemaToProfile'));
+
+    test('a heading routes to the field the generator reads', () => {
+      assertEqual(schemaTargetFor('BERUFSERFAHRUNG'), 'experience', 'German');
+      assertEqual(schemaTargetFor('Work Experience'), 'experience', 'English');
+      assertEqual(schemaTargetFor('PROJEKTE'), 'projects', 'projects');
+      assertEqual(schemaTargetFor('WEITERBILDUNG'), 'certifications', 'further training');
+      assertEqual(schemaTargetFor('Lieblingsfarbe'), null, 'an unknown heading is not forced anywhere');
+    });
+
+    test('SOFT SKILLS does not land in the technical skills', () => {
+      // The looser /SKILLS/ pattern would otherwise claim it, and soft skills would
+      // be printed as technical ones.
+      assertEqual(schemaTargetFor('SOFT SKILLS'), 'softSkills', 'soft');
+      assertEqual(schemaTargetFor('FÄHIGKEITEN'), 'skills', 'technical');
+    });
+
+    test('a period splits into start and end', () => {
+      const d = splitPeriod('02.2023 – 09.2023');
+      assertEqual(d.start, '02.2023', 'start');
+      assertEqual(d.end, '09.2023', 'end');
+      assertEqual(splitPeriod('Nov. 2020 – Gegenwärtig').end, 'Gegenwärtig', 'open range');
+      assertEqual(splitPeriod('2025').end, '', 'a single date has no end');
+    });
+
+    test('entries, rows and lists each reach their field', () => {
+      const p = {};
+      applySchemaToProfile(p, [
+        { heading: 'BERUFSERFAHRUNG', kind: 'entries', items: [
+          { period: '02.2023 – 09.2023', title: 'Praktikum', org: 'DIGITAL-X',
+            bullets: ['Entwicklung von Webanwendungen', 'Mitarbeit im Team'] }] },
+        { heading: 'FÄHIGKEITEN', kind: 'rows', items: [
+          { label: 'Security Tools', value: 'Kali Linux, Wireshark' }] },
+        { heading: 'INTERESSEN', kind: 'list', items: ['Sport', 'Lesen'] },
+      ]);
+      assertEqual(p.experience[0].role, 'Praktikum', 'role');
+      assertEqual(p.experience[0].desc.split('\n').length, 2, 'one bullet per line, as the PDF prints them');
+      assertEqual(p.skillRows[0].category, 'Security Tools', 'the candidate\'s own grouping');
+      assertEqual(p.interests, 'Sport\nLesen', 'list joined by lines');
+    });
+
+    test('an empty section never wipes a field the parser filled', () => {
+      const p = { experience: [{ role: 'Kept' }] };
+      applySchemaToProfile(p, [{ heading: 'BERUFSERFAHRUNG', kind: 'entries', items: [] }]);
+      assertEqual(p.experience[0].role, 'Kept', 'nothing to write, nothing written');
+    });
+  }
+
   section('CV templates');
 
   {
