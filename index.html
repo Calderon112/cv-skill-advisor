@@ -820,6 +820,7 @@
           <div class="card-header">
             <h2>Your CV, section by section</h2>
             <span class="pill" id="cv-schema-pill">—</span>
+            <button type="button" id="cv-schema-toggle" class="btn btn-ghost btn-xs">Feste Felder zeigen</button>
           </div>
           <p class="lede" id="cv-schema-note">Built from the headings your CV carries. Edit anything here; it feeds the generated documents.</p>
           <div id="cv-schema-body"></div>
@@ -858,7 +859,7 @@
             <div class="form-group"><label>Professional summary</label><textarea id="pf-summary" class="field" rows="4" placeholder="A short paragraph about you, your goals and motivation…"></textarea></div>
           </div>
 
-          <div class="card">
+          <div class="card" id="pf-card-skills">
             <div class="card-header">
               <h2>Skills</h2>
               <span class="hint" style="text-transform:none">Type a skill and press Enter</span>
@@ -870,7 +871,7 @@
             <div id="pf-skill-tags" class="skill-tags"></div>
           </div>
 
-          <div class="card">
+          <div class="card" id="pf-card-experience">
             <div class="card-header">
               <h2>Experience</h2>
               <button id="pf-add-exp" class="btn btn-ghost btn-sm">+ Add experience</button>
@@ -878,7 +879,7 @@
             <div id="pf-exp-list" class="repeat-list"></div>
           </div>
 
-          <div class="card">
+          <div class="card" id="pf-card-education">
             <div class="card-header">
               <h2>Education</h2>
               <button id="pf-add-edu" class="btn btn-ghost btn-sm">+ Add education</button>
@@ -886,7 +887,7 @@
             <div id="pf-edu-list" class="repeat-list"></div>
           </div>
 
-          <div class="card">
+          <div class="card" id="pf-card-certifications">
             <div class="card-header">
               <h2>Certifications</h2>
               <button id="pf-add-cert" class="btn btn-ghost btn-sm">+ Add certification</button>
