@@ -3667,12 +3667,65 @@ function cvSection(text, names) {
 }
 
 // Parse entries shaped "Role — Organisation (start – end)" + location/desc lines.
+const NEWLINE_CHAR = String.fromCharCode(10);
+
+// A line that is nothing but a date range, in the forms German CVs use:
+//   02.2023 – 09.2023      Nov. 2020 - Gegenwärtig      Juni 2024 – Nov. 2024
+//   2019 - 2022            05.2025 – heute
+//
+// One point is a month and a year, or a year alone; the month may be written or
+// numeric, which the first version missed — "09.2017 - 02.2021" was not matched at
+// all, so a purely numeric timeline column went straight through the guard.
+const DATE_POINT = '(?:[A-Za-zÄÖÜäöü]{3,9}\\.?\\s*|\\d{1,2}\\s*[./]\\s*)?\\d{4}';
+const DATE_NOW = '(?:Gegenw[äa]rtig|heute|present|current|now|jetzt|aktuell|ongoing)';
+const DATE_ONLY = new RegExp(
+  '^\\s*' + DATE_POINT + '\\s*[-–—]\\s*(?:' + DATE_POINT + '|' + DATE_NOW + ')\\s*$', 'i');
+
+/**
+ * The dates a timeline column dumps in one block, which belong to no entry here.
+ *
+ * Many CV templates set the dates in their own vertical column beside the entries.
+ * A PDF text extractor reads columns one after the other, so those dates arrive as
+ * a run of consecutive date-only lines with nothing between them — five in a row,
+ * detached from the five entries they describe.
+ *
+ * Pairing them by order then attaches each date to whatever happens to sit near it.
+ * On one real CV that put "Nov. 2020 - Gegenwärtig", an education date, onto a
+ * sub-task of a job. The result looks entirely plausible and is false, on a document
+ * its owner sends to employers.
+ *
+ * Without the x/y coordinates the text extractor discards, that association cannot
+ * be recovered — so it is not guessed. A run of three or more is treated as a column
+ * and dropped, leaving those entries dateless. A missing date is visible and can be
+ * typed in; a wrong one is neither.
+ */
+function detachedDateRun(lines) {
+  const drop = new Set();
+  let run = [];
+  const flush = () => {
+    if (run.length >= 3) run.forEach((i) => drop.add(i));
+    run = [];
+  };
+  lines.forEach((raw, i) => {
+    const line = String(raw).trim();
+    if (!line) return;
+    if (DATE_ONLY.test(line)) run.push(i);
+    else flush();
+  });
+  flush();
+  return drop;
+}
+
 function parseCvEntries(block, withDesc) {
   const entries = [];
   let cur = null;
-  for (const raw of block.split('\n')) {
+  const all = block.split(NEWLINE_CHAR);
+  const columnDates = detachedDateRun(all);
+  for (let idx = 0; idx < all.length; idx++) {
+    const raw = all[idx];
     const line = raw.trim();
     if (!line) continue;
+    if (columnDates.has(idx)) continue;
     const dm = line.match(/\(([^)]*\d{4}[^)]*)\)\s*$/);
     const isHeader = /\s[—–-]\s/.test(line) && (dm || /\b\d{4}\b/.test(line));
     if (isHeader) {
