@@ -828,6 +828,56 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
     });
   }
 
+  section('CV templates');
+
+  {
+    const T = require('./cv-themes.js');
+
+    test('every theme places every section exactly once', () => {
+      const KEYS = ['kontakt', 'ausbildung', 'sprachen', 'softskills', 'interessen',
+                    'berufserfahrung', 'skills', 'projekte', 'weiterbildung'];
+      T.list().forEach((t) => {
+        const placed = t.layout.rail.concat(t.layout.main);
+        assertEqual(placed.length, KEYS.length, `${t.id}: ${placed.length} sections placed`);
+        KEYS.forEach(k => assertIncludes(placed, k, `${t.id} places ${k}`));
+        assertEqual(new Set(placed).size, placed.length, `${t.id}: no section placed twice`);
+      });
+    });
+
+    test('an unknown id falls back rather than returning nothing', () => {
+      assertEqual(T.get('does-not-exist').id, T.DEFAULT_ID, 'unknown id');
+      assertEqual(T.get('').id, T.DEFAULT_ID, 'empty id');
+      assertEqual(T.get(undefined).id, T.DEFAULT_ID, 'no id at all');
+    });
+
+    test('a single-column theme declares no rail width', () => {
+      T.list().filter(t => t.rail === 'none').forEach((t) => {
+        assertEqual(t.railWidth, 0, `${t.id} rail width`);
+        assertEqual(t.layout.rail.length, 0, `${t.id} lists nothing in the rail`);
+      });
+    });
+
+    test('the ATS template avoids what a text extractor loses', () => {
+      const ats = T.get('ats');
+      assertEqual(ats.rail, 'none', 'one column: two columns interleave when extracted');
+      assertEqual(ats.mainHeading, 'rule', 'no filled bar: colour behind text can take the heading with it');
+      assertEqual(ats.photo, 'none', 'no photo');
+    });
+
+    test('every theme carries a note saying when to use it', () => {
+      T.list().forEach(t => assert(t.note && t.note.length > 20, `${t.id} has advice`));
+    });
+
+    test('the preview is drawn from the theme, and reflects its layout', () => {
+      const two = T.preview(T.get('klassisch'));
+      const one = T.preview(T.get('ats'));
+      assert(/^<svg /.test(two) && /<\/svg>$/.test(two), 'valid SVG');
+      // The two-column preview paints a rail field; the single-column one cannot.
+      assert(two.length > one.length, 'the two-column preview carries more marks');
+      assert(one.indexOf(`rgb(${T.get('ats').accent.join(',')})`) !== -1, 'uses its own accent');
+    });
+  }
+
   section('CV schema — the form is built from the document');
 
   {

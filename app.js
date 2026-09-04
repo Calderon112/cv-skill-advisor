@@ -3362,6 +3362,8 @@ const emptyProfile = () => ({
   // Sections read from the imported CV, in its own headings and order. Empty for a
   // profile typed by hand, which uses the fixed fields above.
   cvSchema: [],
+  // Chosen CV template. See cv-themes.js; the generator reads it.
+  themeId: '',
   skills: [], experience: [], education: [], certifications: [], projects: []
 });
 
@@ -3985,7 +3987,7 @@ function setProfileMode(mode) {
   const imp = $('profile-import'); const man = $('profile-manual');
   if (imp) imp.classList.toggle('hidden', mode !== 'import');
   if (man) man.classList.toggle('hidden', mode !== 'manual');
-  if (mode === 'manual') renderProfileForm();
+  if (mode === 'manual') { renderProfileForm(); renderThemePicker(); }
 }
 
 const _editExtractedBtn = $('profile-edit-extracted');
@@ -4042,6 +4044,48 @@ if (_pfReset) _pfReset.addEventListener('click', () => {
 // Builds the polished, photo-bearing CV from the structured profile and returns
 // the jsPDF doc. `overrides` lets callers tailor a copy (e.g. the target job title)
 // without mutating the saved profile. Used by the Profile "Download PDF" button.
+// ── CV template picker ──────────────────────────────────────────────────────
+//
+// The thumbnails are generated from the theme objects themselves (CvThemes.preview),
+// not drawn by hand, so a theme added to cv-themes.js cannot end up illustrated by a
+// picture of a different one — and the preview cannot drift from the layout it
+// claims to show.
+//
+// They are deliberately abstract: grey bars for text, coloured bars for headings,
+// the rail where the rail is. A shrunken render of the real document at this size is
+// a smudge, while the thing a person is actually choosing between — one column or
+// two, where the facts sit, how loud the headings are — reads at a glance.
+
+function renderThemePicker() {
+  const host = $('cv-theme-picker');
+  if (!host || typeof CvThemes === 'undefined') return;
+
+  const current = (state.profile && state.profile.themeId) || CvThemes.DEFAULT_ID;
+
+  host.innerHTML = CvThemes.list().map(function (t) {
+    return '<button type="button" class="theme-card' + (t.id === current ? ' selected' : '') + '"'
+      + ' data-theme="' + esc(t.id) + '" aria-pressed="' + (t.id === current) + '">'
+      + '<span class="theme-thumb">' + CvThemes.preview(t) + '</span>'
+      + '<span class="theme-name">' + esc(t.name) + '</span>'
+      + '<span class="theme-note">' + esc(t.note) + '</span>'
+      + '</button>';
+  }).join('');
+
+  host.querySelectorAll('.theme-card').forEach(function (btn) {
+    btn.addEventListener('click', function (e) {
+      // currentTarget, not target: the click lands on the SVG or a span inside the
+      // button, and automatic page translation wraps the labels in <font> elements
+      // that carry no dataset. This project has been bitten by that twice.
+      const id = e.currentTarget.dataset.theme;
+      if (!state.profile) state.profile = emptyProfile();
+      state.profile.themeId = id;
+      saveProfileToStorage();
+      renderThemePicker();
+      toast('Vorlage: ' + CvThemes.get(id).name, 'success');
+    });
+  });
+}
+
 function buildProfilePdfDoc(profile, overrides) {
   const p = Object.assign({}, profile || emptyProfile(), overrides || {});
   const name = [p.firstName, p.lastName].filter(Boolean).join(' ') || 'Your Name';
@@ -4053,20 +4097,37 @@ function buildProfilePdfDoc(profile, overrides) {
   const PAGE_W = doc.internal.pageSize.getWidth();
   const PAGE_H = doc.internal.pageSize.getHeight();
 
-  // Two columns, in the proportions a German Lebenslauf uses: the narrow rail on
-  // the right carries the facts a recruiter scans for — contact, education,
-  // languages — and the wide column carries the evidence.
-  const M = 40;
-  const GAP = 18;
-  const SIDE_W = 168;
-  const MAIN_X = M;
-  const MAIN_W = PAGE_W - M * 2 - SIDE_W - GAP;
-  const SIDE_X = PAGE_W - M - SIDE_W;
+  // Geometry and colour come from the theme, not from this function. See
+  // cv-themes.js: `layout` is what actually distinguishes one CV design from
+  // another — moving KONTAKT out of the rail changes the document far more than
+  // changing the accent colour does.
+  const theme = (typeof CvThemes !== 'undefined')
+    ? CvThemes.get((overrides && overrides.themeId) || p.themeId)
+    : null;
+  const T = theme || {
+    rail: 'right', railWidth: 168, margin: 40, gap: 18,
+    accent: [42, 122, 150], dark: [28, 40, 56], grey: [100, 116, 139],
+    railFill: [238, 242, 245], mainHeading: 'bar', railHeading: 'rule', photo: 'top-right',
+    layout: { rail: ['kontakt', 'ausbildung', 'sprachen', 'softskills', 'interessen'],
+              main: ['berufserfahrung', 'skills', 'projekte', 'weiterbildung'] },
+  };
 
-  const TEAL  = [42, 122, 150];
-  const DARK  = [28, 40, 56];
-  const GREY  = [100, 116, 139];
-  const RAIL  = [238, 242, 245];
+  const HAS_RAIL = T.rail !== 'none' && T.railWidth > 0;
+  const M = T.margin;
+  const GAP = HAS_RAIL ? T.gap : 0;
+  const SIDE_W = HAS_RAIL ? T.railWidth : 0;
+  const MAIN_X = (HAS_RAIL && T.rail === 'left') ? M + SIDE_W + GAP : M;
+  const MAIN_W = PAGE_W - M * 2 - SIDE_W - GAP;
+  // With no rail, the "rail" sections are simply main-column sections. Pointing the
+  // side coordinates at the main column means every renderer below works unchanged
+  // in both layouts, instead of each one needing to know which theme it is in.
+  const SIDE_X = !HAS_RAIL ? MAIN_X : (T.rail === 'left' ? M : PAGE_W - M - SIDE_W);
+  const SIDE_W_R = !HAS_RAIL ? MAIN_W : SIDE_W;
+
+  const TEAL  = T.accent;
+  const DARK  = T.dark;
+  const GREY  = T.grey;
+  const RAIL  = T.railFill || [238, 242, 245];
   const WHITE = [255, 255, 255];
 
   let yMain = 0, ySide = 0;
@@ -4074,7 +4135,13 @@ function buildProfilePdfDoc(profile, overrides) {
   // The rail's grey field, repainted on every page — including pages where it
   // holds nothing, because a column that vanishes halfway through a document
   // reads as a rendering fault rather than as a design.
+  // The rail renderers advance "their" cursor. With no rail that is the main one.
+  function sideAdvance(n) {
+    if (HAS_RAIL) ySide += n; else yMain += n;
+  }
+
   function paintRail(from) {
+    if (!HAS_RAIL) return;
     doc.setFillColor(RAIL[0], RAIL[1], RAIL[2]);
     doc.rect(SIDE_X - 10, from - 12, SIDE_W + 20, PAGE_H - from - M + 12, 'F');
   }
@@ -4113,17 +4180,33 @@ function buildProfilePdfDoc(profile, overrides) {
   function mainSection(label) {
     yMain += 10;
     if (yMain + 30 > PAGE_H - M) nextPage();
-    doc.setFillColor(TEAL[0], TEAL[1], TEAL[2]);
-    doc.rect(MAIN_X, yMain - 2, MAIN_W, 17, 'F');
-    setFont(9.5, 'bold', WHITE);
-    doc.text(String(label).toUpperCase(), MAIN_X + 8, yMain + 10);
-    yMain += 28;
+    if (T.mainHeading === 'bar') {
+      doc.setFillColor(TEAL[0], TEAL[1], TEAL[2]);
+      doc.rect(MAIN_X, yMain - 2, MAIN_W, 17, 'F');
+      setFont(9.5, 'bold', WHITE);
+      doc.text(String(label).toUpperCase(), MAIN_X + 8, yMain + 10);
+      yMain += 28;
+      return;
+    }
+    // A rule instead of a filled bar. Text on a block of colour is an image to a
+    // PDF text extractor, and an applicant tracking system can lose the heading
+    // along with it — which is the whole point of the single-column theme.
+    setFont(9.5, 'bold', TEAL);
+    doc.text(String(label).toUpperCase(), MAIN_X, yMain + 8);
+    yMain += 12;
+    doc.setDrawColor(TEAL[0], TEAL[1], TEAL[2]);
+    doc.setLineWidth(0.8);
+    doc.line(MAIN_X, yMain, MAIN_X + MAIN_W, yMain);
+    yMain += 14;
   }
 
   // Rail heading: teal type over a hairline rather than a second filled bar. The
   // rail is already a block of colour and a bar inside it would fight the one
   // opposite for the reader's eye.
   function railSection(label) {
+    // One column means there is no second heading style to distinguish, and no
+    // second cursor to advance. Delegating keeps the rail renderers unchanged.
+    if (!HAS_RAIL) return mainSection(label);
     ySide += 12;
     if (ySide + 28 > PAGE_H - M) nextPage();
     setFont(9.5, 'bold', TEAL);
@@ -4171,11 +4254,12 @@ function buildProfilePdfDoc(profile, overrides) {
   // ── Header ────────────────────────────────────────────────────────────────
   const PHOTO = 96;
   let y = M;
-  if (p.photo) {
+  if (p.photo && T.photo !== 'none') {
     try { doc.addImage(p.photo, 'JPEG', PAGE_W - M - PHOTO, y, PHOTO, PHOTO); }
     catch (_) { /* an unreadable photo must not cost the whole document */ }
   }
-  const headW = PAGE_W - M * 2 - (p.photo ? PHOTO + 20 : 0);
+  const showPhoto = !!p.photo && T.photo !== 'none';
+  const headW = PAGE_W - M * 2 - (showPhoto ? PHOTO + 20 : 0);
 
   setFont(23, 'bold', DARK);
   doc.splitTextToSize(name, headW).forEach(function (l) { doc.text(l, M, y + 20); y += 26; });
@@ -4187,7 +4271,7 @@ function buildProfilePdfDoc(profile, overrides) {
     setFont(9.5, 'normal', GREY);
     doc.splitTextToSize(p.summary, headW).slice(0, 3).forEach(function (l) { doc.text(l, M, y + 10); y += 13; });
   }
-  y = Math.max(y + 12, M + (p.photo ? PHOTO + 14 : 0));
+  y = Math.max(y + 12, M + (showPhoto ? PHOTO + 14 : 0));
   doc.setDrawColor(TEAL[0], TEAL[1], TEAL[2]);
   doc.setLineWidth(2);
   doc.line(M, y, PAGE_W - M, y);
@@ -4197,7 +4281,11 @@ function buildProfilePdfDoc(profile, overrides) {
   yMain = headerBottom;
   ySide = headerBottom;
 
-  // ── Rail ──────────────────────────────────────────────────────────────────
+  // ── Sections, in the order the theme asks for ─────────────────────────────
+  //
+  // Each renderer keeps its own emptiness check, so a section with nothing in it
+  // prints nothing wherever the theme places it. The two loops below are the
+  // whole difference between a one-column and a two-column CV.
   const contact = [
     p.location    ? ['Ort', p.location] : null,
     p.email       ? ['E-Mail', p.email] : null,
@@ -4205,130 +4293,152 @@ function buildProfilePdfDoc(profile, overrides) {
     p.nationality ? ['Nationalität', p.nationality] : null,
   ].filter(Boolean);
 
-  if (contact.length) {
-    railSection('Kontakt');
-    contact.forEach(function (kv) {
-      write(kv[0] + ':', SIDE_X, SIDE_W, 8.5, 'bold', DARK, 11);
-      write(kv[1], SIDE_X, SIDE_W, 8.5, 'normal', GREY, 11);
-      ySide += 3;
-    });
-  }
+  const RENDER = {
+    kontakt: function () {
+      if (contact.length) {
+        railSection('Kontakt');
+        contact.forEach(function (kv) {
+          write(kv[0] + ':', SIDE_X, SIDE_W_R, 8.5, 'bold', DARK, 11);
+          write(kv[1], SIDE_X, SIDE_W_R, 8.5, 'normal', GREY, 11);
+          sideAdvance(3);
+        });
+      }
+    },
+    ausbildung: function () {
+      if (p.education && p.education.length) {
+        railSection('Ausbildung');
+        p.education.forEach(function (x) {
+          const dates = [x.start, x.end].filter(Boolean).join(' – ');
+          if (dates)    write(dates, SIDE_X, SIDE_W_R, 8, 'normal', GREY, 10);
+          if (x.degree) write(x.degree, SIDE_X, SIDE_W_R, 9, 'bold', DARK, 11);
+          const sub = [x.org, x.grade ? 'Note: ' + x.grade : ''].filter(Boolean).join(' | ');
+          if (sub)      write(sub, SIDE_X, SIDE_W_R, 8.5, 'normal', GREY, 11);
+          sideAdvance(8);
+        });
+      }
+    },
+    sprachen: function () {
+      if (p.languages) {
+        railSection('Sprachen');
+        // Commas count as separators here and nowhere else. The profile form holds
+        // languages in a single-line <input>, so the parser has to join them with ", "
+        // — and rendering that verbatim produced one run-on paragraph where the CV
+        // shows three lines. A description may legitimately contain commas, which is
+        // why this is not in splitLines().
+        const langs = splitLines(p.languages)
+          .reduce(function (acc, line) { return acc.concat(line.split(/\s*,\s*/)); }, [])
+          .map(function (l) { return l.trim(); })
+          .filter(Boolean);
+        langs.forEach(function (l) {
+          write(l, SIDE_X, SIDE_W_R, 8.5, 'normal', DARK, 12);
+        });
+      }
+    },
+    softskills: function () {
+      if (p.softSkills && splitLines(p.softSkills).length) {
+        railSection('Soft Skills');
+        bulletList(splitLines(p.softSkills), SIDE_X, SIDE_W_R);
+      }
+    },
+    interessen: function () {
+      if (p.interests && splitLines(p.interests).length) {
+        railSection('Interessen');
+        bulletList(splitLines(p.interests), SIDE_X, SIDE_W_R);
+      }
+    },
+    berufserfahrung: function () {
+      if (p.experience && p.experience.length) {
+        mainSection('Berufserfahrung');
+        p.experience.forEach(function (x) {
+          const dates = [x.start, x.end].filter(Boolean).join(' – ');
+          if (dates)  write(dates, MAIN_X, MAIN_W, 8, 'normal', GREY, 11);
+          if (x.role) write(x.role, MAIN_X, MAIN_W, 10.5, 'bold', TEAL, 13);
+          const org = [x.org, x.location].filter(Boolean).join(', ');
+          if (org)    write(org, MAIN_X, MAIN_W, 9.5, 'bold', DARK, 12);
+          if (x.desc) bulletList(splitLines(x.desc), MAIN_X, MAIN_W);
+          // Entries need more air between them than bullets do inside one, or the
+          // reader cannot see where a job ends and the next begins.
+          yMain += 16;
+        });
+      }
+    
+    },
+    skills: function () {
+      // The CV's own rows when the parser found them, the taxonomy match otherwise.
+      //
+      // The order matters. The taxonomy list is built for job scoring: it maps free text
+      // onto canonical keys, and printing those keys turned "Kali Linux, Wireshark, IDA
+      // Pro, Ghidra, EDB" into a single "Kenntnisse" row that included a "Medical
+      // documentation" matched from "technische Dokumentation". A document has to say
+      // what the candidate wrote, in the groups the candidate chose.
+      const rows = (p.skillRows && p.skillRows.length)
+        ? p.skillRows.reduce(function (acc, r) { acc[r.category] = [r.values]; return acc; }, {})
+        : null;
+      if (rows || (p.skills && p.skills.length)) {
+        mainSection('Technische Fähigkeiten');
+        const groups = rows || (function () {
+          const g = {};
+          p.skills.forEach(function (s) {
+            const label = s.label || s.key || s;
+            const cat = String(s.category || '').trim() || 'Kenntnisse';
+            (g[cat] = g[cat] || []).push(label);
+          });
+          return g;
+        })();
+        Object.keys(groups).forEach(function (cat) {
+          const LABEL_W = 104;
+          if (yMain + 14 > PAGE_H - M) nextPage();
+          setFont(9, 'bold', TEAL);
+          doc.text(cat + ':', MAIN_X, yMain);
+          const lines = doc.splitTextToSize(groups[cat].join(', '), MAIN_W - LABEL_W);
+          setFont(9, 'normal', DARK);
+          let y1 = yMain;
+          lines.forEach(function (l) {
+            if (y1 + 12 > PAGE_H - M) { nextPage(); y1 = M; }
+            doc.text(l, MAIN_X + LABEL_W, y1);
+            y1 += 12;
+          });
+          yMain = y1 + 5;
+        });
+      }
+    },
+    projekte: function () {
+      if (p.projects && p.projects.length) {
+        mainSection('Projekte');
+        p.projects.forEach(function (x) {
+          if (x.name) write(x.name, MAIN_X, MAIN_W, 10, 'bold', TEAL, 13);
+          const sub = [x.org, x.year].filter(Boolean).join(', ');
+          if (sub)    write(sub, MAIN_X, MAIN_W, 8, 'normal', GREY, 11);
+          if (x.desc) bulletList(splitLines(x.desc), MAIN_X, MAIN_W);
+          // Entries need more air between them than bullets do inside one, or the
+          // reader cannot see where a job ends and the next begins.
+          yMain += 16;
+        });
+      }
+    },
+    weiterbildung: function () {
+      if (p.certifications && p.certifications.length) {
+        mainSection('Weiterbildung');
+        p.certifications.forEach(function (x) {
+          const head = [x.name, x.year].filter(Boolean).join(' – ');
+          if (head)   write(head, MAIN_X, MAIN_W, 9.5, 'bold', TEAL, 12);
+          if (x.desc) bulletList(splitLines(x.desc), MAIN_X, MAIN_W);
+          yMain += 3;
+        });
+      }
+    },
+  };
 
-  if (p.education && p.education.length) {
-    railSection('Ausbildung');
-    p.education.forEach(function (x) {
-      const dates = [x.start, x.end].filter(Boolean).join(' – ');
-      if (dates)    write(dates, SIDE_X, SIDE_W, 8, 'normal', GREY, 10);
-      if (x.degree) write(x.degree, SIDE_X, SIDE_W, 9, 'bold', DARK, 11);
-      const sub = [x.org, x.grade ? 'Note: ' + x.grade : ''].filter(Boolean).join(' | ');
-      if (sub)      write(sub, SIDE_X, SIDE_W, 8.5, 'normal', GREY, 11);
-      ySide += 8;
-    });
-  }
+  const run = (names) => (names || []).forEach(function (k) {
+    if (RENDER[k]) RENDER[k]();
+  });
 
-  if (p.languages) {
-    railSection('Sprachen');
-    // Commas count as separators here and nowhere else. The profile form holds
-    // languages in a single-line <input>, so the parser has to join them with ", "
-    // — and rendering that verbatim produced one run-on paragraph where the CV
-    // shows three lines. A description may legitimately contain commas, which is
-    // why this is not in splitLines().
-    const langs = splitLines(p.languages)
-      .reduce(function (acc, line) { return acc.concat(line.split(/\s*,\s*/)); }, [])
-      .map(function (l) { return l.trim(); })
-      .filter(Boolean);
-    langs.forEach(function (l) {
-      write(l, SIDE_X, SIDE_W, 8.5, 'normal', DARK, 12);
-    });
-  }
-
-  if (p.softSkills && splitLines(p.softSkills).length) {
-    railSection('Soft Skills');
-    bulletList(splitLines(p.softSkills), SIDE_X, SIDE_W);
-  }
-
-  if (p.interests && splitLines(p.interests).length) {
-    railSection('Interessen');
-    bulletList(splitLines(p.interests), SIDE_X, SIDE_W);
-  }
-
-  // ── Main column ───────────────────────────────────────────────────────────
-  if (p.experience && p.experience.length) {
-    mainSection('Berufserfahrung');
-    p.experience.forEach(function (x) {
-      const dates = [x.start, x.end].filter(Boolean).join(' – ');
-      if (dates)  write(dates, MAIN_X, MAIN_W, 8, 'normal', GREY, 11);
-      if (x.role) write(x.role, MAIN_X, MAIN_W, 10.5, 'bold', TEAL, 13);
-      const org = [x.org, x.location].filter(Boolean).join(', ');
-      if (org)    write(org, MAIN_X, MAIN_W, 9.5, 'bold', DARK, 12);
-      if (x.desc) bulletList(splitLines(x.desc), MAIN_X, MAIN_W);
-      // Entries need more air between them than bullets do inside one, or the
-      // reader cannot see where a job ends and the next begins.
-      yMain += 16;
-    });
-  }
-
-  // The CV's own rows when the parser found them, the taxonomy match otherwise.
-  //
-  // The order matters. The taxonomy list is built for job scoring: it maps free text
-  // onto canonical keys, and printing those keys turned "Kali Linux, Wireshark, IDA
-  // Pro, Ghidra, EDB" into a single "Kenntnisse" row that included a "Medical
-  // documentation" matched from "technische Dokumentation". A document has to say
-  // what the candidate wrote, in the groups the candidate chose.
-  const rows = (p.skillRows && p.skillRows.length)
-    ? p.skillRows.reduce(function (acc, r) { acc[r.category] = [r.values]; return acc; }, {})
-    : null;
-
-  if (rows || (p.skills && p.skills.length)) {
-    mainSection('Technische Fähigkeiten');
-    const groups = rows || (function () {
-      const g = {};
-      p.skills.forEach(function (s) {
-        const label = s.label || s.key || s;
-        const cat = String(s.category || '').trim() || 'Kenntnisse';
-        (g[cat] = g[cat] || []).push(label);
-      });
-      return g;
-    })();
-    Object.keys(groups).forEach(function (cat) {
-      const LABEL_W = 104;
-      if (yMain + 14 > PAGE_H - M) nextPage();
-      setFont(9, 'bold', TEAL);
-      doc.text(cat + ':', MAIN_X, yMain);
-      const lines = doc.splitTextToSize(groups[cat].join(', '), MAIN_W - LABEL_W);
-      setFont(9, 'normal', DARK);
-      let y1 = yMain;
-      lines.forEach(function (l) {
-        if (y1 + 12 > PAGE_H - M) { nextPage(); y1 = M; }
-        doc.text(l, MAIN_X + LABEL_W, y1);
-        y1 += 12;
-      });
-      yMain = y1 + 5;
-    });
-  }
-
-  if (p.projects && p.projects.length) {
-    mainSection('Projekte');
-    p.projects.forEach(function (x) {
-      if (x.name) write(x.name, MAIN_X, MAIN_W, 10, 'bold', TEAL, 13);
-      const sub = [x.org, x.year].filter(Boolean).join(', ');
-      if (sub)    write(sub, MAIN_X, MAIN_W, 8, 'normal', GREY, 11);
-      if (x.desc) bulletList(splitLines(x.desc), MAIN_X, MAIN_W);
-      // Entries need more air between them than bullets do inside one, or the
-      // reader cannot see where a job ends and the next begins.
-      yMain += 16;
-    });
-  }
-
-  if (p.certifications && p.certifications.length) {
-    mainSection('Weiterbildung');
-    p.certifications.forEach(function (x) {
-      const head = [x.name, x.year].filter(Boolean).join(' – ');
-      if (head)   write(head, MAIN_X, MAIN_W, 9.5, 'bold', TEAL, 12);
-      if (x.desc) bulletList(splitLines(x.desc), MAIN_X, MAIN_W);
-      yMain += 3;
-    });
-  }
+  // The rail first: it is short, and painting it before the main column means a
+  // page break in the main column never leaves the rail half-drawn.
+  if (HAS_RAIL) run(T.layout.rail);
+  run(T.layout.main);
+  // With no rail, whatever the theme listed there still has to be printed.
+  if (!HAS_RAIL) run(T.layout.rail);
 
   return { doc, name };
 }
