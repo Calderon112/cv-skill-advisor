@@ -903,6 +903,35 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
       assertEqual(found.length, 4, 'four sections, no more');
     });
 
+    test('a name in capitals at the top of a CV is not a section', () => {
+      // A CV opens with the candidate's name, and a name set in capitals passes
+      // every shape test a heading passes. One real CV produced a section called
+      // "JARDEL GALDOS KENNE" holding the personal statement.
+      const cv = [
+        'Jardel Galdos Kenne', 'Backend Developer',
+        'JARDEL GALDOS KENNE', 'Ich studiere derzeit Informatik in Gelsenkirchen.',
+        'KONTAKT', 'E-Mail: someone@example.com',
+      ].join('\n');
+      const found = cvSchema.detectSections(cv).map(s => s.heading);
+      assertEqual(found.length, 1, 'only the real heading');
+      assertEqual(found[0], 'KONTAKT', 'and it is KONTAKT');
+    });
+
+    test('a short capitalised skill is not a section', () => {
+      // "SAP" sat in a capitalised skill list and became a section that swallowed
+      // the line beneath it.
+      assert(!cvSchema.looksLikeHeading('SAP'), 'three letters');
+      assert(!cvSchema.looksLikeHeading('SQL'), 'nor three more');
+      assert(cvSchema.looksLikeHeading('PROJEKTE'), 'a real one still passes');
+      assert(cvSchema.looksLikeHeading('FÄHIGKEITEN'), 'umlauts included');
+    });
+
+    test('a skill list keeps its acronyms', () => {
+      const cv = ['FÄHIGKEITEN', 'HTML, CSS, Django', 'SAP', 'Jira', 'KONTAKT', 'x@y.de'].join('\n');
+      const s = cvSchema.detectSections(cv).find(x => x.heading === 'FÄHIGKEITEN');
+      assert(/SAP/.test(s.body) && /Jira/.test(s.body), 'SAP and Jira stay in the skills block');
+    });
+
     test('a sentence is not a heading', () => {
       assert(!cvSchema.looksLikeHeading('Entwicklung von Webanwendungen mit HTML, SCSS und PHP.'),
         'length and the full stop rule it out');

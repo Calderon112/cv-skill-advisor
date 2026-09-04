@@ -4066,6 +4066,9 @@ function renderThemePicker() {
     return '<button type="button" class="theme-card' + (t.id === current ? ' selected' : '') + '"'
       + ' data-theme="' + esc(t.id) + '" aria-pressed="' + (t.id === current) + '">'
       + '<span class="theme-thumb">' + CvThemes.preview(t) + '</span>'
+      // The same drawing at a size worth looking at, revealed on hover. Generated
+      // from the same theme object, so the small and the large one cannot disagree.
+      + '<span class="theme-zoom" aria-hidden="true">' + CvThemes.preview(t, 264, 372) + '</span>'
       + '<span class="theme-name">' + esc(t.name) + '</span>'
       + '<span class="theme-note">' + esc(t.note) + '</span>'
       + '</button>';

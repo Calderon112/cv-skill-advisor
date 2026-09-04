@@ -43,6 +43,11 @@ const KNOWN = [
   'AUSBILDUNG', 'EDUCATION', 'STUDIUM', 'WEITERBILDUNG', 'CERTIFICATIONS', 'ZERTIFIKATE',
   'SPRACHEN', 'LANGUAGES', 'SOFT SKILLS', 'INTERESSEN', 'INTERESTS', 'HOBBIES',
   'KONTAKT', 'CONTACT', 'PROFIL', 'PROFILE', 'SUMMARY',
+  // Headings real German CVs use that the list above missed. This matters more
+  // than it looks: the position rule below skips everything above the first KNOWN
+  // heading, so a document whose first section is not on this list loses it.
+  'FÄHIGKEITEN', 'FAEHIGKEITEN', 'KENNTNISSE', 'HOBBYS UND INTERESSEN', 'HOBBYS',
+  'PRAKTIKA', 'BERUFSPRAXIS', 'PERSÖNLICHE DATEN', 'ÜBER MICH', 'ZUSAMMENFASSUNG',
 ];
 
 function looksLikeHeading(line) {
@@ -51,6 +56,13 @@ function looksLikeHeading(line) {
   if (/[.!?;]$/.test(t)) return false;                       // a sentence, not a label
   const bare = t.replace(/[:•▸]/g, '').trim();
   if (KNOWN.includes(bare.toUpperCase())) return true;
+
+  // Beyond the names this project knows, capitals alone are not enough. A real CV
+  // produced a section called "SAP" — three letters from a capitalised skill list,
+  // which then swallowed the line beneath it as its content. A heading a document
+  // actually uses is a word, not an abbreviation.
+  if (bare.length < 6) return false;
+
   // All caps, at least one letter, no digits: "TECHNISCHE FÄHIGKEITEN".
   return /^[A-ZÄÖÜß][A-ZÄÖÜß &/-]*$/.test(bare) && /[A-ZÄÖÜß]{3}/.test(bare);
 }
@@ -66,7 +78,18 @@ function detectSections(cvText) {
   const lines = String(cvText || '').split(/\r?\n/);
   const sections = [];
   let current = null;
-  lines.forEach((raw) => {
+
+  // A CV opens with the candidate's name, and a name set in capitals passes every
+  // shape test a heading passes — one real CV produced a section called
+  // "JARDEL GALDOS KENNE" holding the personal statement. Position settles it:
+  // nothing above the first heading the document is known to use is itself a
+  // heading. That opening block is the header, and it belongs to the profile
+  // fields, not to a section of its own.
+  const firstKnown = lines.findIndex((l) => KNOWN.includes(
+    String(l).trim().replace(/[:•▸]/g, '').trim().toUpperCase()));
+
+  lines.forEach((raw, i) => {
+    if (firstKnown !== -1 && i < firstKnown) return;
     if (looksLikeHeading(raw)) {
       current = { heading: raw.trim().replace(/[:]+$/, ''), body: '' };
       sections.push(current);
