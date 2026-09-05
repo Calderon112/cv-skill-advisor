@@ -1535,6 +1535,13 @@ async function searchJobs() {
     if (keyword)  url.searchParams.set('keyword',  keyword);
     if (location) url.searchParams.set('location', location);
     url.searchParams.set('pages', String(SCRAPE_PAGE_DEPTH));
+    // Who is hiring, as opposed to who is mentioned. A keyword is matched against
+    // the whole posting, so "Siemens" returns the agency adverts that name Siemens
+    // alongside Siemens itself — 500 rows for 68 real ones.
+    const empMode = $('employer-mode')?.value || 'all';
+    const empName = ($('employer-name')?.value || '').trim();
+    if (empMode !== 'all') url.searchParams.set('employerMode', empMode);
+    if (empName) url.searchParams.set('employer', empName);
 
     const r    = await fetch(url, { headers: authHeaders() });
     if (!r.ok) throw new Error(`Server error ${r.status}`);
@@ -1836,7 +1843,9 @@ async function scrapeAllPlatforms() {
     const r = await fetch(`${baseUrl}/api/scrape-all`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ region, sector, distance, location, keyword, pages, employment })
+      body: JSON.stringify({ region, sector, distance, location, keyword, pages, employment,
+        employerMode: $('employer-mode')?.value || 'all',
+        employer: ($('employer-name')?.value || '').trim() })
     });
     const data = await r.json();
 
