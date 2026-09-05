@@ -106,9 +106,29 @@ function detectSections(cvText) {
 
 const KINDS = new Set(['entries', 'rows', 'list', 'text']);
 
-/** Case- and whitespace-insensitive containment, for the verbatim check. */
+/**
+ * The form a value is compared in for the verbatim check.
+ *
+ * Punctuation is dropped as well as case and spacing. The guard exists to catch
+ * invented content, and it was catching typography instead: a CV reading
+ * "GUIProgrammierung(Javafx, Swing , Scenebuilder)" came back from the model as
+ * "GUI-Programmierung (Javafx, Swing, Scenebuilder)" — the same words, a hyphen
+ * added and the spacing tidied — and the whole entry was dropped. Two skills
+ * vanished from a generated CV that way, silently.
+ *
+ * Comparing the word sequence keeps the check where it belongs: different words
+ * still fail, and they are what an invention is made of.
+ */
 function norm(s) {
-  return String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  return String(s || '')
+    .toLowerCase()
+    // Spaces go too, not only punctuation. A CV writing "GUIProgrammierung" as one
+    // word came back hyphenated, which splits one token into two and fails a
+    // word-sequence check just as surely as a different word would. Comparing the
+    // letters alone still fails on different letters, and that is what an invention
+    // is made of.
+    .replace(/[^\p{L}\p{N}]+/gu, '')
+    .trim();
 }
 
 /**
