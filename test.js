@@ -1258,6 +1258,51 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
     });
   }
 
+  section('Employer recruiting platforms');
+
+  {
+    const ats = require('./server/ats.js');
+
+    test('four connectors, one per documented platform', () => {
+      ['greenhouse', 'lever', 'smartrecruiters', 'personio'].forEach((k) =>
+        assert(typeof ats.CONNECTORS[k] === 'function', k + ' connector'));
+    });
+
+    test('the registry can be extended without a deployment', () => {
+      const extra = JSON.stringify([{ company: 'Beispiel AG', platform: 'greenhouse', id: 'beispiel' }]);
+      const list = ats.registry({ ATS_REGISTRY: extra });
+      assert(list.some(e => e.company === 'Beispiel AG'), 'the added employer is there');
+      assert(list.length > 1, 'and the built-in ones remain');
+    });
+
+    test('a malformed registry does not take the built-in one down with it', () => {
+      assert(ats.registry({ ATS_REGISTRY: 'not json at all' }).length >= 2, 'built-ins survive');
+      assert(ats.registry({ ATS_REGISTRY: '[{"company":"X"}]' }).length >= 2,
+        'an entry with no platform or id is skipped, not fatal');
+    });
+
+    test('an unknown platform is refused rather than called', () => {
+      const list = ats.registry({ ATS_REGISTRY: '[{"company":"X","platform":"myspace","id":"x"}]' });
+      assert(!list.some(e => e.platform === 'myspace'), 'no connector, no entry');
+    });
+
+    await atest('an employer nobody configured returns nothing, quietly', async () => {
+      const out = await ats.fetchAtsJobs({ keyword: 'security', employer: 'kein-solcher-arbeitgeber' });
+      assertEqual(out.length, 0, 'no rows');
+    });
+
+    test('every shipped identifier is one that was checked', () => {
+      // SmartRecruiters answers 200 with an empty list for a company that does not
+      // exist, so a guessed identifier looks like an employer with no vacancies.
+      // Only verified ones belong in the file.
+      assert(ats.ATS_EMPLOYERS.length > 0, 'the list is not empty');
+      ats.ATS_EMPLOYERS.forEach((e) => {
+        assert(e.company && e.platform && e.id, 'complete entry: ' + JSON.stringify(e));
+        assert(ats.CONNECTORS[e.platform], e.platform + ' has a connector');
+      });
+    });
+  }
+
   section('Employer filter — who is hiring, not who is mentioned');
 
   {
