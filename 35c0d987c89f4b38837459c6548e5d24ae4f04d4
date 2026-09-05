@@ -1,0 +1,27 @@
+Also contains, unrelated to the subject line: four more CV templates and the
+generator axes they needed.
+
+  Elegant   Times, centred head, photo above the name, wide margins.
+  Akzent    a coloured band across the top, photo set on it, quiet columns under.
+  Schlicht  no colour and no rules; the headings are carried by tracking alone.
+  Chronik   a hairline down the column with a dot at each station.
+
+Files: cv-themes.js (the four themes and the preview that draws them), app.js
+(font whitelist, band header, centred header, plain headings with tracking, the
+timeline, and the Einspaltig/Zweispaltig badge in the picker), test.js (five
+tests under "CV templates").
+
+Chronik does NOT set the dates in a column of their own — the shape 14a55f7 had
+to defend against. A text extractor reads columns one after another, so dates set
+beside their entries arrive detached and get paired by order, stamping entries
+with dates the candidate never wrote. The timeline here is a rule and a dot and
+carries no text at all.
+
+One bug fixed with it: write() and bulletList() decided which column a line
+belonged to by asking whether x equalled MAIN_X. That held while every
+main-column line began exactly at the column; an entry indented past a timeline
+begins after it, and would have advanced the rail's cursor instead.
+
+This landed here because two sessions were committing to the branch at once. The
+split-out version of this work is preserved on the local branch
+split-cv-from-jobs (75e4673), whose tree is identical to ad7347d.
