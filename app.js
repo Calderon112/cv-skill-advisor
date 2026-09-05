@@ -4327,9 +4327,15 @@ function renderThemePicker() {
   const current = (state.profile && state.profile.themeId) || CvThemes.DEFAULT_ID;
 
   host.innerHTML = CvThemes.list().map(function (t) {
+    // Read off the theme rather than written per card: the number of columns is the
+    // one thing here with a consequence — a portal that reads the PDF machine-side
+    // interleaves two columns — and a label maintained by hand would drift from the
+    // layout it describes the first time a theme changed shape.
+    const columns = t.rail === 'none' ? 'Einspaltig' : 'Zweispaltig';
     return '<button type="button" class="theme-card' + (t.id === current ? ' selected' : '') + '"'
       + ' data-theme="' + esc(t.id) + '" aria-pressed="' + (t.id === current) + '">'
       + '<span class="theme-thumb">' + CvThemes.preview(t) + '</span>'
+      + '<span class="theme-cols">' + columns + '</span>'
       // The same drawing at a size worth looking at, revealed on hover. Generated
       // from the same theme object, so the small and the large one cannot disagree.
       + '<span class="theme-zoom" aria-hidden="true">' + CvThemes.preview(t, 264, 372) + '</span>'
@@ -4401,7 +4407,47 @@ function buildProfilePdfDoc(profile, overrides) {
   const RAIL_MUTED = T.railMuted || GREY;
   const WHITE = [255, 255, 255];
 
+  // jsPDF carries Helvetica, Times and Courier without an embedded font file, so a
+  // serif template costs nothing to ship. Any other family would mean shipping the
+  // face itself, and a name jsPDF does not know falls back silently — which is why
+  // this is a whitelist rather than a pass-through of whatever the theme names.
+  const FONT = (T.font === 'times' || T.font === 'courier') ? T.font : 'helvetica';
+
+  // A coloured band across the top of the first page, carrying the name and photo.
+  // The band replaces the rule under the header rather than adding to it: a band and
+  // a rule are two answers to the same question and printing both reads as an
+  // accident.
+  const BAND       = T.header === 'band';
+  const BAND_FILL  = T.bandFill  || TEAL;
+  const BAND_TEXT  = T.bandText  || WHITE;
+  const BAND_MUTED = T.bandMuted || WHITE;
+  const CENTRED    = T.headerAlign === 'center';
+
+  // A timeline down the column: a hairline with a dot at each station.
+  //
+  // The dates stay inside the entry, in the running text. They are deliberately NOT
+  // set in a column of their own, which is the shape this project's own parser could
+  // not read back: a PDF text extractor reads columns one after another, so dates set
+  // beside their entries arrive as a detached run, and pairing them by order stamps
+  // entries with dates the candidate never wrote. The line drawn here carries no text
+  // at all — it is a rule and a dot, and nothing about it can be mis-extracted.
+  //
+  // One column only. Where there is a rail, the entries are already set apart from
+  // the facts beside them, and a second device marking the same boundary is noise.
+  const TIMELINE = T.entryMark === 'timeline' && !HAS_RAIL;
+  const TL_INDENT = 15;
+  // Where an entry's text starts. The timeline occupies the first points of the
+  // column, so entries are indented past it; headings and plain facts are not.
+  const MAIN_E_X = TIMELINE ? MAIN_X + TL_INDENT : MAIN_X;
+  const MAIN_E_W = TIMELINE ? MAIN_W - TL_INDENT : MAIN_W;
+  const SIDE_E_X = TIMELINE ? SIDE_X + TL_INDENT : SIDE_X;
+  const SIDE_E_W = TIMELINE ? SIDE_W_R - TL_INDENT : SIDE_W_R;
+
   let yMain = 0, ySide = 0;
+  // Counted here rather than read back from jsPDF: the timeline needs to know
+  // whether an entry crossed onto a new sheet, and a line drawn from a cursor on the
+  // previous page would run down the whole of this one.
+  let pageNo = 1;
 
   // The rail's grey field, repainted on every page — including pages where it
   // holds nothing, because a column that vanishes halfway through a document
@@ -4425,26 +4471,60 @@ function buildProfilePdfDoc(profile, overrides) {
   }
 
   function setFont(size, style, color) {
-    doc.setFont('helvetica', style || 'normal');
+    doc.setFont(FONT, style || 'normal');
     doc.setFontSize(size);
     doc.setTextColor(color[0], color[1], color[2]);
   }
 
   function nextPage() {
     doc.addPage();
+    pageNo += 1;
     paintRail(M);
     yMain = M;
     ySide = M;
   }
 
+  /**
+   * Draw one entry as a station on the timeline.
+   *
+   * The dot goes down before the entry is rendered, so it lands on the page the
+   * entry starts on. The connecting hairline goes down after, because its length is
+   * only known once the entry has been written — and it is skipped entirely when the
+   * entry broke across a page, where a line from the old cursor to the new one would
+   * run the full height of the wrong sheet.
+   */
+  function station(render, tail) {
+    if (!TIMELINE) return render();
+    const top = yMain;
+    const startedOn = pageNo;
+    const cx = MAIN_X + 4.5;
+    doc.setFillColor(TEAL[0], TEAL[1], TEAL[2]);
+    doc.circle(cx, top - 3, 2.6, 'F');
+    render();
+    if (pageNo !== startedOn) return;
+    // The cursor already carries the gap the entry leaves behind it, and a line run
+    // all the way down to it would reach into the next station's air.
+    const bottom = yMain - (tail == null ? 14 : tail);
+    if (bottom <= top + 2) return;
+    doc.setDrawColor(TEAL[0], TEAL[1], TEAL[2]);
+    doc.setLineWidth(0.7);
+    doc.line(cx, top + 1, cx, bottom);
+  }
+
   // Wrapped text inside one column. Each column paginates on its own cursor;
   // when either runs out of room both restart at the top of a new page, which
   // keeps the two from drifting onto different sheets.
+  // Which cursor a given x belongs to. Asking whether x equals MAIN_X was enough
+  // while every main-column line started exactly at the column; an indented entry —
+  // a timeline station — starts past it, and would have advanced the rail's cursor
+  // instead. The rail is the narrower question and the one worth asking.
+  function inMain(x) { return !HAS_RAIL || x !== SIDE_X; }
+
   function write(str, x, w, size, style, color, lead) {
     setFont(size, style, color);
     const lines = doc.splitTextToSize(String(str), w);
     const step = lead || size + 3;
-    const isMain = (x === MAIN_X);
+    const isMain = inMain(x);
     lines.forEach(function (line) {
       let y = isMain ? yMain : ySide;
       if (y + step > PAGE_H - M) { nextPage(); y = M; }
@@ -4454,15 +4534,36 @@ function buildProfilePdfDoc(profile, overrides) {
     });
   }
 
+  // Letter-spacing, for the templates whose headings are carried by tracking rather
+  // than by a rule or a block of colour. Set around one call and cleared straight
+  // after: jsPDF holds it on the document, so a heading that left it set would space
+  // out every body line that followed.
+  function tracked(fn) {
+    const track = T.headingTrack || 0;
+    if (track) doc.setCharSpace(track);
+    fn();
+    if (track) doc.setCharSpace(0);
+  }
+
   // Main-column heading: white on a filled teal bar.
   function mainSection(label) {
     yMain += 10;
     if (yMain + 30 > PAGE_H - M) nextPage();
+    // No rule and no bar: the heading is set apart by capitals, letter-spacing and
+    // the space around it. On a document with no colour, a rule under every heading
+    // is the only mark on the page and starts to read as the design.
+    if (T.mainHeading === 'plain') {
+      yMain += 6;
+      setFont(9, 'bold', TEAL);
+      tracked(function () { doc.text(String(label).toUpperCase(), MAIN_X, yMain + 8); });
+      yMain += 22;
+      return;
+    }
     if (T.mainHeading === 'bar') {
       doc.setFillColor(TEAL[0], TEAL[1], TEAL[2]);
       doc.rect(MAIN_X, yMain - 2, MAIN_W, 17, 'F');
       setFont(9.5, 'bold', WHITE);
-      doc.text(String(label).toUpperCase(), MAIN_X + 8, yMain + 10);
+      tracked(function () { doc.text(String(label).toUpperCase(), MAIN_X + 8, yMain + 10); });
       yMain += 28;
       return;
     }
@@ -4470,7 +4571,7 @@ function buildProfilePdfDoc(profile, overrides) {
     // PDF text extractor, and an applicant tracking system can lose the heading
     // along with it — which is the whole point of the single-column theme.
     setFont(9.5, 'bold', TEAL);
-    doc.text(String(label).toUpperCase(), MAIN_X, yMain + 8);
+    tracked(function () { doc.text(String(label).toUpperCase(), MAIN_X, yMain + 8); });
     yMain += 12;
     doc.setDrawColor(TEAL[0], TEAL[1], TEAL[2]);
     doc.setLineWidth(0.8);
@@ -4488,7 +4589,7 @@ function buildProfilePdfDoc(profile, overrides) {
     ySide += 12;
     if (ySide + 28 > PAGE_H - M) nextPage();
     setFont(9.5, 'bold', T.railBleed ? RAIL_TEXT : TEAL);
-    doc.text(String(label).toUpperCase(), SIDE_X, ySide);
+    tracked(function () { doc.text(String(label).toUpperCase(), SIDE_X, ySide); });
     ySide += 4;
     const rc = T.railBleed ? RAIL_MUTED : TEAL;
     doc.setDrawColor(rc[0], rc[1], rc[2]);
@@ -4500,7 +4601,7 @@ function buildProfilePdfDoc(profile, overrides) {
   // The dot is drawn separately and the body indented past it, so a wrapped
   // second line aligns under the first word instead of under the bullet.
   function bulletList(items, x, w) {
-    const isMain = (x === MAIN_X);
+    const isMain = inMain(x);
     (items || []).forEach(function (raw) {
       const line = String(raw).trim();
       if (!line) return;
@@ -4547,32 +4648,85 @@ function buildProfilePdfDoc(profile, overrides) {
     ySide = M + SIDE_W_R + 18;
   }
 
-  if (p.photo && T.photo === 'top-right') {
-    try { doc.addImage(p.photo, 'JPEG', PAGE_W - M - PHOTO, y, PHOTO, PHOTO); }
-    catch (_) { /* an unreadable photo must not cost the whole document */ }
-  }
-  const showPhoto = !!p.photo && T.photo === 'top-right';
-  // On a bleeding rail the header starts where the main column starts, or the name
-  // would be printed across the coloured band.
-  const headX = T.railBleed ? MAIN_X : M;
-  const headW = (T.railBleed ? MAIN_W : PAGE_W - M * 2) - (showPhoto ? PHOTO + 20 : 0);
+  // A band, or the plain header. The band replaces the rule under the name rather
+  // than adding to it — a coloured field and a rule are two answers to the same
+  // question, and printing both reads as an accident.
+  let headerBottom;
 
-  setFont(23, 'bold', DARK);
-  doc.splitTextToSize(name, headW).forEach(function (l) { doc.text(l, headX, y + 20); y += 26; });
-  if (p.title) {
-    setFont(12.5, 'bold', TEAL);
-    doc.splitTextToSize(p.title, headW).forEach(function (l) { doc.text(l, headX, y + 12); y += 16; });
-  }
-  if (p.summary) {
-    setFont(9.5, 'normal', GREY);
-    doc.splitTextToSize(p.summary, headW).slice(0, 3).forEach(function (l) { doc.text(l, headX, y + 10); y += 13; });
-  }
-  y = Math.max(y + 12, M + (showPhoto ? PHOTO + 14 : 0));
-  doc.setDrawColor(TEAL[0], TEAL[1], TEAL[2]);
-  doc.setLineWidth(2);
-  doc.line(headX, y, headX + headW + (showPhoto ? PHOTO + 20 : 0), y);
+  if (BAND) {
+    // The band's height is measured from what it has to hold rather than fixed. A
+    // two-line name or a three-line summary would otherwise be printed off the
+    // colour and onto the white below it.
+    const BAND_PHOTO = 84;
+    const inBand = !!p.photo && T.photo !== 'none';
+    const bw = PAGE_W - M * 2 - (inBand ? BAND_PHOTO + 22 : 0);
 
-  const headerBottom = y + 22;
+    doc.setFont(FONT, 'bold'); doc.setFontSize(23);
+    const nameLines = doc.splitTextToSize(name, bw);
+    doc.setFontSize(12.5);
+    const titleLines = p.title ? doc.splitTextToSize(p.title, bw) : [];
+    doc.setFont(FONT, 'normal'); doc.setFontSize(9.5);
+    const sumLines = p.summary ? doc.splitTextToSize(p.summary, bw).slice(0, 3) : [];
+
+    const textH = nameLines.length * 26 + titleLines.length * 16 + sumLines.length * 13;
+    const bandH = Math.max(M + textH + 14, inBand ? BAND_PHOTO + 34 : 0);
+
+    doc.setFillColor(BAND_FILL[0], BAND_FILL[1], BAND_FILL[2]);
+    doc.rect(0, 0, PAGE_W, bandH, 'F');
+
+    if (inBand) {
+      try { doc.addImage(p.photo, 'JPEG', PAGE_W - M - BAND_PHOTO, (bandH - BAND_PHOTO) / 2, BAND_PHOTO, BAND_PHOTO); }
+      catch (_) { /* an unreadable photo must not cost the whole document */ }
+    }
+
+    let by = M - 6;
+    setFont(23, 'bold', BAND_TEXT);
+    nameLines.forEach(function (l) { doc.text(l, M, by + 20); by += 26; });
+    setFont(12.5, 'bold', BAND_MUTED);
+    titleLines.forEach(function (l) { doc.text(l, M, by + 12); by += 16; });
+    setFont(9.5, 'normal', BAND_MUTED);
+    sumLines.forEach(function (l) { doc.text(l, M, by + 10); by += 13; });
+
+    headerBottom = bandH + 26;
+  } else {
+    if (p.photo && T.photo === 'top-right') {
+      try { doc.addImage(p.photo, 'JPEG', PAGE_W - M - PHOTO, y, PHOTO, PHOTO); }
+      catch (_) { /* an unreadable photo must not cost the whole document */ }
+    }
+    // A centred header takes the photo above the name, not beside it: a centred
+    // block with the picture pushed into one corner is neither centred nor ranged.
+    if (p.photo && T.photo === 'top-center') {
+      try { doc.addImage(p.photo, 'JPEG', (PAGE_W - PHOTO) / 2, y, PHOTO, PHOTO); }
+      catch (_) { /* an unreadable photo must not cost the whole document */ }
+      y += PHOTO + 14;
+    }
+    const showPhoto = !!p.photo && T.photo === 'top-right';
+    // On a bleeding rail the header starts where the main column starts, or the name
+    // would be printed across the coloured band.
+    const headX = T.railBleed ? MAIN_X : M;
+    const headW = (T.railBleed ? MAIN_W : PAGE_W - M * 2) - (showPhoto ? PHOTO + 20 : 0);
+    // Centred text is positioned from its middle and jsPDF told to centre it there.
+    const textX = CENTRED ? headX + headW / 2 : headX;
+    const opts = CENTRED ? { align: 'center' } : undefined;
+
+    setFont(23, 'bold', DARK);
+    doc.splitTextToSize(name, headW).forEach(function (l) { doc.text(l, textX, y + 20, opts); y += 26; });
+    if (p.title) {
+      setFont(12.5, 'bold', TEAL);
+      doc.splitTextToSize(p.title, headW).forEach(function (l) { doc.text(l, textX, y + 12, opts); y += 16; });
+    }
+    if (p.summary) {
+      setFont(9.5, 'normal', GREY);
+      doc.splitTextToSize(p.summary, headW).slice(0, 3).forEach(function (l) { doc.text(l, textX, y + 10, opts); y += 13; });
+    }
+    y = Math.max(y + 12, M + (showPhoto ? PHOTO + 14 : 0));
+    doc.setDrawColor(TEAL[0], TEAL[1], TEAL[2]);
+    // A two-point bar under a centred serif header is the loudest thing on the
+    // sheet, and shouts down the restraint the rest of the template is for.
+    doc.setLineWidth(CENTRED ? 0.8 : 2);
+    doc.line(headX, y, headX + headW + (showPhoto ? PHOTO + 20 : 0), y);
+    headerBottom = y + 22;
+  }
   if (!T.railBleed) paintRail(headerBottom);
   yMain = headerBottom;
   // A rail carrying the photo has already advanced its own cursor past it.
@@ -4605,12 +4759,14 @@ function buildProfilePdfDoc(profile, overrides) {
       if (p.education && p.education.length) {
         railSection('Ausbildung');
         p.education.forEach(function (x) {
-          const dates = [x.start, x.end].filter(Boolean).join(' – ');
-          if (dates)    write(dates, SIDE_X, SIDE_W_R, 8, 'normal', GREY, 10);
-          if (x.degree) write(x.degree, SIDE_X, SIDE_W_R, 9, 'bold', DARK, 11);
-          const sub = [x.org, x.grade ? 'Note: ' + x.grade : ''].filter(Boolean).join(' | ');
-          if (sub)      write(sub, SIDE_X, SIDE_W_R, 8.5, 'normal', GREY, 11);
-          sideAdvance(8);
+          station(function () {
+            const dates = [x.start, x.end].filter(Boolean).join(' – ');
+            if (dates)    write(dates, SIDE_E_X, SIDE_E_W, 8, 'normal', GREY, 10);
+            if (x.degree) write(x.degree, SIDE_E_X, SIDE_E_W, 9, 'bold', DARK, 11);
+            const sub = [x.org, x.grade ? 'Note: ' + x.grade : ''].filter(Boolean).join(' | ');
+            if (sub)      write(sub, SIDE_E_X, SIDE_E_W, 8.5, 'normal', GREY, 11);
+            sideAdvance(8);
+          }, 8);
         });
       }
     },
@@ -4647,15 +4803,17 @@ function buildProfilePdfDoc(profile, overrides) {
       if (p.experience && p.experience.length) {
         mainSection('Berufserfahrung');
         p.experience.forEach(function (x) {
-          const dates = [x.start, x.end].filter(Boolean).join(' – ');
-          if (dates)  write(dates, MAIN_X, MAIN_W, 8, 'normal', GREY, 11);
-          if (x.role) write(x.role, MAIN_X, MAIN_W, 10.5, 'bold', TEAL, 13);
-          const org = [x.org, x.location].filter(Boolean).join(', ');
-          if (org)    write(org, MAIN_X, MAIN_W, 9.5, 'bold', DARK, 12);
-          if (x.desc) bulletList(splitLines(x.desc), MAIN_X, MAIN_W);
-          // Entries need more air between them than bullets do inside one, or the
-          // reader cannot see where a job ends and the next begins.
-          yMain += 16;
+          station(function () {
+            const dates = [x.start, x.end].filter(Boolean).join(' – ');
+            if (dates)  write(dates, MAIN_E_X, MAIN_E_W, 8, 'normal', GREY, 11);
+            if (x.role) write(x.role, MAIN_E_X, MAIN_E_W, 10.5, 'bold', TEAL, 13);
+            const org = [x.org, x.location].filter(Boolean).join(', ');
+            if (org)    write(org, MAIN_E_X, MAIN_E_W, 9.5, 'bold', DARK, 12);
+            if (x.desc) bulletList(splitLines(x.desc), MAIN_E_X, MAIN_E_W);
+            // Entries need more air between them than bullets do inside one, or the
+            // reader cannot see where a job ends and the next begins.
+            yMain += 16;
+          });
         });
       }
     
@@ -4703,13 +4861,15 @@ function buildProfilePdfDoc(profile, overrides) {
       if (p.projects && p.projects.length) {
         mainSection('Projekte');
         p.projects.forEach(function (x) {
-          if (x.name) write(x.name, MAIN_X, MAIN_W, 10, 'bold', TEAL, 13);
-          const sub = [x.org, x.year].filter(Boolean).join(', ');
-          if (sub)    write(sub, MAIN_X, MAIN_W, 8, 'normal', GREY, 11);
-          if (x.desc) bulletList(splitLines(x.desc), MAIN_X, MAIN_W);
-          // Entries need more air between them than bullets do inside one, or the
-          // reader cannot see where a job ends and the next begins.
-          yMain += 16;
+          station(function () {
+            if (x.name) write(x.name, MAIN_E_X, MAIN_E_W, 10, 'bold', TEAL, 13);
+            const sub = [x.org, x.year].filter(Boolean).join(', ');
+            if (sub)    write(sub, MAIN_E_X, MAIN_E_W, 8, 'normal', GREY, 11);
+            if (x.desc) bulletList(splitLines(x.desc), MAIN_E_X, MAIN_E_W);
+            // Entries need more air between them than bullets do inside one, or the
+            // reader cannot see where a job ends and the next begins.
+            yMain += 16;
+          });
         });
       }
     },
@@ -4717,10 +4877,12 @@ function buildProfilePdfDoc(profile, overrides) {
       if (p.certifications && p.certifications.length) {
         mainSection('Weiterbildung');
         p.certifications.forEach(function (x) {
-          const head = [x.name, x.year].filter(Boolean).join(' – ');
-          if (head)   write(head, MAIN_X, MAIN_W, 9.5, 'bold', TEAL, 12);
-          if (x.desc) bulletList(splitLines(x.desc), MAIN_X, MAIN_W);
-          yMain += 3;
+          station(function () {
+            const head = [x.name, x.year].filter(Boolean).join(' – ');
+            if (head)   write(head, MAIN_E_X, MAIN_E_W, 9.5, 'bold', TEAL, 12);
+            if (x.desc) bulletList(splitLines(x.desc), MAIN_E_X, MAIN_E_W);
+            yMain += 3;
+          }, 4);
         });
       }
     },
