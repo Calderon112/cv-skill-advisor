@@ -81,8 +81,10 @@ const MAJOR = {
   // ── Prüf- und Zertifizierungsorganisationen ───────────────────────────────
   // Four separate companies sharing a name, which is why fragments and not names:
   // "TÜV" alone is 1,906 open positions across all of them, TÜV SÜD 572 on its own.
-  tuev:               ['tüv süd', 'tüv rheinland', 'tüv nord', 'tüv thüringen',
-                       'tuev sued', 'tuev rheinland', 'tuev nord', 'tüv saarland', 'tüv hessen'],
+  // The bare name first, because the group has more members than the four regional
+  // ones: "TÜV Informationstechnik GmbH" is the IT arm and matched none of the
+  // suffixed fragments. A trailing space keeps it from firing inside another word.
+  tuev:               ['tüv ', 'tuev ', 'tüv-', 'tuv '],
   dekra:              ['dekra'],
 
   // ── IT-Dienstleister und Beratung ─────────────────────────────────────────
@@ -138,6 +140,11 @@ const IT_EMPLOYERS = new Set([
   'soprasteria', 'datev', 'finanzinformatik', 'gisa', 'operational',
   'lufthansaindustry', 'secunet', 'genua', 'rohdeschwarz', 'gundd', 'utimaco', 'bsi',
   'bwi', 'zalando', 'deloitte', 'kpmg', 'ey', 'pwc',
+  // A judgement, and worth stating: the TÜV group is testing and certification at
+  // large, not IT. But TÜV Informationstechnik is one of the notable IT-security
+  // employers in Germany, and an applicant asking for IT employers is asking for it.
+  // DEKRA is deliberately not here — vehicle inspection is not the same case.
+  'tuev',
 ]);
 
 const AGENCY_TERMS = [
