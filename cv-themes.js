@@ -19,6 +19,20 @@
  * Section keys used by `layout`, each matching a renderer in the generator:
  *   kontakt · ausbildung · sprachen · softskills · interessen
  *   berufserfahrung · skills · projekte · weiterbildung
+ *
+ * The axes a theme can move on, beyond `layout` and colour:
+ *   rail        none | left | right, with railWidth, railFill, railBleed
+ *   header      band → a coloured field across the top (bandFill/bandText/bandMuted)
+ *   headerAlign center → name, title and photo centred
+ *   font        helvetica | times | courier — the three jsPDF carries without an
+ *               embedded font file; anything else falls back silently
+ *   mainHeading bar | rule | plain — plain needs headingTrack, or a bold capital
+ *               line at 9pt is indistinguishable from the body
+ *   entryMark   timeline → a hairline and a dot beside each entry. Single column
+ *               only, and the dates stay inside the entry: dates set in a column of
+ *               their own are the shape this project's own parser could not read
+ *               back, and it is not about to print one.
+ *   photo       top-right | top-center | rail | band | none
  */
 (function (root, factory) {
   const api = factory();
