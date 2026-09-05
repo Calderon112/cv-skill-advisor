@@ -77,11 +77,69 @@ const MAJOR = {
   lidl:               ['lidl', 'schwarz it', 'schwarz digits'],
   otto:               ['otto group', 'otto gmbh'],
   bwi:                ['bwi gmbh'],
+
+  // ── Prüf- und Zertifizierungsorganisationen ───────────────────────────────
+  // Four separate companies sharing a name, which is why fragments and not names:
+  // "TÜV" alone is 1,906 open positions across all of them, TÜV SÜD 572 on its own.
+  tuev:               ['tüv süd', 'tüv rheinland', 'tüv nord', 'tüv thüringen',
+                       'tuev sued', 'tuev rheinland', 'tuev nord', 'tüv saarland', 'tüv hessen'],
+  dekra:              ['dekra'],
+
+  // ── IT-Dienstleister und Beratung ─────────────────────────────────────────
+  // Employers in their own right, not staffing firms: they hire onto their own
+  // payroll and place their own people. The distinction matters because the agency
+  // filter would otherwise sweep them out with the contractors.
+  bechtle:            ['bechtle'],
+  cancom:             ['cancom'],
+  computacenter:      ['computacenter'],
+  atos:               ['atos ', 'eviden'],
+  capgemini:          ['capgemini'],
+  accenture:          ['accenture'],
+  ibm:                ['ibm deutschland', 'kyndryl'],
+  fujitsu:            ['fujitsu'],
+  nttdata:            ['ntt data'],
+  materna:            ['materna'],
+  adesso:             ['adesso se', 'adesso as a service'],
+  msg:                ['msg systems', 'msg global'],
+  soprasteria:        ['sopra steria'],
+  datev:              ['datev'],
+  finanzinformatik:   ['finanz informatik'],
+  gisa:               ['gisa gmbh'],
+  operational:        ['operational services'],
+  lufthansaindustry:  ['lufthansa industry solutions'],
+
+  // ── IT-Sicherheit im Besonderen ───────────────────────────────────────────
+  secunet:            ['secunet'],
+  genua:              ['genua gmbh'],
+  rohdeschwarz:       ['rohde & schwarz', 'rohde und schwarz'],
+  gundd:              ['giesecke+devrient', 'giesecke & devrient'],
+  utimaco:            ['utimaco'],
+  bsi:                ['bundesamt für sicherheit in der informationstechnik'],
+
+  // ── Wirtschaftsprüfung mit eigener Cyber-Praxis ───────────────────────────
+  deloitte:           ['deloitte'],
+  kpmg:               ['kpmg'],
+  ey:                 ['ernst & young', 'ey gmbh'],
+  pwc:                ['pricewaterhousecoopers', 'pwc '],
 };
 
 // Words that identify a staffing or contracting firm rather than the employer. Both
 // halves matter: "personaldienstleistung" catches the ones that say so, and the named
 // firms catch the ones that do not.
+
+// The employers above whose business is IT, so an applicant can ask for those
+// rather than for every large company in the country. A Konzern hires IT people
+// too — Siemens has more open IT positions than most consultancies — but "show me
+// the IT employers" is a different question from "show me the large employers",
+// and answering the second when the first was asked buries the answer.
+const IT_EMPLOYERS = new Set([
+  'sap', 'telekom', 'infineon', 'bechtle', 'cancom', 'computacenter', 'atos',
+  'capgemini', 'accenture', 'ibm', 'fujitsu', 'nttdata', 'materna', 'adesso', 'msg',
+  'soprasteria', 'datev', 'finanzinformatik', 'gisa', 'operational',
+  'lufthansaindustry', 'secunet', 'genua', 'rohdeschwarz', 'gundd', 'utimaco', 'bsi',
+  'bwi', 'zalando', 'deloitte', 'kpmg', 'ey', 'pwc',
+]);
+
 const AGENCY_TERMS = [
   'personaldienstleist', 'zeitarbeit', 'arbeitnehmerüberlassung', 'arbeitnehmerueberlassung',
   'personalservice', 'personalvermittlung', 'personalberatung', 'staffing', 'recruiting gmbh',
@@ -133,6 +191,10 @@ function filterByEmployer(jobs, mode, name) {
     // That is the whole point: an agency advert saying "unser Kunde Siemens" ranks
     // like Siemens itself when the keyword is matched against the whole document.
     if (wanted && !lower(company).includes(wanted)) return false;
+    if (mode === 'it') {
+      const key = majorEmployer(company);
+      return !!key && IT_EMPLOYERS.has(key);
+    }
     if (mode === 'major') return !!majorEmployer(company);
     if (mode === 'direct') return !isAgency(company);
     return true;
@@ -149,4 +211,4 @@ function employerBreakdown(jobs) {
   return out;
 }
 
-module.exports = { MAJOR, AGENCY_TERMS, majorEmployer, isAgency, filterByEmployer, employerBreakdown };
+module.exports = { MAJOR, IT_EMPLOYERS, AGENCY_TERMS, majorEmployer, isAgency, filterByEmployer, employerBreakdown };

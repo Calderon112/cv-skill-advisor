@@ -1301,6 +1301,30 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
       assert(!employers.isAgency('Siemens AG'), 'not the employer itself');
     });
 
+    test('the IT mode keeps IT employers and drops the rest', () => {
+      // "Show me the IT employers" is a different question from "show me the large
+      // employers". A Konzern hires IT people too, but answering the second when the
+      // first was asked buries the answer.
+      const mixed = [
+        { company: 'TÜV Informationstechnik GmbH' },
+        { company: 'secunet Security Networks AG' },
+        { company: 'Bechtle AG' },
+        { company: 'Volkswagen AG' },
+        { company: 'Beiersdorf AG' },
+      ];
+      const it = employers.filterByEmployer(mixed, 'it').map(j => j.company);
+      assertEqual(it.length, 3, 'got: ' + it.join(', '));
+      assert(!it.some(c => /Volkswagen|Beiersdorf/.test(c)), 'industrial groups excluded');
+      assertEqual(employers.filterByEmployer(mixed, 'major').length, 5, 'all five are large employers');
+    });
+
+    test('the certification bodies are four companies, not one', () => {
+      // "TÜV" is 1,906 open positions across TÜV SÜD, Rheinland, NORD and Thüringen,
+      // which post separately. A single name would have found one of them.
+      ['TÜV SÜD AG', 'TÜV Rheinland Group', 'TÜV NORD Systems', 'TÜV Informationstechnik GmbH']
+        .forEach(c => assertEqual(employers.majorEmployer(c), 'tuev', c));
+    });
+
     test('the breakdown reports what the set actually contains', () => {
       // So the interface can offer the employers present rather than a list of names
       // that may return nothing.
