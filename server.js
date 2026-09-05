@@ -3983,13 +3983,25 @@ const server = http.createServer(async (req, res) => {
     const employerName = parsedUrl.searchParams.get('employer') || '';
     const location = buildSearchLocation(parsedUrl.searchParams);
     const keyword  = buildSearchKeyword(parsedUrl.searchParams);
+    // A named employer goes into the QUERY as well as the filter, for the same
+    // reason the position type does: filtering a page of 500 results cannot find an
+    // employer who is not in those 500. Asking for "TÜV" and then filtering a search
+    // for "IT" returned nothing, which reads as "TÜV has no IT jobs" and is really
+    // "TÜV was never asked for".
+    //
+    // Composed once and written once. The first version set the prefix and then let
+    // the write-back below overwrite it with the keyword computed before — the same
+    // shape of bug as the position-type hint it sits next to, a later assignment
+    // silently undoing an earlier one.
+    const searchKeyword = (employerName ? employerName + ' ' : '') + (keyword || '');
+
     // Written back onto the params, because not every source reads the value
     // computed above. buildBundesQueryParams() takes searchParams and pulls
     // `keyword` out of it itself, so the position-type hint never reached the query
     // on the default platform: the source held 13 Werkstudent postings for this
     // search and the endpoint returned none, having asked for something else and
     // then filtered the answer to it.
-    if (keyword) parsedUrl.searchParams.set('keyword', keyword);
+    if (searchKeyword.trim()) parsedUrl.searchParams.set('keyword', searchKeyword.trim());
     const depth    = pageDepth(parsedUrl.searchParams);
 
     let jobs = [];
