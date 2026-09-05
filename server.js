@@ -62,6 +62,7 @@ const salaryBand = require('./server/salary-band.js');
 const scoreExplainer = require('./server/score-explainer.js');
 const cvSchema = require('./server/cv-schema.js');
 const employers = require('./server/employers.js');
+const ats = require('./server/ats.js');
 
 // Per-role salary bands. Measured from live ads, so worth re-reading occasionally,
 // but not on every page view — the same role gives the same answer to everyone.
@@ -2088,6 +2089,12 @@ function buildAllPlatformSources({ searchParams, keyword, location, region, dist
     { key: 'Jobicy',        run: () => fetchJobicyJobs(keyword, depth),          pick: r => r || [] },
     { key: 'Careerjet',     run: () => fetchCareerjetJobs(keyword, loc, depth),   pick: r => r || [] },
     { key: 'Xing',          run: () => fetchXingJobs(keyword, loc),              pick: r => r || [] },
+    // The employers' own recruiting platforms. Half of a Konzern's openings never
+    // reach an aggregator — TÜV NORD advertises 127 positions and the Bundesagentur
+    // carries 63 — and this is where the other half is. Costs nothing when the
+    // registry is empty.
+    { key: 'Employer sites', run: () => ats.fetchAtsJobs({ keyword, employer: searchParams.get && searchParams.get('employer') }),
+      pick: r => r || [] },
   ];
   // Free HTML StepStone scraper when no paid Apify token is configured.
   if (!APIFY_TOKEN) {
