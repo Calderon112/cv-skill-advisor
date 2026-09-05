@@ -3742,3 +3742,14 @@ option   { color: var(--text); background: var(--bg-card); }
 
 #cv-schema-panel .lede { margin-bottom: 18px; }
 #cv-schema-dropped { margin-top: 14px; }
+
+/* A section the fixed form has no concept for — PRAKTISCHE KENNTNISSE, say. It is
+   kept under the candidate's own heading and placed after the known ones, so the
+   order still reads like the form rather than like the source document. */
+#cv-schema-body .pf-section-new { border-left-color: var(--muted, #64748b); }
+#cv-schema-body .pf-new-note {
+  display: block;
+  margin: -4px 0 10px;
+  font-size: 11px;
+  color: var(--text-dim, #94a3b8);
+}
