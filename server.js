@@ -61,6 +61,7 @@ const oidc = require('./server/oidc.js');
 const salaryBand = require('./server/salary-band.js');
 const scoreExplainer = require('./server/score-explainer.js');
 const cvSchema = require('./server/cv-schema.js');
+const employers = require('./server/employers.js');
 
 // Per-role salary bands. Measured from live ads, so worth re-reading occasionally,
 // but not on every page view — the same role gives the same answer to everyone.
@@ -3974,6 +3975,12 @@ const server = http.createServer(async (req, res) => {
     // indication why. Nothing reported it: an ignored query parameter looks exactly
     // like an applied one.
     const employment = parsedUrl.searchParams.get('employment') || 'all';
+    // Who is hiring, as opposed to who is mentioned. A keyword is matched against
+    // the whole posting, so an agency advert reading "unser Kunde Siemens" ranks
+    // exactly like Siemens writing about itself — 500 rows for "Siemens", of which
+    // 68 were Siemens. These two match the company field instead.
+    const employerMode = parsedUrl.searchParams.get('employerMode') || 'all';
+    const employerName = parsedUrl.searchParams.get('employer') || '';
     const location = buildSearchLocation(parsedUrl.searchParams);
     const keyword  = buildSearchKeyword(parsedUrl.searchParams);
     // Written back onto the params, because not every source reads the value
@@ -4090,6 +4097,10 @@ const server = http.createServer(async (req, res) => {
       jobs = jobs.filter(job => jobMatchesEmployment(job, employment));
     }
 
+    if ((employerMode !== 'all' || employerName) && jobs.length > 0) {
+      jobs = employers.filterByEmployer(jobs, employerMode, employerName);
+    }
+
     if (sector && sector !== 'all' && jobs.length > 0) {
       jobs = jobs.filter(job => jobMatchesSector(job, sector));
     }
@@ -4103,7 +4114,10 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (platform !== 'all') logScrape(`■ ${platform}: ${jobs.length} offers returned`);
-    sendJson(res, 200, { jobs, source, platformBreakdown, profileUsed: !!profileText, query: { region, sector, employment, platform, distance, location } });
+    sendJson(res, 200, { jobs, source, platformBreakdown, profileUsed: !!profileText, query: { region, sector, employment, employerMode, employer: employerName, platform, distance, location },
+      // What the result set actually contains, so the interface can offer the
+      // employers present rather than a list of names that may return nothing.
+      employers: employers.employerBreakdown(jobs) });
     return;
   }
 
@@ -4426,6 +4440,9 @@ const server = http.createServer(async (req, res) => {
     req.on('end', async () => {
       try {
         const { keyword, location, region, sector, distance, pages, employment } = JSON.parse(body || '{}');
+        const _p = JSON.parse(body || '{}');
+        const employerMode = _p.employerMode || 'all';
+        const employerName = _p.employer || '';
         const searchLocation = location || (region === 'germany' ? 'Germany' : region === 'switzerland' ? 'Switzerland' : 'United States');
         const searchDist     = distance || 'all';
 
@@ -4469,6 +4486,9 @@ const server = http.createServer(async (req, res) => {
         if (sector && sector !== 'all') jobs = jobs.filter(j => jobMatchesSector(j, sector));
         const afterSector = jobs.length;
         if (employment && employment !== 'all') jobs = jobs.filter(j => jobMatchesEmployment(j, employment));
+        if (employerMode !== 'all' || employerName) {
+          jobs = employers.filterByEmployer(jobs, employerMode, employerName);
+        }
 
         logScrape(`■ SCRAPE-ALL done | ${merged.length} raw → ${before} dedup → ${afterSector} after "${sector || 'all'}" → ${jobs.length} after "${employment || 'all'}"`);
         sendJson(res, 200, {
