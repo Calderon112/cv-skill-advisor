@@ -2117,6 +2117,110 @@ function buildAllPlatformSources({ searchParams, keyword, location, region, dist
   return sources;
 }
 
+/**
+ * The employers behind a search, by their exact registered names.
+ *
+ * Asking for an employer by name has never worked properly here, and Airbus is the
+ * clearest case. The name was prefixed to the keyword, which searches the text of a
+ * posting rather than the company field, so "Airbus" returned 1,961 results whose
+ * largest contributors were SimpleXX (293), Orizon Unit Aviation (267) and AERO
+ * HighProfessionals (176) — staffing firms advertising Airbus work. Airbus itself
+ * was two entries deep in that list, and filtering a page of 500 found 7 postings
+ * where the company has 308.
+ *
+ * The API has an "arbeitgeber" parameter that does match the company field, and it
+ * matches it exactly: "Airbus Defence and Space GmbH" returns 222 and "Airbus"
+ * returns nothing. Exact names are not something this project can keep a list of —
+ * an employer's registered name is not its brand, and there are thousands.
+ *
+ * But every response already carries them. facetten.arbeitgeber is a map of exact
+ * employer name to posting count for the search that was just run, and it costs no
+ * extra request. So: one search to learn the names, then one query per employer that
+ * the name list recognises. Two round trips instead of a guess.
+ */
+async function fetchBundesEmployerFacet(searchParams) {
+  const params = buildBundesQueryParams(searchParams, 1);
+  params.set('size', '1');                                   // the facet, not the rows
+  try {
+    const response = await fetch(`${JOBS_API_URL}?${params.toString()}`, {
+      headers: { 'X-API-Key': BUNDES_API_KEY, Accept: 'application/json' }, method: 'GET',
+    });
+    if (!response.ok) return {};
+    const data = await response.json();
+    const facet = data && data.facetten && data.facetten.arbeitgeber;
+    return (facet && facet.counts) || {};
+  } catch (_) { return {}; }
+}
+
+/** Every posting from one employer, by the exact name the agency has on file. */
+async function fetchBundesByEmployerName(name, searchParams, depth) {
+  const page = async (n) => {
+    const params = buildBundesQueryParams(searchParams, n);
+    // The employer narrows the keyword; it does not replace it. Dropping the
+    // keyword answered "IT Security at the major employers" with every warehouse
+    // job Bechtle has — 2,362 rows for a search about security. The two parameters
+    // compose the way they should: "Siemens AG" alone is 441 postings, with "IT
+    // Security" it is 28, and 28 is the answer to what was asked.
+    params.set('arbeitgeber', name);
+    try {
+      const r = await fetch(`${JOBS_API_URL}?${params.toString()}`, {
+        headers: { 'X-API-Key': BUNDES_API_KEY, Accept: 'application/json' }, method: 'GET',
+      });
+      if (!r.ok) return null;
+      const d = await r.json();
+      const hits = (d && d.ergebnisliste) || [];
+      return Array.isArray(hits) ? { hits, total: d.maxErgebnisse || hits.length } : null;
+    } catch (_) { return null; }
+  };
+  const first = await page(1);
+  if (!first) return [];
+  const pages = Math.min(depth, Math.max(1, Math.ceil((first.total || 0) / 100)));
+  let hits = first.hits;
+  if (pages > 1) {
+    const rest = await Promise.all(Array.from({ length: pages - 1 }, (_, i) => page(i + 2)));
+    rest.forEach((r) => { if (r) hits = hits.concat(r.hits); });
+  }
+  return hits.map((j) => extractBundesJobFields(j, searchParams));
+}
+
+// How many employers are pulled in full. A search for "IT Security" in "major" mode
+// recognises around twenty in the facet, and each is a request; the cap keeps a
+// broad search from turning into fifty round trips.
+const FACET_EMPLOYER_LIMIT = 12;
+
+/**
+ * The postings of the employers a search actually surfaced, fetched by name.
+ *
+ * @param mode  'major' | 'it' | 'direct' | 'all'
+ * @param name  an optional single employer the caller asked for, as a fragment
+ */
+async function fetchJobsForEmployers(searchParams, mode, name, depth) {
+  const facet = await fetchBundesEmployerFacet(searchParams);
+  const wanted = String(name || '').toLowerCase().trim();
+
+  const chosen = Object.keys(facet)
+    .filter((company) => {
+      // A staffing firm advertising a Konzern's work is not the Konzern, and it is
+      // what dominates these facets: six of the top eight for "Airbus".
+      if (employers.isAgency(company)) return false;
+      if (wanted) return company.toLowerCase().includes(wanted);
+      const key = employers.majorEmployer(company);
+      if (mode === 'it') return !!key && employers.IT_EMPLOYERS.has(key);
+      return !!key;
+    })
+    .sort((a, b) => facet[b] - facet[a])
+    .slice(0, FACET_EMPLOYER_LIMIT);
+
+  if (!chosen.length) return { jobs: [], employers: [] };
+
+  const batches = await Promise.all(chosen.map((c) =>
+    fetchBundesByEmployerName(c, searchParams, depth).catch(() => [])));
+  return {
+    jobs: batches.reduce((a, b) => a.concat(b), []),
+    employers: chosen.map((c, i) => ({ name: c, facet: facet[c], fetched: batches[i].length })),
+  };
+}
+
 async function fetchBundesJobs(searchParams, depth = DEFAULT_PAGE_DEPTH) {
   const fetchPage = async (page) => {
     const params = buildBundesQueryParams(searchParams, page);
@@ -4116,6 +4220,29 @@ const server = http.createServer(async (req, res) => {
       jobs = jobs.filter(job => jobMatchesEmployment(job, employment));
     }
 
+    // Employers are fetched by name, not filtered out of a keyword search.
+    //
+    // Filtering could only ever find an employer who was already in the page it was
+    // handed, and a Konzern usually is not: "Airbus" returned 7 postings this way
+    // and Airbus has 308, because the 500 rows the keyword produced belonged to the
+    // staffing firms advertising Airbus work. The facet pass asks the API which
+    // employers are behind the search and then asks each of them directly.
+    //
+    // The filter still runs afterwards. It is what keeps an agency out of the
+    // result, and it is the only thing standing between "all" mode and the rest.
+    let facetEmployers = null;
+    if ((employerMode === 'major' || employerMode === 'it' || employerName)
+        && platform === 'bundesagentur') {
+      const found = await fetchJobsForEmployers(parsedUrl.searchParams, employerMode, employerName, depth);
+      if (found.jobs.length) {
+        facetEmployers = found.employers;
+        // Merged rather than substituted: the keyword search still holds postings
+        // from employers the facet did not rank high enough to fetch.
+        jobs = dedupeJobs(jobs.concat(found.jobs));
+        logScrape(`   ▸ employer pass: ${found.employers.length} employers, ${found.jobs.length} postings`);
+      }
+    }
+
     if ((employerMode !== 'all' || employerName) && jobs.length > 0) {
       jobs = employers.filterByEmployer(jobs, employerMode, employerName);
     }
@@ -4136,7 +4263,11 @@ const server = http.createServer(async (req, res) => {
     sendJson(res, 200, { jobs, source, platformBreakdown, profileUsed: !!profileText, query: { region, sector, employment, employerMode, employer: employerName, platform, distance, location },
       // What the result set actually contains, so the interface can offer the
       // employers present rather than a list of names that may return nothing.
-      employers: employers.employerBreakdown(jobs) });
+      employers: employers.employerBreakdown(jobs),
+      // Which employers were fetched by name, and how many each yielded. Without
+      // this an empty result is indistinguishable from an employer with no
+      // openings, which is the confusion this whole path exists to remove.
+      employerPass: facetEmployers });
     return;
   }
 
