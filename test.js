@@ -975,6 +975,59 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
       T.list().forEach(t => assert(t.note && t.note.length > 20, `${t.id} has advice`));
     });
 
+    test('a theme names only a font jsPDF carries without an embedded file', () => {
+      // Helvetica, Times and Courier ship inside jsPDF. Any other family would have
+      // to be embedded, and a name jsPDF does not know falls back to Helvetica
+      // silently — the template would then differ from its own description.
+      const BUILT_IN = ['helvetica', 'times', 'courier'];
+      T.list().filter(t => t.font).forEach((t) => {
+        assertIncludes(BUILT_IN, t.font, `${t.id} names a built-in face`);
+      });
+    });
+
+    test('a band header carries its own text colours', () => {
+      // The same reason a bleeding rail does: body dark and muted grey both
+      // disappear on a strong colour, so a theme that paints one has to say what
+      // gets written on it.
+      T.list().filter(t => t.header === 'band').forEach((t) => {
+        assert(t.bandFill, `${t.id} says what colour the band is`);
+        assert(t.bandText, `${t.id} declares a text colour for the band`);
+        assert(t.bandMuted, `${t.id} declares a muted one`);
+      });
+    });
+
+    test('a heading with no rule and no bar is set apart by tracking', () => {
+      // "plain" removes both marks under a heading. Without letter-spacing to carry
+      // it, a bold capital line at 9pt is indistinguishable from body text.
+      T.list().filter(t => t.mainHeading === 'plain').forEach((t) => {
+        assert(t.headingTrack > 0, `${t.id} tracks its headings`);
+      });
+    });
+
+    test('no theme sets the dates in a column of their own', () => {
+      // A timeline template draws a rule and a dot, and the dates stay inside the
+      // entry. Dates set in their own column are the shape this project's parser
+      // could not read back: a text extractor reads columns one after another, so
+      // they arrive detached from the entries and get paired by order — stamping
+      // entries with dates the candidate never wrote.
+      T.list().forEach((t) => {
+        assert(!('dateColumn' in t) && !('datesRail' in t), `${t.id} declares no date column`);
+        // The generator only marks stations in a single column; a theme asking for
+        // both a rail and a timeline would silently get no timeline.
+        if (t.entryMark === 'timeline') assertEqual(t.rail, 'none', `${t.id} is single-column`);
+      });
+    });
+
+    test('the preview shows the band and the timeline it claims', () => {
+      const band = T.list().find(t => t.header === 'band');
+      const tl = T.list().find(t => t.entryMark === 'timeline');
+      assert(T.preview(band).indexOf(`rgb(${band.bandFill.join(',')})`) !== -1,
+             'the band is painted in the preview, in its own colour');
+      assert(T.preview(tl).indexOf('<circle') !== -1, 'the stations are marked in the preview');
+      assert(T.preview(T.get('klassisch')).indexOf('<circle') === -1,
+             'a theme with no timeline gets no dots');
+    });
+
     test('the preview is drawn from the theme, and reflects its layout', () => {
       const two = T.preview(T.get('klassisch'));
       const one = T.preview(T.get('ats'));
@@ -1202,6 +1255,59 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
       const r = await run('Skills are the weak point: 28 of 45.');
       assert(r && r.score === undefined && r.score100 === undefined,
         'it returns text and a component name, never a number');
+    });
+  }
+
+  section('Employer filter — who is hiring, not who is mentioned');
+
+  {
+    const employers = require('./server/employers.js');
+    const jobs = [
+      { title: 'IT Security Engineer', company: 'Siemens AG' },
+      { title: 'IT Security Engineer', company: 'Siemens Healthineers AG' },
+      { title: 'Systemadministrator', company: 'FERCHAU GmbH Niederlassung Nürnberg' },
+      { title: 'Techniker', company: 'I.K. Hofmann GmbH Unit 1' },
+      { title: 'Entwickler', company: 'Musterfirma GmbH' },
+      { title: 'Cloud Engineer', company: 'Robert Bosch GmbH' },
+    ];
+
+    test('a named employer is matched on the company, not the posting', () => {
+      // "Siemens" as a keyword returned 500 rows of which 68 were Siemens: agency
+      // adverts read "unser Kunde Siemens" and rank like Siemens itself.
+      const out = employers.filterByEmployer(jobs, 'all', 'siemens');
+      assertEqual(out.length, 2, 'both Siemens entities, nothing else');
+    });
+
+    test('subsidiaries posting under their own name still count', () => {
+      // "Siemens" alone would miss Healthineers and Energy, which are separate
+      // companies posting separately.
+      assertEqual(employers.majorEmployer('Siemens Healthineers AG'), 'siemens', 'healthineers');
+      assertEqual(employers.majorEmployer('Robert Bosch GmbH'), 'bosch', 'bosch');
+      assertEqual(employers.majorEmployer('Musterfirma GmbH'), null, 'an unlisted company is not forced onto the list');
+    });
+
+    test('major keeps the listed employers, direct only drops the agencies', () => {
+      assertEqual(employers.filterByEmployer(jobs, 'major').length, 3, 'Siemens x2 + Bosch');
+      assertEqual(employers.filterByEmployer(jobs, 'direct').length, 4, 'everything except the two agencies');
+      assertEqual(employers.filterByEmployer(jobs, 'all').length, 6, 'all leaves the set alone');
+    });
+
+    test('an agency is recognised by its name, never by the posting text', () => {
+      // An employer's own advert routinely says "keine Zeitarbeit" or describes
+      // working with contractors. Matching that would exclude the very postings this
+      // filter exists to keep.
+      assert(employers.isAgency('FERCHAU GmbH Niederlassung Nürnberg'), 'named firm');
+      assert(employers.isAgency('Office People Personalmanagement GmbH'), 'by its trade');
+      assert(!employers.isAgency('Siemens AG'), 'not the employer itself');
+    });
+
+    test('the breakdown reports what the set actually contains', () => {
+      // So the interface can offer the employers present rather than a list of names
+      // that may return nothing.
+      const b = employers.employerBreakdown(jobs);
+      assertEqual(b.siemens, 2, 'two Siemens');
+      assertEqual(b.bosch, 1, 'one Bosch');
+      assert(!('volkswagen' in b), 'nobody who is not there');
     });
   }
 

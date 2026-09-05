@@ -144,6 +144,135 @@
         main: ['berufserfahrung', 'skills', 'projekte', 'ausbildung', 'weiterbildung'],
       },
     },
+
+    // A serif document with a centred head.
+    //
+    // jsPDF carries Helvetica, Times and Courier without an embedded font file, so
+    // this changes the face of the whole document and costs nothing to ship. It is
+    // the one axis none of the templates above move on, and it changes more at a
+    // glance than any of the colours do.
+    //
+    // Single column, because a serif CV is read by a person start to finish, and
+    // because the wide margins are the point rather than a side effect.
+    elegant: {
+      id: 'elegant',
+      name: 'Elegant',
+      note: 'Einspaltig mit Serifenschrift, zentriertem Kopf und breiten Rändern. Für Hochschule, Forschung und Beratung.',
+      font: 'times',
+      rail: 'none',
+      railWidth: 0,
+      margin: 58,
+      gap: 0,
+      accent: [122, 74, 40],
+      dark: [38, 33, 28],
+      grey: [112, 104, 94],
+      railFill: null,
+      mainHeading: 'rule',
+      railHeading: 'rule',
+      // Small capitals are not available without an embedded font; letter-spaced
+      // capitals are the same effect reached with the faces jsPDF already has.
+      headingTrack: 1.1,
+      headerAlign: 'center',
+      photo: 'top-center',
+      layout: {
+        rail: [],
+        main: ['kontakt', 'berufserfahrung', 'ausbildung', 'skills', 'projekte',
+               'weiterbildung', 'sprachen', 'softskills', 'interessen'],
+      },
+    },
+
+    // A coloured band across the top, name and photo set on it.
+    //
+    // The band is the loudest thing any of these templates do, and it is doing one
+    // job: on a desk holding forty printed applications, the top inch is the whole
+    // of the first impression. Everything below it is deliberately quiet — rule
+    // headings, a pale rail — because a band AND filled heading bars is two
+    // templates fighting on one sheet.
+    akzent: {
+      id: 'akzent',
+      name: 'Akzent',
+      note: 'Farbiger Kopfbereich über die volle Seitenbreite, Foto darin, ruhige Spalten darunter. Für Bewerbungen, die auf einem Stapel liegen.',
+      header: 'band',
+      bandFill: [17, 63, 87],
+      bandText: [255, 255, 255],
+      bandMuted: [172, 201, 220],
+      rail: 'right',
+      railWidth: 162,
+      margin: 40,
+      gap: 20,
+      accent: [17, 63, 87],
+      dark: [26, 36, 48],
+      grey: [100, 114, 130],
+      railFill: [238, 243, 247],
+      mainHeading: 'rule',
+      railHeading: 'rule',
+      photo: 'band',
+      layout: {
+        rail: ['kontakt', 'ausbildung', 'sprachen', 'softskills', 'interessen'],
+        main: ['berufserfahrung', 'skills', 'projekte', 'weiterbildung'],
+      },
+    },
+
+    // No colour at all, and no rules under the headings.
+    //
+    // This is not the ATS template with the accent removed. That one is shaped by
+    // what a text extractor can read; this one is shaped by restraint — wide
+    // margins, headings carried by capitals and letter-spacing, and nothing else on
+    // the page. Where a document has no colour, a rule under every heading becomes
+    // the only mark on the sheet and starts to read as the design.
+    schlicht: {
+      id: 'schlicht',
+      name: 'Schlicht',
+      note: 'Einspaltig, ohne Farbe, viel Weißraum, Überschriften nur durch Sperrung. Wenn der Inhalt allein sprechen soll.',
+      rail: 'none',
+      railWidth: 0,
+      margin: 64,
+      gap: 0,
+      accent: [26, 26, 26],
+      dark: [26, 26, 26],
+      grey: [122, 122, 122],
+      railFill: null,
+      mainHeading: 'plain',
+      railHeading: 'plain',
+      headingTrack: 2.2,
+      photo: 'top-right',
+      layout: {
+        rail: [],
+        main: ['kontakt', 'berufserfahrung', 'skills', 'projekte',
+               'ausbildung', 'weiterbildung', 'sprachen', 'softskills', 'interessen'],
+      },
+    },
+
+    // A timeline down the column, with a dot at each station.
+    //
+    // The dates stay inside the entry, in the running text. They are deliberately
+    // NOT set in a column of their own, which is the exact shape this project's own
+    // parser could not read back: a text extractor reads columns one after another,
+    // so dates set beside their entries arrive detached from them, and pairing them
+    // by order stamps entries with dates the candidate never wrote. The line drawn
+    // here carries no text at all, so nothing about it can be mis-extracted.
+    chronik: {
+      id: 'chronik',
+      name: 'Chronik',
+      note: 'Einspaltig mit Zeitstrahl an den Stationen; die Daten bleiben im Eintrag. Für einen Werdegang mit vielen Stationen.',
+      rail: 'none',
+      railWidth: 0,
+      margin: 46,
+      gap: 0,
+      accent: [21, 101, 92],
+      dark: [24, 34, 38],
+      grey: [100, 116, 118],
+      railFill: null,
+      mainHeading: 'rule',
+      railHeading: 'rule',
+      entryMark: 'timeline',
+      photo: 'top-right',
+      layout: {
+        rail: [],
+        main: ['kontakt', 'berufserfahrung', 'ausbildung', 'projekte',
+               'weiterbildung', 'skills', 'sprachen', 'softskills', 'interessen'],
+      },
+    },
   };
 
   const DEFAULT_ID = 'klassisch';
@@ -177,62 +306,120 @@
     const mainX = onLeft ? W - m - mainW : m;
     const railX = onLeft ? m : W - m - railW;
     const acc = rgb(theme.accent);
+    const band = theme.header === 'band';
+    const centred = theme.headerAlign === 'center';
+    const timeline = theme.entryMark === 'timeline' && !railW;
     const parts = [];
 
     parts.push('<rect width="' + W + '" height="' + H + '" fill="#fff"/>');
-    if (railW && theme.railFill) {
-      // A bleeding rail runs the whole sheet, edge to edge, and is the first thing
-      // drawn — the header sits on top of it rather than beside it.
-      const bleed = !!theme.railBleed;
-      parts.push('<rect x="' + (bleed ? railX - m : railX - 4) + '" y="' + (bleed ? 0 : m + 26) +
-                 '" width="' + (bleed ? railW + m + 4 : railW + 8) +
-                 '" height="' + (bleed ? H : H - m - 26) + '" fill="' + rgb(theme.railFill) + '"/>');
+
+    // A band across the top carries the header, and everything else starts below it.
+    const bandH = band ? 30 : 0;
+    if (band) {
+      parts.push('<rect x="0" y="0" width="' + W + '" height="' + bandH +
+                 '" fill="' + rgb(theme.bandFill || theme.accent) + '"/>');
     }
 
-    // Header: name, subtitle, and the photo where the theme puts one.
-    const hasPhoto = theme.photo === 'top-right';
-    const headW = hasPhoto ? mainW + railW + gap - 26 : mainW + railW + gap;
-    parts.push('<rect x="' + m + '" y="' + m + '" width="' + Math.round(headW * 0.62) +
-               '" height="6" rx="1" fill="' + rgb(theme.dark) + '"/>');
-    parts.push('<rect x="' + m + '" y="' + (m + 9) + '" width="' + Math.round(headW * 0.4) +
-               '" height="3.5" rx="1" fill="' + acc + '"/>');
-    if (hasPhoto) {
-      parts.push('<rect x="' + (W - m - 22) + '" y="' + m + '" width="22" height="22" rx="2" fill="#d4dae2"/>');
+    if (railW && theme.railFill) {
+      // A bleeding rail runs the whole sheet, edge to edge, and is drawn before the
+      // header — which then sits on top of it rather than beside it.
+      const bleed = !!theme.railBleed;
+      const top = bleed ? 0 : Math.max(bandH + 4, m + 26);
+      parts.push('<rect x="' + (bleed ? railX - m : railX - 4) + '" y="' + top +
+                 '" width="' + (bleed ? railW + m + 4 : railW + 8) +
+                 '" height="' + (H - top) + '" fill="' + rgb(theme.railFill) + '"/>');
     }
-    parts.push('<rect x="' + m + '" y="' + (m + 20) + '" width="' + (W - m * 2) + '" height="1.4" fill="' + acc + '"/>');
+
+    // Header: name, subtitle, and the photo where the theme puts one. On a bleeding
+    // rail it starts where the main column starts — the name is not printed across
+    // the coloured band in the document, and must not be here either.
+    const photoAt = theme.photo;
+    const photoW = band ? bandH - 12 : 22;
+    const headX = (theme.railBleed && railW) ? mainX : m;
+    let headW = W - m - headX;
+    if (photoAt === 'top-right' || (band && photoAt !== 'none')) headW -= photoW + 6;
+
+    let hy = band ? 8 : m;
+    if (photoAt === 'top-center') {
+      parts.push('<rect x="' + Math.round((W - photoW) / 2) + '" y="' + hy + '" width="' + photoW +
+                 '" height="' + photoW + '" rx="2" fill="#d4dae2"/>');
+      hy += photoW + 5;
+    }
+    if (photoAt === 'top-right') {
+      parts.push('<rect x="' + (W - m - photoW) + '" y="' + m + '" width="' + photoW +
+                 '" height="' + photoW + '" rx="2" fill="#d4dae2"/>');
+    }
+    if (band && photoAt !== 'none') {
+      parts.push('<rect x="' + (W - m - photoW) + '" y="' + Math.round((bandH - photoW) / 2) +
+                 '" width="' + photoW + '" height="' + photoW + '" rx="2" fill="#ffffff" opacity="0.82"/>');
+    }
+
+    const nameW = Math.round(headW * 0.62);
+    const subW = Math.round(headW * 0.4);
+    const centreOn = (w) => Math.round(headX + (headW - w) / 2);
+    parts.push('<rect x="' + (centred ? centreOn(nameW) : headX) + '" y="' + hy + '" width="' + nameW +
+               '" height="6" rx="1" fill="' + (band ? '#ffffff' : rgb(theme.dark)) + '"/>');
+    parts.push('<rect x="' + (centred ? centreOn(subW) : headX) + '" y="' + (hy + 9) + '" width="' + subW +
+               '" height="3.5" rx="1" fill="' + (band ? rgb(theme.bandMuted || [255, 255, 255]) : acc) + '"/>');
+    hy += 20;
+    // The band separates the header by itself; a rule under it as well would be two
+    // answers to one question, which is why the document prints only one of them.
+    if (!band) {
+      parts.push('<rect x="' + headX + '" y="' + hy + '" width="' + (W - m - headX) +
+                 '" height="' + (centred ? 0.8 : 1.4) + '" fill="' + acc + '"/>');
+    }
+
+    const contentTop = band ? bandH + 10 : Math.max(hy + 8, m + 28);
 
     // A heading plus a few text lines, in the style the theme asks for.
-    function block(x, w, y, headingStyle) {
+    function block(x, w, y, headingStyle, marked) {
       const out = [];
       if (headingStyle === 'bar') {
         out.push('<rect x="' + x + '" y="' + y + '" width="' + w + '" height="7" rx="1" fill="' + acc + '"/>');
         out.push('<rect x="' + (x + 3) + '" y="' + (y + 2.5) + '" width="' + Math.round(w * 0.42) +
                  '" height="2" rx="0.5" fill="#fff"/>');
+      } else if (headingStyle === 'plain') {
+        // Capitals and letter-spacing, and nothing under them. Drawn as a short run
+        // of separated ticks, because a solid bar is what the other styles use.
+        for (let i = 0; i < 5; i++) {
+          out.push('<rect x="' + (x + i * 7) + '" y="' + y + '" width="4.5" height="3" rx="0.5" fill="' + acc + '"/>');
+        }
       } else {
         out.push('<rect x="' + x + '" y="' + y + '" width="' + Math.round(w * 0.46) +
                  '" height="3" rx="0.5" fill="' + acc + '"/>');
         out.push('<rect x="' + x + '" y="' + (y + 5) + '" width="' + w + '" height="0.8" fill="' + acc + '"/>');
       }
-      const top = y + (headingStyle === 'bar' ? 12 : 10);
+      const top = y + (headingStyle === 'bar' ? 12 : headingStyle === 'plain' ? 9 : 10);
+      // Entries indented past the timeline, which is a rule and a dot and carries no
+      // text — the dates stay in the entry.
+      const tx = marked ? x + 7 : x;
+      const tw = marked ? w - 7 : w;
       [1, 0.9, 0.72].forEach((f, i) => {
-        out.push('<rect x="' + x + '" y="' + (top + i * 5) + '" width="' + Math.round(w * f) +
+        out.push('<rect x="' + tx + '" y="' + (top + i * 5) + '" width="' + Math.round(tw * f) +
                  '" height="2.4" rx="0.6" fill="#c9d0d9"/>');
       });
+      if (marked) {
+        out.push('<rect x="' + (x + 1.2) + '" y="' + (top - 1) + '" width="0.8" height="' +
+                 (3 * 5 - 2) + '" fill="' + acc + '"/>');
+        out.push('<circle cx="' + (x + 1.6) + '" cy="' + (top - 2) + '" r="1.8" fill="' + acc + '"/>');
+      }
       return { svg: out.join(''), next: top + 3 * 5 + 6 };
     }
 
-    let y = m + 28;
+    let y = contentTop;
     let guard = 0;
     while (y < H - 18 && guard++ < 6) {
-      const b = block(mainX, mainW, y, theme.mainHeading);
+      // The first block of a timeline layout is the contact block, which is not a
+      // station — the same as in the document, where only entries carry a dot.
+      const b = block(mainX, mainW, y, theme.mainHeading, timeline && guard > 1);
       parts.push(b.svg);
       y = b.next;
     }
     if (railW) {
-      let ry = m + 28;
+      let ry = contentTop;
       let g2 = 0;
       while (ry < H - 18 && g2++ < 6) {
-        const b = block(railX, railW, ry, theme.railHeading);
+        const b = block(railX, railW, ry, theme.railHeading, false);
         parts.push(b.svg);
         ry = b.next;
       }
