@@ -1205,6 +1205,59 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
     });
   }
 
+  section('Employer filter — who is hiring, not who is mentioned');
+
+  {
+    const employers = require('./server/employers.js');
+    const jobs = [
+      { title: 'IT Security Engineer', company: 'Siemens AG' },
+      { title: 'IT Security Engineer', company: 'Siemens Healthineers AG' },
+      { title: 'Systemadministrator', company: 'FERCHAU GmbH Niederlassung Nürnberg' },
+      { title: 'Techniker', company: 'I.K. Hofmann GmbH Unit 1' },
+      { title: 'Entwickler', company: 'Musterfirma GmbH' },
+      { title: 'Cloud Engineer', company: 'Robert Bosch GmbH' },
+    ];
+
+    test('a named employer is matched on the company, not the posting', () => {
+      // "Siemens" as a keyword returned 500 rows of which 68 were Siemens: agency
+      // adverts read "unser Kunde Siemens" and rank like Siemens itself.
+      const out = employers.filterByEmployer(jobs, 'all', 'siemens');
+      assertEqual(out.length, 2, 'both Siemens entities, nothing else');
+    });
+
+    test('subsidiaries posting under their own name still count', () => {
+      // "Siemens" alone would miss Healthineers and Energy, which are separate
+      // companies posting separately.
+      assertEqual(employers.majorEmployer('Siemens Healthineers AG'), 'siemens', 'healthineers');
+      assertEqual(employers.majorEmployer('Robert Bosch GmbH'), 'bosch', 'bosch');
+      assertEqual(employers.majorEmployer('Musterfirma GmbH'), null, 'an unlisted company is not forced onto the list');
+    });
+
+    test('major keeps the listed employers, direct only drops the agencies', () => {
+      assertEqual(employers.filterByEmployer(jobs, 'major').length, 3, 'Siemens x2 + Bosch');
+      assertEqual(employers.filterByEmployer(jobs, 'direct').length, 4, 'everything except the two agencies');
+      assertEqual(employers.filterByEmployer(jobs, 'all').length, 6, 'all leaves the set alone');
+    });
+
+    test('an agency is recognised by its name, never by the posting text', () => {
+      // An employer's own advert routinely says "keine Zeitarbeit" or describes
+      // working with contractors. Matching that would exclude the very postings this
+      // filter exists to keep.
+      assert(employers.isAgency('FERCHAU GmbH Niederlassung Nürnberg'), 'named firm');
+      assert(employers.isAgency('Office People Personalmanagement GmbH'), 'by its trade');
+      assert(!employers.isAgency('Siemens AG'), 'not the employer itself');
+    });
+
+    test('the breakdown reports what the set actually contains', () => {
+      // So the interface can offer the employers present rather than a list of names
+      // that may return nothing.
+      const b = employers.employerBreakdown(jobs);
+      assertEqual(b.siemens, 2, 'two Siemens');
+      assertEqual(b.bosch, 1, 'one Bosch');
+      assert(!('volkswagen' in b), 'nobody who is not there');
+    });
+  }
+
   section('Position type — Werkstudent and friends');
 
   // The filter existed and /api/scrape-all honoured it, while /api/jobs accepted
