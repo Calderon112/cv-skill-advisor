@@ -74,12 +74,48 @@ const MAJOR = {
   lanxess:            ['lanxess'],
   evonik:             ['evonik'],
   bertelsmann:        ['bertelsmann', 'arvato'],
-  rewe:               ['rewe group', 'rewe digital'],
+  // 382 of REWE's 425 postings carry the company field "REWE" and nothing else;
+  // only 14 say "REWE Group". The suffixed fragments matched the 14.
+  rewe:               ['rewe'],
   edeka:              ['edeka'],
   aldi:               ['aldi süd', 'aldi nord'],
   lidl:               ['lidl', 'schwarz it', 'schwarz digits'],
   otto:               ['otto group', 'otto gmbh'],
   bwi:                ['bwi gmbh'],
+
+  // ── Handel und Konsum ─────────────────────────────────────────────────────
+  // Added after measuring rather than from memory, and the measurement is what
+  // decided each fragment. A group's own postings mostly carry the bare name —
+  // "REWE" 382 times against "REWE Group" 14 — so a fragment written with the
+  // legal suffix matches the exception and misses the rule. That was the
+  // Continental mistake and it was in here five more times.
+  kaufland:           ['kaufland'],
+  rossmann:           ['rossmann'],
+  dm:                 ['dm-drogerie'],
+  penny:              ['penny'],
+  // "metro" bare would take Metronom, Metropolregion and anything else that opens
+  // with the prefix, so this one stays qualified. Same reasoning below wherever a
+  // name is also an ordinary word.
+  metro:              ['metro deutschland', 'metro digital', 'metro ag', 'metro logistics'],
+  // Media-Saturn is the employer; "saturn" alone is saturn petcare, which is a
+  // different company selling pet food.
+  mediasaturn:        ['media-saturn', 'mediamarkt', 'media markt'],
+  // Deliberately absent: real. The word matches "Real Estate" in every posting
+  // that has one — 145 hits, none of them the retailer — and the chain was broken
+  // up between 2020 and 2022, so there is no employer left to find.
+
+  // ── Industrie und Bau ─────────────────────────────────────────────────────
+  airbus:             ['airbus'],
+  // "man" cannot be a fragment. These are the group entities.
+  man:                ['man truck', 'man se', 'man energy', 'man bus'],
+  schaeffler:         ['schaeffler'],
+  hochtief:           ['hochtief'],
+  trumpf:             ['trumpf'],
+  // "Dr. Miele Domal GmbH" makes cleaning products and is unrelated to the
+  // appliance maker, so the group entities are named instead of the surname.
+  miele:              ['miele & cie', 'miele vg', 'miele gmbh'],
+  hugoboss:           ['hugo boss'],
+  vodafone:           ['vodafone gmbh', 'vodafone deutschland', 'vodafone group'],
 
   // ── Prüf- und Zertifizierungsorganisationen ───────────────────────────────
   // Four separate companies sharing a name, which is why fragments and not names:
