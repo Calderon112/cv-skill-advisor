@@ -401,6 +401,20 @@
               </select>
             </div>
             <div class="form-group">
+              <label>Employer</label>
+              <select id="employer-mode" class="field">
+                <option value="all" selected>Any employer</option>
+                <option value="direct">Direct employers only (no staffing firms)</option>
+                <option value="major">Large German employers</option>
+                <option value="it">IT employers (TÜV, Bechtle, secunet, SAP …)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Company name</label>
+              <input id="employer-name" class="field" type="text"
+                     placeholder="e.g. Siemens, TÜV SÜD, Bosch" />
+            </div>
+            <div class="form-group">
               <label>Distance</label>
               <select id="distance-select" class="field">
                 <option value="all">Any distance</option>
