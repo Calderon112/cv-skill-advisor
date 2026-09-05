@@ -45,7 +45,10 @@ const MAJOR = {
   thyssenkrupp:       ['thyssenkrupp'],
   eon:                ['e.on', 'eon se', 'westenergie'],
   rwe:                ['rwe ag', 'rwe power', 'rwe generation'],
-  continental:        ['continental ag', 'continental automotive'],
+  // Bare name first, the same lesson TÜV taught below: the suffixed fragments
+  // matched nothing when the company field reads plain "Continental", which is
+  // how their own board writes it. 878 postings scored as an unlisted employer.
+  continental:        ['continental'],
   zf:                 ['zf friedrichshafen'],
   henkel:             ['henkel ag', 'henkel deutschland'],
   merck:              ['merck kgaa'],
@@ -92,6 +95,9 @@ const MAJOR = {
   // payroll and place their own people. The distinction matters because the agency
   // filter would otherwise sweep them out with the contractors.
   bechtle:            ['bechtle'],
+  // Munich, and one of the larger German software employers. Absent here purely
+  // because the list was written from the DAX and it is not in it.
+  celonis:            ['celonis'],
   cancom:             ['cancom'],
   computacenter:      ['computacenter'],
   atos:               ['atos ', 'eviden'],
@@ -139,6 +145,7 @@ const IT_EMPLOYERS = new Set([
   'capgemini', 'accenture', 'ibm', 'fujitsu', 'nttdata', 'materna', 'adesso', 'msg',
   'soprasteria', 'datev', 'finanzinformatik', 'gisa', 'operational',
   'lufthansaindustry', 'secunet', 'genua', 'rohdeschwarz', 'gundd', 'utimaco', 'bsi',
+  'celonis',
   'bwi', 'zalando', 'deloitte', 'kpmg', 'ey', 'pwc',
   // A judgement, and worth stating: the TÜV group is testing and certification at
   // large, not IT. But TÜV Informationstechnik is one of the notable IT-security
