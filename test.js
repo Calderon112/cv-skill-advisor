@@ -1300,6 +1300,52 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
         assert(e.company && e.platform && e.id, 'complete entry: ' + JSON.stringify(e));
         assert(ats.CONNECTORS[e.platform], e.platform + ' has a connector');
       });
+
+    test('a sitemap entry carries the address of the sitemap, not a company slug', () => {
+      // The sitemap connector's id is a URL, and one written as a bare company name
+      // would be fetched as a relative path and fail silently.
+      ats.ATS_EMPLOYERS.filter((e) => e.platform === 'sitemap').forEach((e) => {
+        assert(/^https:\/\//.test(e.id), e.company + ' has an absolute https address');
+      });
+    });
+
+    test('robots.txt Disallow closes a path', () => {
+      // TÜV NORD disallows /api/ — their internal endpoint — in the same file that
+      // announces the sitemaps. Reading the first while honouring the second is the
+      // whole basis for this connector being legitimate, so it is pinned here.
+      assert(ats.blocked(['/api/'], 'https://www.tuev-nord-group.com/api/jobs'), '/api/ is closed');
+      assert(!ats.blocked(['/api/'], 'https://www.tuev-nord-group.com/de/jobs/x-1'),
+        'the announced job path stays open');
+      assert(ats.blocked(['/*/externaljobs/*qtvc='], 'https://jobs.siemens.com/de/externaljobs/x?qtvc=1'),
+        'a wildcard rule is honoured');
+    });
+
+    test('a job path is a path segment, not a substring of the whole URL', () => {
+      // Two real failures. On jobs.siemens.com the host contains "jobs", so testing
+      // the whole URL passed every page on the site; and an unanchored "position"
+      // matched inside "disposition", which is how a French press release about a
+      // document update arrived as a vacancy at Atos.
+      assert(ats.pathNamesAJob('https://jobs.zalando.com/de/jobs/2720430-software-engineer'), 'a real posting');
+      assert(!ats.pathNamesAJob('https://atos.net/fr/mise-a-disposition-du-document-de-reference'),
+        'disposition is not a position');
+      assert(!ats.pathNamesAJob('https://jobs.siemens.com/de_DE/externaljobs/AccountValidation'),
+        'a portal screen on a jobs host is not a job');
+    });
+
+    test('a title is read out of the slug the way a German title is written', () => {
+      // The sitemaps carry no titles and the slug is what there is. Three things had
+      // to be got out of it: the posting id, which sits at either end depending on
+      // the site; the file extension REWE leaves on; and the case, which is lost
+      // entirely and matters more in German than in English.
+      assertEqual(ats.titleFromUrl('https://x.de/de/jobs/stellv-teamleitung-geotechnik-10567'),
+        'Stellv Teamleitung Geotechnik', 'trailing id removed, nouns capitalised');
+      assertEqual(ats.titleFromUrl('https://jobs.zalando.com/de/jobs/2720430-senior-machine-learning-engineer'),
+        'Senior Machine Learning Engineer', 'leading id removed');
+      assertEqual(ats.titleFromUrl('https://jobs.rewe-group.com/verkaeufer-mit-kassiertaetigkeit-viersen.html'),
+        'Verkaeufer mit Kassiertaetigkeit Viersen', 'extension gone, "mit" stays lower case');
+      assertEqual(ats.titleFromUrl('https://x.de/jobs/fachkraft-fuer-arbeitssicherheit-m-w-d-1234'),
+        'Fachkraft fuer Arbeitssicherheit (m/w/d)', 'the gender note is restored');
+    });
     });
   }
 
