@@ -3430,7 +3430,20 @@ function renderCvSchema(schema, meta) {
       + 'so each section is shown as plain text you can edit.';
   }
 
-  body.innerHTML = schema.map((sec, si) => {
+  // Known sections first, in the order the fixed form uses, so a CV heading that is
+  // the same thing under another name — FÄHIGKEITEN for Skills, HOBBYS UND
+  // INTERESSEN for Interests — lands where the reader already expects it instead of
+  // opening a second block for the same idea. Anything the form has no concept for,
+  // like PRAKTISCHE KENNTNISSE, keeps its own heading and goes to the bottom.
+  const ORDER = ['summary', 'experience', 'skills', 'projects', 'education',
+                 'certifications', 'languages', 'softSkills', 'interests'];
+  const ordered = schema.slice().sort(function (a, b) {
+    const ia = ORDER.indexOf(schemaTargetFor(a.heading));
+    const ib = ORDER.indexOf(schemaTargetFor(b.heading));
+    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+  });
+
+  body.innerHTML = ordered.map((sec, si) => {
     const rows = (function () {
       if (sec.kind === 'rows') {
         return sec.items.map((r, i) => `
@@ -3462,8 +3475,9 @@ function renderCvSchema(schema, meta) {
     // the block "PROJEKTE & LABORE" should keep saying that in the generated
     // document rather than being normalised into "Projects".
     return `
-      <div class="pf-section" data-s="${si}">
+      <div class="pf-section${schemaTargetFor(sec.heading) ? '' : ' pf-section-new'}" data-s="${si}">
         <input class="field pf-heading" data-f="heading" value="${esc(sec.heading)}">
+        ${schemaTargetFor(sec.heading) ? '' : '<span class="pf-new-note">Nur in Ihrem Lebenslauf — wird unten angehängt</span>'}
         ${rows}
       </div>`;
   }).join('');
@@ -4134,6 +4148,34 @@ if (_pfReset) _pfReset.addEventListener('click', () => {
 // two, where the facts sit, how loud the headings are — reads at a glance.
 
 
+/**
+ * Join values that were wrapped across lines in the source document.
+ *
+ * A skills column reads "HTML , CSS , Django ," then "PHP , XML , SQL" on the next
+ * line: the comma is already there, at the end of the first line, and joining with
+ * ", " printed "Django ,, PHP". The same wrap also produced " ,," inside
+ * "Java-Programmierung ,, Python".
+ *
+ * So a separator is added only where the previous fragment does not already end in
+ * one, and the spacing German CVs leave before punctuation is tidied on the way
+ * out — "HTML , CSS" becomes "HTML, CSS" without changing a word.
+ */
+function joinValues(parts, sep) {
+  const s = sep || ', ';
+  return (parts || [])
+    .map((v) => String(v == null ? '' : v).trim())
+    .filter(Boolean)
+    .reduce((acc, part) => {
+      if (!acc) return part;
+      return /[,;·•]$/.test(acc) ? acc + ' ' + part : acc + s + part;
+    }, '')
+    .replace(/\s+([,;.])/g, '$1')      // "HTML , CSS"  → "HTML, CSS"
+    .replace(/([,;])\s*(?=[,;])/g, '') // any separator left doubled by the wrap
+    .replace(/\s{2,}/g, ' ')
+    .replace(/[,;\s]+$/, '')
+    .trim();
+}
+
 // ── The edited sections feed the generated documents ────────────────────────
 //
 // Without this the panel was a display: editing "Werkstudent IT Support" there
@@ -4216,12 +4258,13 @@ function applySchemaToProfile(p, schema) {
       if (sec.kind === 'rows') {
         p.skillRows = sec.items
           .filter(function (r) { return r && r.value; })
-          .map(function (r) { return { category: r.label || 'Kenntnisse', values: r.value }; });
+          .map(function (r) { return { category: r.label || 'Kenntnisse', values: joinValues([r.value]) }; });
       } else {
         // A skills block written as a list or a paragraph is still the candidate's
         // own words, and still belongs under the heading they chose.
-        const text = sec.items.map(function (i) { return typeof i === 'string' ? i : (i.value || ''); })
-          .filter(Boolean).join(', ');
+        const text = joinValues(sec.items.map(function (i) {
+          return typeof i === 'string' ? i : (i.value || '');
+        }));
         if (text) p.skillRows = [{ category: sec.heading, values: text }];
       }
       return;

@@ -849,6 +849,9 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
     ).replace('const SCHEMA_TARGET =', ''));
     eval(grab('schemaTargetFor'));
     eval(grab('splitPeriod'));
+    // applySchemaToProfile calls this; pulling one function out of a file means
+    // pulling out what it depends on too.
+    eval(grab('joinValues'));
     eval(grab('applySchemaToProfile'));
 
     test('a heading routes to the field the generator reads', () => {
@@ -888,6 +891,21 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
       assertEqual(p.experience[0].desc.split('\n').length, 2, 'one bullet per line, as the PDF prints them');
       assertEqual(p.skillRows[0].category, 'Security Tools', 'the candidate\'s own grouping');
       assertEqual(p.interests, 'Sport\nLesen', 'list joined by lines');
+    });
+
+    test('a value wrapped across lines is joined without doubling its comma', () => {
+      // A skills column reads "HTML , CSS , Django ," and continues "PHP , XML , SQL"
+      // on the next line. The comma is already there, and joining with ", " printed
+      // "Django ,, PHP".
+      const out = joinValues(['HTML , CSS , Django ,', 'PHP , XML , SQL']);
+      assertEqual(out, 'HTML, CSS, Django, PHP, XML, SQL', 'got: ' + out);
+      assert(!/,,/.test(out), 'no doubled separator');
+    });
+
+    test('nothing is lost when the wrap falls inside a bracket', () => {
+      const out = joinValues(['GUIProgrammierung(Javafx,', 'Swing , Scenebuilder)', 'Ms-Office Kenntnisse']);
+      assert(/Scenebuilder\)/.test(out), 'the bracket closes: ' + out);
+      assert(/Ms-Office Kenntnisse/.test(out), 'the item after it survives: ' + out);
     });
 
     test('an empty section never wipes a field the parser filled', () => {
