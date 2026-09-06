@@ -433,6 +433,35 @@ function registry(env) {
   return ATS_EMPLOYERS.concat(extra);
 }
 
+// A German board answers an English question, and mostly in German.
+//
+// TÜV NORD's own portal returns five postings for "Security"; searching their
+// sitemap for the same word returned three, because "IT-Sicherheitsexpert:in" and
+// "Projektleiter:in IT-Sicherheit" are the same job in the other language. Their
+// portal reads the whole posting and its category tag, which is where the English
+// word lives. All this connector has is the title, so the word has to travel.
+//
+// Kept to the terms this project is about. It is not a translation layer and should
+// not become one — an expansion that is nearly right turns a keyword filter into a
+// suggestion, which is worse than the narrow answer it replaced.
+const SYNONYMS = {
+  security: ['sicherheit'],
+  sicherheit: ['security'],
+  cyber: ['cyber'],
+  developer: ['entwickler'],
+  entwickler: ['developer'],
+  engineer: ['ingenieur'],
+  network: ['netzwerk'],
+  netzwerk: ['network'],
+  privacy: ['datenschutz'],
+  datenschutz: ['privacy'],
+};
+
+/** A search token and whatever it is also called. */
+function expand(token) {
+  return [token].concat(SYNONYMS[token] || []);
+}
+
 /**
  * Every posting from every configured employer.
  *
@@ -455,11 +484,13 @@ async function fetchAtsJobs(opts, env) {
   // Filtered here rather than by the caller: these APIs return an employer's whole
   // board, and a search for "IT Security" should not come back with every opening
   // the company has.
-  const tokens = String(keyword || '').toLowerCase().split(/\s+/).filter((t) => t.length > 2);
+  const tokens = String(keyword || '').toLowerCase().split(/\s+/)
+    .filter((t) => t.length > 2)
+    .map(expand);
   if (tokens.length) {
     jobs = jobs.filter((j) => {
       const hay = (j.title + ' ' + j.description + ' ' + j.sector).toLowerCase();
-      return tokens.some((t) => hay.includes(t));
+      return tokens.some((forms) => forms.some((t) => hay.includes(t)));
     });
   }
   return jobs;
