@@ -493,23 +493,18 @@
         <p id="cp-summary" class="cp-summary hidden"></p>
 
         <div class="card cp-chart-card">
+          <!-- One ladder at a time, chosen here. Twenty-four specialisations times
+               five rungs is 120 nodes, and putting them on one canvas made every
+               label small and the page scroll in two directions at once. A reader
+               wants one path; the others are one selection away. -->
           <div class="cp-chart-bar">
-            <p class="cp-chart-hint" title="Hover a role to preview its next steps. Use the arrow keys to move between roles.">
-              Click a role to trace where it leads.
-            </p>
-            <div class="cp-legend" id="cp-legend">
-              <span id="cp-source" class="cp-badge hidden"></span>
-              <span class="cp-legend-item"><i class="cp-dot lvl-start"></i>Start</span>
-              <span class="cp-legend-item"><i class="cp-dot lvl-feeder"></i>Feeder</span>
-              <span class="cp-legend-item"><i class="cp-dot lvl-entry"></i>Entry</span>
-              <span class="cp-legend-item"><i class="cp-dot lvl-mid"></i>Mid</span>
-              <span class="cp-legend-item"><i class="cp-dot lvl-adv"></i>Advanced</span>
+            <div class="cp-picker">
+              <label for="cp-domain">Specialisation</label>
+              <select id="cp-domain" class="field cp-domain-select" aria-label="Choose a specialisation"></select>
             </div>
+            <span id="cp-source" class="cp-badge hidden"></span>
           </div>
-          <div id="cp-chart" class="cp-chart">
-            <svg id="cp-links" class="cp-links" aria-hidden="true"></svg>
-            <div id="cp-cols" class="cp-cols" role="tree" aria-label="Career pathway roles"></div>
-          </div>
+          <ol id="cp-timeline" class="cp-timeline" aria-label="Career pathway steps"></ol>
         </div>
 
         <div id="cp-compare-bar" class="cp-compare-bar hidden">
