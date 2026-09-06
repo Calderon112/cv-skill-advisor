@@ -852,7 +852,17 @@ function wordRe(token) {
   let re = wordReCache.get(token);
   if (!re) {
     const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    re = new RegExp(`${escaped}([^a-z0-9]|$)`, 'i');
+    // A German compound may continue on either side of the term, and this allowed
+    // only one of them. "Arbeitssicherheit" matched "sicherheit" because the
+    // compound came first; "Sicherheitsexpertin" did not, because it came after —
+    // so TÜV's "IT-Sicherheitsexpert:in", the job an applicant in this field is
+    // actually looking for, failed a filter that "Fachkraft für Arbeitssicherheit"
+    // passed. Both directions now, which is what the language does.
+    //
+    // Terms that must not spread are already written with a trailing space in the
+    // term lists — 'soc ', 'iam ', 'cert ', 'pam ' — and the space is part of the
+    // token, so those keep their boundary.
+    re = new RegExp(escaped, 'i');
     wordReCache.set(token, re);
   }
   return re;
@@ -1897,8 +1907,10 @@ function buildSearchLocation(searchParams) {
 }
 
 function buildSearchKeyword(searchParams) {
-  // User's free-text keyword takes priority
-  const keyword = searchParams.get('keyword');
+  // User's free-text keyword takes priority. "was" is read as well, because
+  // buildBundesQueryParams() already reads both and a caller using one of them got
+  // the query built from it and the filters built from nothing.
+  const keyword = searchParams.get('keyword') || searchParams.get('was');
   const base = (keyword && keyword.trim())
     ? keyword.trim()
     // Fall back to domain mapping
@@ -1981,6 +1993,30 @@ const PHYSICAL_SECURITY_TERMS = [
 // Weaker signals, checked in the TITLE only. An IT posting may well mention
 // company events or a reception desk somewhere in its description; "Security bei
 // Veranstaltungen" as a job title is never a software role.
+// A second family the guarding list does not cover, and TÜV is full of it: safety
+// engineering. "Fachkraft für Arbeitssicherheit", "Sachverständiger
+// Anlagensicherheit", "Experte für integrale Gebäudesicherheit" — occupational
+// health, plant safety, building safety, fire protection. Real engineering work and
+// nothing to do with information security.
+//
+// German is why this needs its own list. "Sicherheit" is one word for both meanings,
+// and it is a positive term for the cybersecurity sector, so every one of these
+// matches on the word alone. English has "safety" and "security" and never had the
+// problem.
+//
+// Anlagensicherheit is the exception and stays out of the blanket reject: it is the
+// literal subject of OT security, which is a sector here. Rejected everywhere else.
+const SAFETY_TERMS = [
+  'arbeitssicherheit', 'arbeitsschutz', 'gesundheitsschutz', 'brandschutz',
+  'gebäudesicherheit', 'gebaeudesicherheit', 'unfallverhütung', 'unfallverhuetung',
+  'sicherheitsingenieur', 'sifa ', 'sicherheitsfachkraft', 'sicherheitsbeauftragter',
+  'betriebssicherheitsverordnung', 'lebensmittelsicherheit', 'verkehrssicherheit',
+  'spielplatzsicherheit', 'maschinensicherheit', 'aufzugssicherheit',
+];
+
+// Legitimate for OT security and for nothing else on this list.
+const SAFETY_TERMS_EXCEPT_OT = ['anlagensicherheit', 'prozesssicherheit'];
+
 const PHYSICAL_SECURITY_TITLE_TERMS = [
   'veranstaltung', 'empfangsdienst', 'einlasskontrolle', 'ordnungsdienst',
 ];
@@ -2023,6 +2059,13 @@ function jobMatchesSector(job, sector) {
   if (IT_DOMAINS.has(sector)
       && (PHYSICAL_SECURITY_TERMS.some(t => hay.includes(t))
           || PHYSICAL_SECURITY_TITLE_TERMS.some(t => title.includes(t)))) return false;
+
+  // Safety, not security. Matched on the title alone: a security engineering post
+  // may well mention Arbeitsschutz somewhere in a description of the company, and
+  // rejecting on that would throw away the job it was looking for.
+  if (IT_DOMAINS.has(sector) && SAFETY_TERMS.some(t => title.includes(t))) return false;
+  if (IT_DOMAINS.has(sector) && sector !== 'otsec'
+      && SAFETY_TERMS_EXCEPT_OT.some(t => title.includes(t))) return false;
 
   return terms.some(t => wordRe(t).test(hay));
 }
@@ -4234,6 +4277,18 @@ const server = http.createServer(async (req, res) => {
     if ((employerMode === 'major' || employerMode === 'it' || employerName)
         && platform === 'bundesagentur') {
       const found = await fetchJobsForEmployers(parsedUrl.searchParams, employerMode, employerName, depth);
+      // The employer's own board, alongside the agency's record of it. This is the
+      // half that never reaches the Bundesagentur: TÜV NORD carries 139 postings on
+      // its own site against the 63 it files, and a search for "Security" there
+      // returns five that the agency does not have — three of them at TÜV
+      // Informationstechnik, which is the group's IT-security arm and the single
+      // employer an applicant in this field would most want to see.
+      const own = await ats.fetchAtsJobs({ keyword, employer: employerName }).catch(() => []);
+      if (own.length) {
+        found.jobs = found.jobs.concat(own);
+        logScrape(`   ▸ employer sites: ${own.length} postings`);
+      }
+
       if (found.jobs.length) {
         facetEmployers = found.employers;
         // Merged rather than substituted: the keyword search still holds postings
