@@ -2475,6 +2475,14 @@ function findSkills(text) {
  * These are search URLs, not hand-picked pages: a curated link rots, a search for
  * the skill does not. The UI labels them as searches.
  */
+// The soft skills, by label, shared by the interview block and the roadmap. They
+// live in two groups: the Sprint-1 "Career skills" and the taxonomy's own set.
+function softSkillLabels() {
+  return new Set(skillGroups
+    .filter(g => /soft skills|career skills/i.test(g.category))
+    .flatMap(g => g.skills.map(s => s.label.toLowerCase())));
+}
+
 function roadmapLinks(skillLabel, resourceText) {
   const q = encodeURIComponent(skillLabel);
   // The skill's own name decides first: the taxonomy's resource for "Microsoft
@@ -2482,17 +2490,24 @@ function roadmapLinks(skillLabel, resourceText) {
   // vendor. Fall back to the resource text when the name says nothing.
   const r = `${skillLabel} ${resourceText || ''}`.toLowerCase();
 
-  let lab = { label: 'Hands-on lab', url: `https://tryhackme.com/search?searchTerm=${q}` };
-  if (/hack ?the ?box|htb/.test(r)) lab = { label: 'Hands-on lab', url: `https://app.hackthebox.com/search?query=${q}` };
-  else if (/owasp|juice shop/.test(r)) lab = { label: 'Hands-on lab', url: `https://owasp.org/search/?searchQuery=${q}` };
-
   let course = { label: 'Course', url: `https://www.coursera.org/search?query=${q}` };
   if (/ms learn|microsoft|sentinel|azure/.test(r)) course = { label: 'Course', url: `https://learn.microsoft.com/en-us/search/?terms=${q}` };
   else if (/splunk/.test(r)) course = { label: 'Course', url: 'https://www.splunk.com/en_us/training/free-courses/overview.html' };
   else if (/sans/.test(r)) course = { label: 'Course', url: `https://www.sans.org/search/?q=${q}` };
   else if (/mitre|att&ck/.test(r)) course = { label: 'Course', url: 'https://attack.mitre.org/resources/training/' };
 
-  return [lab, course, { label: 'Video', url: `https://www.youtube.com/results?search_query=${q}+tutorial` }];
+  const video = { label: 'Video', url: `https://www.youtube.com/results?search_query=${q}+tutorial` };
+
+  // A soft skill gets no lab. The plan was sending a learner to HackTheBox to
+  // practise "communication" and to TryHackMe for "problem solving" — a link that
+  // is not merely useless but tells the reader the plan was not written for them.
+  if (softSkillLabels().has(String(skillLabel).toLowerCase())) return [course, video];
+
+  let lab = { label: 'Hands-on lab', url: `https://tryhackme.com/search?searchTerm=${q}` };
+  if (/hack ?the ?box|htb/.test(r)) lab = { label: 'Hands-on lab', url: `https://app.hackthebox.com/search?query=${q}` };
+  else if (/owasp|juice shop/.test(r)) lab = { label: 'Hands-on lab', url: `https://owasp.org/search/?searchQuery=${q}` };
+
+  return [lab, course, video];
 }
 
 /**
@@ -2540,9 +2555,7 @@ function buildTemplateInterview(role, skills) {
   // "Show me how you would use Communication in your first week" is not a technical
   // question. Soft skills belong in the behavioural block, not this one. They live
   // in two groups: the Sprint-1 "Career skills" and the taxonomy's own soft-skill set.
-  const SOFT = new Set(skillGroups
-    .filter(g => /soft skills|career skills/i.test(g.category))
-    .flatMap(g => g.skills.map(s => s.label.toLowerCase())));
+  const SOFT = softSkillLabels();
   const technical = (list) => list.filter(s => !SOFT.has(String(s).toLowerCase()));
 
   const source = technical(known
