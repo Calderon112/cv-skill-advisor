@@ -97,6 +97,8 @@ function createGuards({ authenticate, getToken, publicBaseUrl, publicDir }) {
     { path: '/api/generate-interview',bucket: 'llm',    max: 20, windowMs: HOUR, msg: 'Generation limit reached — try again later.' },
     { path: '/api/extract-profile',   bucket: 'llm',    max: 20, windowMs: HOUR, msg: 'Generation limit reached — try again later.' },
     { path: '/api/job-consult',       bucket: 'llm',    max: 20, windowMs: HOUR, msg: 'Generation limit reached — try again later.' },
+    // Cheaper and asked for far more often: one press per position while editing.
+    { path: '/api/bullet-suggestions', bucket: 'llm',   max: 60, windowMs: HOUR, msg: 'Generation limit reached — try again later.' },
     { path: '/api/market-report',     bucket: 'llm',    max: 10, windowMs: HOUR, msg: 'Report limit reached — try again later.' },
     // CPU and third-party scraping.
     { path: '/api/parse-pdf',        bucket: 'pdf',    max: 20, windowMs: HOUR, msg: 'Too many PDF uploads — wait a while.' },
@@ -137,6 +139,7 @@ function createGuards({ authenticate, getToken, publicBaseUrl, publicDir }) {
     '/api/generate-interview', '/api/extract-profile', '/api/job-consult',
     '/api/market-report', '/api/pipeline', '/api/graph-run', '/api/graph-stream',
     '/api/explain-score', '/api/cv-schema',
+    '/api/bullet-suggestions',
     '/api/semantic-match',
     // CPU, and a large upload.
     '/api/parse-pdf', '/api/analyze',

@@ -5154,6 +5154,81 @@ const REPEAT_DEFS = {
   cert: { key: 'certifications', fields: [['name','Certificate name'],['year','Year']] },
 };
 
+
+// ── Wording drawn from the CV, never from a phrase library ───────────────────
+//
+// The form asks for a description and gets a fragment — "Jira", "SuiteCrm". A
+// recruiter reads a bullet. Every CV builder fills that gap with pre-written lines,
+// and those lines are the problem: "Reduced incident response time by 40%" reads
+// well, is a claim the applicant never made, and is recognisable to anyone who has
+// read a hundred CVs.
+//
+// So these are rewrites of what this CV already says. server/bullets.js checks each
+// one against the source before it is offered here, and says how many it refused —
+// a suggestion that vanishes silently is the kind of silence this project keeps
+// finding bugs behind.
+
+/**
+ * The candidate's own words, in the order they are likely to exist: the CV that was
+ * imported, the text pasted into the import box but not yet extracted, and failing
+ * both, the profile they typed by hand. The middle one matters — pasting a CV and
+ * going straight to the form is an ordinary thing to do, and without it the button
+ * answers "your CV says too little" to someone whose CV is on the screen.
+ */
+function suggestionSource() {
+  return state.cvText
+    || ($('cv-input') && $('cv-input').value)
+    || (typeof profileToText === 'function' ? profileToText() : '')
+    || '';
+}
+
+async function loadBulletSuggestions(index, btn, host) {
+  const entry = (state.profile.experience || [])[index];
+  if (!entry) return;
+  const source = suggestionSource();
+  if (!source.trim()) {
+    host.innerHTML = '<span class="hint">Erst einen Lebenslauf importieren oder das Profil ausfüllen.</span>';
+    return;
+  }
+
+  btn.disabled = true;
+  const label = btn.textContent;
+  btn.textContent = 'Wird geschrieben…';
+  host.innerHTML = '';
+  try {
+    const r = await fetch(`${baseUrl}/api/bullet-suggestions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ cvText: source, entry, targetRole: state.profile.title || '' }),
+    });
+    const d = await r.json();
+    if (!d.ok || !(d.suggestions || []).length) {
+      host.innerHTML = '<span class="hint">Keine Vorschläge — der Lebenslauf sagt zu dieser Stelle noch zu wenig.</span>';
+      return;
+    }
+    host.innerHTML = d.suggestions.map(s =>
+      `<button type="button" class="pf-suggest-item" data-line="${esc(s)}">+ ${esc(s)}</button>`).join('')
+      // Said out loud rather than hidden. The number is the guard doing its job, and
+      // seeing it is how anyone would ever notice it doing the wrong job.
+      + ((d.dropped || []).length
+        ? `<span class="hint">${d.dropped.length} Vorschlag/Vorschläge verworfen: nicht durch den Lebenslauf gedeckt.</span>`
+        : '');
+
+    host.querySelectorAll('.pf-suggest-item').forEach(el => el.addEventListener('click', () => {
+      const line = el.dataset.line;
+      const cur = String(entry.desc || '').trim();
+      entry.desc = cur ? cur + '\n' + line : line;
+      saveProfileToStorage();
+      renderRepeatList('exp');            // redraws the textarea with the new line
+    }));
+  } catch (_) {
+    host.innerHTML = '<span class="hint">Vorschläge konnten nicht geladen werden.</span>';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
 function renderRepeatList(type) {
   const def  = REPEAT_DEFS[type];
   const list = $(`pf-${type}-list`);
@@ -5166,6 +5241,11 @@ function renderRepeatList(type) {
           ? `<textarea class="field" rows="2" data-f="${f}" placeholder="${ph}">${esc(item[f] || '')}</textarea>`
           : `<input class="field" type="text" data-f="${f}" placeholder="${ph}" value="${esc(item[f] || '')}" />`).join('')}
         <button class="repeat-del" data-i="${i}" title="Remove">Remove</button>
+        ${type === 'exp' ? `
+        <div class="pf-suggest">
+          <button type="button" class="btn btn-ghost btn-xs pf-suggest-btn" data-i="${i}">Formulierungen vorschlagen</button>
+          <div class="pf-suggest-list" data-i="${i}"></div>
+        </div>` : ''}
       </div>`).join('')
     : '<span class="hint">Nothing yet — click “Add” above.</span>';
 
@@ -5178,6 +5258,9 @@ function renderRepeatList(type) {
         saveProfileToStorage();
       })
     );
+    const sBtn = row.querySelector('.pf-suggest-btn');
+    if (sBtn) sBtn.addEventListener('click', () =>
+      loadBulletSuggestions(i, sBtn, row.querySelector('.pf-suggest-list')));
     row.querySelector('.repeat-del').addEventListener('click', () => {
       state.profile[def.key].splice(i, 1);
       saveProfileToStorage(); renderRepeatList(type);

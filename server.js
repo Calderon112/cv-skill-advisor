@@ -46,6 +46,7 @@ try { pdfParse = require('pdf-parse'); } catch(_) { pdfParse = null; }
 const { SECURITY_GROUPS, SECURITY_ROLES } = require('./security-skills.js');
 const skillMatcher = require('./skill-matcher.js');
 const careerPath = require('./server/career-path.js');
+const bullets = require('./server/bullets.js');
 const llm    = require('./server/llm.js');
 const email  = require('./server/email.js');
 const agents = require('./server/agents.js');
@@ -3820,6 +3821,25 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ── AI job consultation (Oracle): read the posting, compare to the profile ──
+  // Better wording for one position, drawn from the candidate's own CV. Every line
+  // is checked against the source before it is offered — server/bullets.js explains
+  // why that check is not the verbatim one the schema parser uses.
+  if (parsedUrl.pathname === '/api/bullet-suggestions' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const { cvText, entry, targetRole } = JSON.parse(body || '{}');
+        const out = await bullets.suggestBullets({ cvText, entry, targetRole }, llm);
+        if (!out) { sendJson(res, 200, { ok: false, reason: 'no-suggestions' }); return; }
+        sendJson(res, 200, { ok: true, suggestions: out.suggestions, dropped: out.dropped });
+      } catch (e) {
+        sendJson(res, 200, { ok: false, reason: 'error', detail: e.message });
+      }
+    });
+    return;
+  }
+
   if (parsedUrl.pathname === '/api/job-consult' && req.method === 'POST') {
     if (!llm.isAvailable()) { sendJson(res, 200, { ok: false, reason: 'llm-not-configured' }); return; }
     let body = '';

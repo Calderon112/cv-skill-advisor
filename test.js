@@ -1349,6 +1349,63 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
     });
   }
 
+  section('Wording suggestions — rewrites of the CV, not a phrase library');
+
+  {
+    const bullets = require('./server/bullets.js');
+    const CV = [
+      'Werkstudent IT System Integration, Alberdingk-Boley, Krefeld Urdingen',
+      'Jira Cloud Migration (Asset Management). Vollständige Bestandsaufnahme der Assets,',
+      'ihrer Metadaten und Beziehungen. Funktionstests, um sicherzustellen, dass alle Assets',
+      'korrekt funktionieren. Dokumentation von Fehlern und Unstimmigkeiten.',
+      'Systemadministration: Deployment auf neue Rechner via PXE-Boot.',
+      'Werkstudent IT Support: Administration von SuiteCrm, Unternehmens-Cloud mit Nextcloud.',
+      'Android Reverse Engineerieng, Steganographie.',
+    ].join('\n');
+    const source = bullets.norm(CV);
+
+    test('a rewrite of what the CV says is accepted', () => {
+      // The point of the feature: the same facts, phrased the way a CV phrases them.
+      assert(bullets.grounded('Jira Cloud Migration im Asset Management durchgeführt', source), 'reworded');
+      assert(bullets.grounded('Administration der Systeme und Deployment via PXE-Boot', source),
+        'German compounds: Systemadministration supports "Administration der Systeme"');
+      assert(bullets.grounded('Android Reverse Engineering und Steganographie angewendet', source),
+        'a verb the CV never used is allowed — rewriting is the point');
+    });
+
+    test('an invented claim is refused', () => {
+      // Every one of these reads well and is exactly what a phrase library would
+      // offer. None of them is in the CV.
+      assert(!bullets.grounded('ISO 27001 Audits bei Kunden durchgeführt', source), 'a standard');
+      assert(!bullets.grounded('OSCP-Zertifizierung erworben', source), 'a certification');
+      assert(!bullets.grounded('Reduzierte die Incident-Response-Zeit um 40% durch SIEM-Tuning', source),
+        'a metric and a tool — the classic CV-builder line');
+      assert(!bullets.grounded('Leitung eines Teams von 12 Sicherheitsanalysten', source), 'a headcount');
+      assert(!bullets.grounded('Led SOC operations using Splunk across 3 regions', source),
+        'English too: proper nouns and numbers are checked in any language');
+    });
+
+    test('a German nominalisation is an act, not a claim', () => {
+      // Ausführung, Validierung, Durchführung: German makes capitalised nouns out of
+      // verbs, and an earlier guard read them as claims — rejecting "Ausführung von
+      // Funktionstests" for a CV that says "Funktionstests". Exempt, and nothing is
+      // lost, because an invented claim always names a thing rather than an act.
+      assert(bullets.grounded('Erstellung und Ausführung von Funktionstests der Assets', source),
+        'the act is allowed to be new');
+      assert(!bullets.grounded('Durchführung von Penetrationstests bei Kunden', source),
+        'the thing it acts on is still checked');
+    });
+
+    test('the words that carry a claim are the nouns, the acronyms and the numbers', () => {
+      const words = bullets.claimWords('Migrierte Jira Assets mit SIEM in 3 Regionen').map(w => w.word);
+      assert(words.indexOf('jira') !== -1, 'a proper noun');
+      assert(words.indexOf('siem') !== -1, 'an acronym');
+      assert(words.indexOf('3') !== -1, 'a number');
+      assert(words.indexOf('migrierte') === -1, 'the first word: sentence case proves nothing');
+      assert(words.indexOf('mit') === -1, 'a lower-case function word');
+    });
+  }
+
   section('Employer filter — who is hiring, not who is mentioned');
 
   {

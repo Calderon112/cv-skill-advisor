@@ -2322,6 +2322,17 @@ option   { color: var(--text); background: var(--bg-card); }
   .pf-preview-frame { max-width: 420px; margin: 0 auto; }
 }
 
+/* ── Wording suggestions ── */
+.pf-suggest { grid-column: 1 / -1; margin-top: 8px; }
+.pf-suggest-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.pf-suggest-item {
+  text-align: left; width: 100%; cursor: pointer;
+  padding: 8px 11px; border-radius: 8px; font-size: 12.5px; line-height: 1.5;
+  background: var(--bg-elevated); border: 1px dashed var(--border); color: var(--text);
+}
+.pf-suggest-item:hover { border-color: var(--teal); border-style: solid; }
+.pf-suggest-list .hint { font-size: 11px; }
+
 .profile-modes {
   display: inline-flex;
   align-items: center;
