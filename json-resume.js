@@ -130,6 +130,13 @@
 
     const work = (p.experience || []).map((x) => tidy({
       name: str(x.org),
+      // The same employer under the pre-1.0 key as well. The schema renamed
+      // work.company to work.name, and much of the theme ecosystem never followed:
+      // jsonresume-theme-macchiato reads {{this.company}}, so a correct v1.0.0
+      // export renders with a blank employer — the one field a recruiter looks for
+      // first. Emitting both costs a few bytes and makes the file work in both
+      // halves of the ecosystem.
+      company: str(x.org),
       position: str(x.role),
       location: str(x.location),
       startDate: toIsoDate(x.start),
@@ -255,7 +262,7 @@
       })).filter(s => s.label),
       experience: (r.work || []).map((w, i) => ({
         role: str(w.position),
-        org: str(w.name),
+        org: str(w.name || w.company),   // either key, whichever the file used
         location: str(w.location),
         start: asTyped('work', i, 'start', w.startDate),
         end: asTyped('work', i, 'end', w.endDate),
