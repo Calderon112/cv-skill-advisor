@@ -1406,6 +1406,98 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
     });
   }
 
+  section('JSON Resume — the profile as an interchange format');
+
+  {
+    const JR = require('./json-resume.js');
+    const PROFILE = {
+      firstName: 'Jardel Galdos', lastName: 'Kenne', email: 'benigo700@gmail.com',
+      phone: '+49 176 12345678', location: 'Gelsenkirchen', nationality: 'kamerunisch',
+      languages: 'Deutsch (C1), Englisch, Französisch', title: 'IT-Sicherheitsexpert:in',
+      summary: 'Informatikstudent an der Westfälischen Hochschule.', photo: '',
+      softSkills: 'Teamfähig', interests: 'Fußball',
+      skillRows: [{ label: 'Sprachen', value: 'Java, Python' }],
+      cvSchema: [{ heading: 'PRAKTISCHE KENNTNISSE', kind: 'list', items: ['Java'] }],
+      themeId: 'modern',
+      skills: [{ key: 'java', label: 'Java' }, { label: 'Python' }],
+      experience: [{ role: 'Werkstudent IT System Integration', org: 'Alberdingk-Boley',
+        location: 'Krefeld', start: '06.2024', end: '11.2024',
+        desc: 'Jira Cloud Migration\nSystemadministration' }],
+      education: [{ degree: 'Bachelor of Science, Informatik', org: 'Westfälische Hochschule',
+        location: '', start: 'Nov. 2020', end: '', grade: '' }],
+      certifications: [{ name: 'C1 Deutsch', issuer: 'Universität Paderborn', year: '2019' }],
+      projects: [{ name: 'DistanceGaming', org: 'Studienprojekt', desc: 'Plattform',
+        tech: 'WebGL, React Native', year: '2022' }],
+    };
+
+    test('a German date reaches the file as ISO and comes back as it was typed', () => {
+      // Both halves matter and they pull in opposite directions. Anything reading the
+      // file wants 2020-11; the person who typed "Nov. 2020" is looking at it in the
+      // form and will see it printed on their PDF.
+      assertEqual(JR.toIsoDate('06.2024'), '2024-06', 'numeric German');
+      assertEqual(JR.toIsoDate('6/2024'), '2024-06', 'slash, single digit');
+      assertEqual(JR.toIsoDate('Nov. 2020'), '2020-11', 'abbreviated German month');
+      assertEqual(JR.toIsoDate('2019'), '2019', 'a bare year is a valid ISO date');
+      assertEqual(JR.toIsoDate('seit 2020'), '', 'unreadable rather than guessed into a month');
+
+      const out = JR.toJsonResume(PROFILE);
+      assertEqual(out.education[0].startDate, '2020-11', 'the file carries ISO');
+      assertEqual(JR.fromJsonResume(out).profile.education[0].start, 'Nov. 2020',
+        'the form gets its own words back');
+    });
+
+    test('an export followed by an import returns the same profile', () => {
+      // The schema has no place for a nationality, the CV's own headings, the chosen
+      // template or a skill's taxonomy key — and that key is what the job scoring
+      // matches on, so losing it would quietly change every score. They ride in meta.
+      const back = JR.fromJsonResume(JR.toJsonResume(PROFILE)).profile;
+      Object.keys(PROFILE).forEach((k) => {
+        assertEqual(JSON.stringify(back[k]), JSON.stringify(PROFILE[k]), 'field: ' + k);
+      });
+    });
+
+    test('the export says nothing the profile does not know', () => {
+      // An empty string in a resume.json reads as "the candidate has none" to whatever
+      // consumes it, which is a different statement from "not recorded".
+      const thin = JR.toJsonResume({ firstName: 'A', lastName: 'B' });
+      assertEqual(thin.basics.name, 'A B', 'the name survives');
+      assert(!('email' in thin.basics), 'no empty email');
+      assert(!('work' in thin), 'no empty work array');
+      assert(!('location' in thin.basics), 'no empty location object');
+    });
+
+    test('a foreign resume.json is read, and what it loses is named', () => {
+      // The official sample carries five sections this profile has no field for.
+      // Reporting them by name is the point: "some fields were dropped" tells the
+      // reader nothing they can act on.
+      const foreign = {
+        basics: { name: 'Richard Hendriks', label: 'Programmer', email: 'r@h.com',
+          profiles: [{ network: 'LinkedIn', username: 'rh' }] },
+        work: [{ name: 'Pied Piper', position: 'CEO', startDate: '2013-12',
+          highlights: ['Built an algorithm'] }],
+        education: [{ institution: 'University', studyType: 'Bachelor', area: 'Software Development' }],
+        skills: [{ name: 'Web Development' }],
+        languages: [{ language: 'English', fluency: 'Native speaker' }],
+        awards: [{ title: 'Award' }], volunteer: [{ organization: 'CoderDojo' }],
+      };
+      const { profile, warnings } = JR.fromJsonResume(foreign);
+      assertEqual(profile.firstName, 'Richard', 'given name');
+      assertEqual(profile.lastName, 'Hendriks', 'family name');
+      assertEqual(profile.experience[0].desc, 'Built an algorithm', 'highlights become the description');
+      assertEqual(profile.education[0].degree, 'Bachelor, Software Development', 'studyType and area rejoined');
+      assertEqual(profile.languages, 'English (Native speaker)', 'back to the single line the form has');
+      assert(warnings.some(w => /Auszeichnungen/.test(w)), 'awards are named');
+      assert(warnings.some(w => /Ehrenamt/.test(w)), 'volunteering is named');
+      assert(warnings.some(w => /Profil-Links/.test(w)), 'profile links are named');
+    });
+
+    test('a file that is not a resume is refused before it replaces anything', () => {
+      assert(!JR.looksLikeResume(null), 'null');
+      assert(!JR.looksLikeResume({ hello: 'world' }), 'some other JSON');
+      assert(JR.looksLikeResume({ basics: { name: 'X' } }), 'basics alone is enough');
+    });
+  }
+
   section('Employer filter — who is hiring, not who is mentioned');
 
   {

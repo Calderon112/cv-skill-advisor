@@ -918,6 +918,24 @@
             <span id="pf-save-msg" class="form-msg" style="align-self:center"></span>
           </div>
 
+          <!-- The one CV interchange format with an ecosystem behind it. Nothing here
+               renders a JSON Resume theme — those emit HTML and this project draws its
+               own PDFs, which is what keeps the text order readable by an applicant
+               tracking system. This is so a profile can arrive from elsewhere and
+               leave for elsewhere. -->
+          <div class="card">
+            <div class="card-header"><h2>JSON Resume</h2></div>
+            <p class="lede">Standardformat für Lebenslaufdaten (jsonresume.org). Der Export
+              enthält alles, was dieses Profil kennt — auch die Felder, für die das Schema
+              keinen Platz hat; ein Re-Import stellt sie wieder her.</p>
+            <div class="form-actions">
+              <button id="pf-jr-export" class="btn btn-ghost btn-sm">resume.json exportieren</button>
+              <button id="pf-jr-import" class="btn btn-ghost btn-sm">resume.json importieren</button>
+              <input id="pf-jr-file" type="file" accept=".json,application/json" hidden />
+            </div>
+            <div id="pf-jr-note" class="pf-warn"></div>
+          </div>
+
           <div class="card danger-zone-card">
             <div class="card-header">
               <h2>Danger zone</h2>
@@ -1214,6 +1232,7 @@
   <script src="rerank.js"></script>
   <script src="cv-themes.js"></script>
   <script src="cv-preview.js"></script>
+  <script src="json-resume.js"></script>
   <script src="app.js"></script>
   <!-- ── GDPR Banner ── -->
 <div id="gdpr-banner" style="

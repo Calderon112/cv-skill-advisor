@@ -4944,7 +4944,11 @@ function profileHasContent(p) {
   return Boolean(p.firstName || p.lastName || p.summary
     || (p.skills || []).length || (p.experience || []).length
     || (p.education || []).length || (p.certifications || []).length
-    || ((p.cvSchema && p.cvSchema.sections) || []).length);
+    // cvSchema is an array of sections, not an object holding one. Reading
+    // .sections made this clause always false, so a profile built only from an
+    // imported CV's own headings — no name typed, no fixed fields — was told the
+    // preview had nothing to draw while the document was full.
+    || (p.cvSchema || []).length);
 }
 
 /**
@@ -5032,6 +5036,89 @@ function wireProfileLiveFields() {
     });
   });
 }
+
+
+// ── JSON Resume: in and out ─────────────────────────────────────────────────
+//
+// json-resume.js does the conversion; this wires it to two buttons. The import
+// replaces the profile, so it asks first — and it says what the file carried that
+// this profile has no field for, rather than dropping those sections in silence.
+
+function jrNote(html, kind) {
+  const el = $('pf-jr-note');
+  if (!el) return;
+  el.innerHTML = html || '';
+  el.className = 'pf-warn' + (kind ? ' ' + kind : '');
+}
+
+function exportJsonResume() {
+  if (typeof JsonResume === 'undefined') return;
+  const resume = JsonResume.toJsonResume(state.profile);
+  const name = [state.profile.firstName, state.profile.lastName]
+    .filter(Boolean).join('_').replace(/\s+/g, '_') || 'resume';
+  const blob = new Blob([JSON.stringify(resume, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name + '.json';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Released on the next tick: revoking before the click is handled cancels the
+  // download in some browsers.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+  jrNote('resume.json exportiert.', 'ok');
+}
+
+async function importJsonResume(file) {
+  if (!file || typeof JsonResume === 'undefined') return;
+  let parsed;
+  try {
+    parsed = JSON.parse(await file.text());
+  } catch (_) {
+    jrNote('Die Datei ist kein gültiges JSON.', 'bad');
+    return;
+  }
+  if (!JsonResume.looksLikeResume(parsed)) {
+    jrNote('Das sieht nicht nach einem JSON Resume aus — es fehlen basics, work und education.', 'bad');
+    return;
+  }
+  // The profile on screen is about to be replaced, and it may be the only copy.
+  if (!confirm('Das aktuelle Profil wird durch die Datei ersetzt. Fortfahren?')) return;
+
+  const { profile, warnings } = JsonResume.fromJsonResume(parsed);
+  state.profile = Object.assign(emptyProfile(), profile);
+  saveProfileToStorage();
+  renderProfileForm();
+  renderRepeatList('exp'); renderRepeatList('edu'); renderRepeatList('cert');
+  if (typeof renderSkillTags === 'function') renderSkillTags();
+  // With the sections, not without: renderCvSchema() takes the schema and hides
+  // the panel when it is handed nothing — which would have swallowed exactly the
+  // sections a resume.json exported from here carries back.
+  if (typeof renderCvSchema === 'function') renderCvSchema(state.profile.cvSchema);
+  if (typeof updateProfileSummary === 'function') updateProfileSummary();
+  schedulePreview();
+
+  const counts = [
+    profile.experience.length + ' Stationen',
+    profile.education.length + ' Ausbildungen',
+    profile.skills.length + ' Fähigkeiten',
+  ].join(', ');
+  jrNote(esc('Importiert: ' + counts + '.')
+    + (warnings.length
+      ? '<br>Nicht übernommen, weil dieses Profil dafür kein Feld hat:<br>· '
+        + warnings.map(esc).join('<br>· ')
+      : ''),
+    warnings.length ? '' : 'ok');
+}
+
+$('pf-jr-export')?.addEventListener('click', exportJsonResume);
+$('pf-jr-import')?.addEventListener('click', () => $('pf-jr-file')?.click());
+$('pf-jr-file')?.addEventListener('change', (e) => {
+  const f = e.target.files && e.target.files[0];
+  if (f) importJsonResume(f);
+  e.target.value = '';                      // so the same file can be picked twice
+});
 
 // Profile page: download the CV exactly as the profile defines it.
 function downloadProfilePDF() {
