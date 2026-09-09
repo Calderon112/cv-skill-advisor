@@ -814,6 +814,14 @@
 
         <!-- Manual mode -->
         <div id="profile-manual" class="profile-mode-panel">
+        <!-- Form on the left, the document itself on the right.
+             The preview is not a mock-up of the CV: it is the very PDF the download
+             button produces, rendered from the same buildProfilePdfDoc() call. A
+             separate HTML approximation is the usual way to build this and it drifts
+             from the real output the first time a theme changes — here the two
+             cannot disagree, because there is only one of them. -->
+        <div class="pf-split">
+        <div class="pf-form">
         <!-- The CV's own sections, rendered from what the document actually
              contains. Empty until a CV is imported; the fixed form below stays the
              way in for anyone typing a profile by hand, where there is no document
@@ -918,6 +926,32 @@
             <p class="danger-note">This will remove your current profile, saved skills, experience and certifications. Your job tracking data will remain.</p>
             <button id="pf-reset" class="btn btn-ghost btn-sm">Delete profile data</button>
           </div>
+        </div><!-- /.pf-form -->
+
+        <aside class="pf-preview" id="pf-preview">
+          <div class="pf-preview-bar">
+            <span class="pf-preview-title">Vorschau</span>
+            <span class="pf-preview-meta" id="pf-preview-meta"></span>
+          </div>
+          <!-- A canvas, not a framed PDF. The browser's own viewer keeps its own
+               zoom inside a small frame and crops the left edge of the page — the
+               whole rail of a two-column theme — and ignores every fit parameter.
+               This repaints the drawing calls the generator actually made. -->
+          <div class="pf-preview-frame">
+            <canvas id="pf-preview-canvas" aria-label="Lebenslauf-Vorschau"></canvas>
+            <p class="pf-preview-empty" id="pf-preview-empty">Die Vorschau erscheint,
+              sobald der Lebenslauf Inhalt hat.</p>
+          </div>
+          <div class="pf-preview-pager hidden" id="pf-preview-pager">
+            <button class="btn btn-ghost btn-xs" id="pf-page-prev" aria-label="Vorherige Seite">‹</button>
+            <span id="pf-page-label">1 / 1</span>
+            <button class="btn btn-ghost btn-xs" id="pf-page-next" aria-label="Nächste Seite">›</button>
+          </div>
+          <div class="pf-preview-actions">
+            <button id="pf-download-pdf-2" class="btn btn-primary btn-sm">PDF laden</button>
+          </div>
+        </aside>
+        </div><!-- /.pf-split -->
         </div>
       </section>
 
@@ -1179,6 +1213,7 @@
   <script src="security-learning.js"></script>
   <script src="rerank.js"></script>
   <script src="cv-themes.js"></script>
+  <script src="cv-preview.js"></script>
   <script src="app.js"></script>
   <!-- ── GDPR Banner ── -->
 <div id="gdpr-banner" style="

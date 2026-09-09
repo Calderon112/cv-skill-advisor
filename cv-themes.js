@@ -154,8 +154,12 @@
       railHeading: 'rule',
       photo: 'rail',
       layout: {
-        rail: ['kontakt', 'sprachen', 'softskills', 'interessen'],
-        main: ['berufserfahrung', 'skills', 'projekte', 'ausbildung', 'weiterbildung'],
+        // ausbildung sits with the rail because that is where its renderer draws —
+        // at the rail's x, using the rail's cursor. Listing it under main ran it in
+        // the main pass while it painted on the rail, so its position depended on
+        // pass order rather than on this declaration.
+        rail: ['kontakt', 'sprachen', 'ausbildung', 'softskills', 'interessen'],
+        main: ['berufserfahrung', 'skills', 'projekte', 'weiterbildung'],
       },
     },
 

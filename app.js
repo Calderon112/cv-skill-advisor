@@ -3402,6 +3402,11 @@ function loadProfile() {
 
 function saveProfileToStorage() {
   localStorage.setItem(PROFILE_KEY, JSON.stringify(state.profile));
+  // Every mutation in this file already funnels through here — the repeat lists,
+  // the skill tags, the CV sections, the photo, the theme. Redrawing from this one
+  // place keeps the preview honest without a call at each of the sixteen sites,
+  // and without one being forgotten the next time a field is added.
+  if (typeof schedulePreview === 'function') schedulePreview();
 }
 
 // ── The CV's own sections, as an editable form ─────────────────────────────
@@ -4366,7 +4371,14 @@ function buildProfilePdfDoc(profile, overrides) {
   const lib = window.jspdf;
   if (!lib || !lib.jsPDF) { toast('PDF library not loaded — try refreshing the page.', 'error'); return null; }
 
-  const doc = new lib.jsPDF({ unit: 'pt', format: 'a4' });
+  const real = new lib.jsPDF({ unit: 'pt', format: 'a4' });
+  // The preview asks for a recording. Everything below then draws through a proxy
+  // that performs each call on the real document and keeps the drawing ones, so the
+  // canvas repaint is a transcript of this very build rather than a second layout
+  // that has to be kept in step by hand.
+  const rec = (overrides && overrides.record && typeof CvPreview !== 'undefined')
+    ? CvPreview.record(real) : null;
+  const doc = rec ? rec.proxy : real;
   const PAGE_W = doc.internal.pageSize.getWidth();
   const PAGE_H = doc.internal.pageSize.getHeight();
 
@@ -4761,10 +4773,14 @@ function buildProfilePdfDoc(profile, overrides) {
         p.education.forEach(function (x) {
           station(function () {
             const dates = [x.start, x.end].filter(Boolean).join(' – ');
-            if (dates)    write(dates, SIDE_E_X, SIDE_E_W, 8, 'normal', GREY, 10);
-            if (x.degree) write(x.degree, SIDE_E_X, SIDE_E_W, 9, 'bold', DARK, 11);
+            // RAIL_TEXT and RAIL_MUTED, like every other section that draws here.
+            // This one was writing in DARK and GREY — the main column's colours —
+            // which is invisible on a theme whose rail is filled dark. On Modern the
+            // degree was navy on navy: present in the file, unreadable in it.
+            if (dates)    write(dates, SIDE_E_X, SIDE_E_W, 8, 'normal', RAIL_MUTED, 10);
+            if (x.degree) write(x.degree, SIDE_E_X, SIDE_E_W, 9, 'bold', RAIL_TEXT, 11);
             const sub = [x.org, x.grade ? 'Note: ' + x.grade : ''].filter(Boolean).join(' | ');
-            if (sub)      write(sub, SIDE_E_X, SIDE_E_W, 8.5, 'normal', GREY, 11);
+            if (sub)      write(sub, SIDE_E_X, SIDE_E_W, 8.5, 'normal', RAIL_MUTED, 11);
             sideAdvance(8);
           }, 8);
         });
@@ -4899,7 +4915,122 @@ function buildProfilePdfDoc(profile, overrides) {
   // With no rail, whatever the theme listed there still has to be printed.
   if (!HAS_RAIL) run(T.layout.rail);
 
-  return { doc, name };
+  return { doc: real, name, pages: rec ? rec.pages : null };
+}
+
+
+// ── Profile: live preview ────────────────────────────────────────────────────
+//
+// The preview is the PDF. Not a rendering of the profile that resembles it — the
+// same buildProfilePdfDoc() the download button calls, handed to the browser's own
+// viewer through a blob: URL. The alternative, an HTML mock-up beside the form, is
+// how this is normally built and it drifts from the real document the first time a
+// theme changes shape. Two renderers means two truths; there is one here.
+//
+// Regeneration is debounced. Building an A4 document costs a few milliseconds and
+// doing it on every keystroke would be visible, so edits settle first.
+
+const PF_PREVIEW_DELAY = 450;
+let _pfPreviewTimer = null;
+
+function schedulePreview() {
+  clearTimeout(_pfPreviewTimer);
+  _pfPreviewTimer = setTimeout(renderProfilePreview, PF_PREVIEW_DELAY);
+}
+
+/** Is there enough in the profile to be worth drawing? */
+function profileHasContent(p) {
+  if (!p) return false;
+  return Boolean(p.firstName || p.lastName || p.summary
+    || (p.skills || []).length || (p.experience || []).length
+    || (p.education || []).length || (p.certifications || []).length
+    || ((p.cvSchema && p.cvSchema.sections) || []).length);
+}
+
+/**
+ * Scale nothing and frame nothing: the canvas is sized by CSS and painted at the
+ * device's own resolution by CvPreview.paint().
+ */
+let _pfPages = null;
+let _pfPage = 0;
+
+function renderProfilePreview() {
+  const canvas = $('pf-preview-canvas');
+  const empty = $('pf-preview-empty');
+  const meta = $('pf-preview-meta');
+  const pager = $('pf-preview-pager');
+  if (!canvas) return;
+
+  if (!profileHasContent(state.profile)) {
+    canvas.classList.add('hidden');
+    pager?.classList.add('hidden');
+    if (empty) empty.classList.remove('hidden');
+    if (meta) meta.textContent = '';
+    return;
+  }
+
+  let built;
+  try { built = buildProfilePdfDoc(state.profile, { record: true }); } catch (_) { built = null; }
+  if (!built || !built.pages) return;      // the library reports its own failure
+
+  _pfPages = built.pages;
+  if (_pfPage >= _pfPages.length) _pfPage = 0;
+  canvas.classList.remove('hidden');
+  if (empty) empty.classList.add('hidden');
+  CvPreview.paint(canvas, _pfPages[_pfPage]);
+
+  // A second page is worth knowing about — a CV that spills onto one is a different
+  // document to a recruiter — so the control appears only when there is one.
+  const n = _pfPages.length;
+  if (pager) pager.classList.toggle('hidden', n < 2);
+  const label = $('pf-page-label');
+  if (label) label.textContent = (_pfPage + 1) + ' / ' + n;
+
+  if (meta) {
+    const theme = (typeof CvThemes !== 'undefined' && CvThemes.get)
+      ? CvThemes.get((state.profile && state.profile.themeId) || CvThemes.DEFAULT_ID) : null;
+    meta.textContent = [n + (n === 1 ? ' Seite' : ' Seiten'), theme && theme.name]
+      .filter(Boolean).join(' · ');
+  }
+}
+
+function turnPreviewPage(delta) {
+  if (!_pfPages || _pfPages.length < 2) return;
+  _pfPage = (_pfPage + delta + _pfPages.length) % _pfPages.length;
+  renderProfilePreview();
+}
+$('pf-page-prev')?.addEventListener('click', () => turnPreviewPage(-1));
+$('pf-page-next')?.addEventListener('click', () => turnPreviewPage(1));
+// The canvas is painted at the device resolution of the box it is in, so a resized
+// window needs a repaint rather than a browser-scaled bitmap.
+window.addEventListener('resize', () => schedulePreview());
+
+// ── Profile: the scalar fields reach state as they are typed ─────────────────
+//
+// They used to reach it only when Save was pressed, while the repeat lists and the
+// CV sections bound live. That was already wrong before the preview existed:
+// "Generate as PDF" reads state.profile, so typing a name and pressing it produced
+// a document with the previous name and said nothing. A preview makes the same bug
+// visible on every keystroke, which is the argument for fixing it rather than
+// working around it.
+const PF_FIELDS = [
+  ['pf-firstName', 'firstName'], ['pf-lastName', 'lastName'],
+  ['pf-email', 'email'], ['pf-phone', 'phone'],
+  ['pf-location', 'location'], ['pf-nationality', 'nationality'],
+  ['pf-languages', 'languages'], ['pf-title', 'title'], ['pf-summary', 'summary'],
+];
+
+function wireProfileLiveFields() {
+  PF_FIELDS.forEach(([id, key]) => {
+    const el = $(id);
+    if (!el || el.dataset.live === '1') return;
+    el.dataset.live = '1';
+    el.addEventListener('input', () => {
+      state.profile[key] = el.value;
+      saveProfileToStorage();
+      schedulePreview();
+    });
+  });
 }
 
 // Profile page: download the CV exactly as the profile defines it.
@@ -4919,6 +5050,8 @@ function downloadProfilePDF() {
 // ── Profile: render the manual form from state.profile ───────────────────────
 function renderProfileForm() {
   const p = state.profile || emptyProfile();
+  wireProfileLiveFields();
+  schedulePreview();
   const setVal = (id, v) => { const el = $(id); if (el) el.value = v || ''; };
   setVal('pf-firstName', p.firstName);
   setVal('pf-lastName',  p.lastName);
