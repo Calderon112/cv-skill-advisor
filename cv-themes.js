@@ -448,5 +448,124 @@
            parts.join('') + '</svg>';
   }
 
-  return { THEMES, DEFAULT_ID, get, list, preview };
+  // ── Customisation: colour, typeface, section order ────────────────────────
+  //
+  // A template stays a fixed design. A profile may carry `design` on top of it —
+  //
+  //   { accent: '#1d6a80', font: 'times',
+  //     order: { rail: [...], main: [...] }, hidden: ['interessen'] }
+  //
+  // — and resolve() applies that to a COPY. THEMES is one object shared by every
+  // caller on the page; a customisation written into it would repaint the template
+  // for every other CV the moment one of them was edited.
+
+  const FONTS = ['helvetica', 'times', 'courier'];
+
+  const SECTION_LABELS = {
+    kontakt: 'Kontakt', berufserfahrung: 'Berufserfahrung', ausbildung: 'Ausbildung',
+    skills: 'Kenntnisse', projekte: 'Projekte', weiterbildung: 'Weiterbildung',
+    sprachen: 'Sprachen', softskills: 'Soft Skills', interessen: 'Interessen',
+  };
+
+  // One click each, and each clears the contrast rule below with room to spare —
+  // 6.1 : 1 at the lowest — so a swatch can never produce the warning a colour
+  // picked by hand can.
+  const SWATCHES = [
+    { name: 'Petrol', hex: '#1d6a80' },
+    { name: 'Marine', hex: '#173a5f' },
+    { name: 'Königsblau', hex: '#1c4ea3' },
+    { name: 'Waldgrün', hex: '#1f5e3b' },
+    { name: 'Aubergine', hex: '#5b2a6e' },
+    { name: 'Bordeaux', hex: '#7a1f35' },
+    { name: 'Kupfer', hex: '#8a4b1c' },
+    { name: 'Anthrazit', hex: '#2f3a45' },
+  ];
+
+  // WCAG AA for normal-size text, as one comparison against white, because the
+  // accent is used in exactly two ways and both need it: as heading type on white
+  // paper, and as the field white type is set on — the heading bars, a full-height
+  // rail, a band. The headings are 9.5pt bold, which is not WCAG "large text", so
+  // the 3 : 1 allowance for large text does not apply. Every template shipped here
+  // clears it; the lowest is Klassisch at 4.86 : 1.
+  const MIN_CONTRAST = 4.5;
+
+  function hexToRgb(hex) {
+    const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || '').trim());
+    if (!m) return null;
+    const n = parseInt(m[1], 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+
+  function rgbToHex(c) {
+    return '#' + (c || [0, 0, 0]).map((v) => Math.max(0, Math.min(255, v | 0))
+      .toString(16).padStart(2, '0')).join('');
+  }
+
+  function luminance(c) {
+    const ch = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+    return 0.2126 * ch(c[0]) + 0.7152 * ch(c[1]) + 0.0722 * ch(c[2]);
+  }
+
+  function contrast(a, b) {
+    const x = luminance(a);
+    const y = luminance(b);
+    return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+  }
+
+  const sameColour = (a, b) => Array.isArray(a) && Array.isArray(b) && a.every((v, i) => v === b[i]);
+
+  /**
+   * A template with a profile's customisation applied, as a copy.
+   *
+   * @returns {{theme: object, warnings: Array<{code: string, ratio?: number}>}}
+   */
+  function resolve(themeOrId, design) {
+    const base = (themeOrId && typeof themeOrId === 'object') ? themeOrId : get(themeOrId);
+    const d = design || {};
+    const warnings = [];
+    const theme = Object.assign({}, base, {
+      layout: { rail: (base.layout.rail || []).slice(), main: (base.layout.main || []).slice() },
+    });
+
+    const accent = hexToRgb(d.accent);
+    if (accent) {
+      // Surfaces painted in the template's own accent follow the new one; surfaces
+      // that merely sit near it do not. Modern's rail and Akzent's band ARE the
+      // accent — a navy rail under petrol headings is two colours where the design
+      // has one. Klassisch's rail is a pale grey, and turning that petrol would print
+      // the whole column as a solid block.
+      if (sameColour(base.railFill, base.accent)) theme.railFill = accent;
+      if (sameColour(base.bandFill, base.accent)) theme.bandFill = accent;
+      theme.accent = accent;
+      const ratio = contrast(accent, [255, 255, 255]);
+      if (ratio < MIN_CONTRAST) warnings.push({ code: 'ACCENT_CONTRAST', ratio: Math.round(ratio * 100) / 100 });
+    }
+
+    if (FONTS.indexOf(d.font) !== -1) theme.font = d.font;
+
+    // A section can move up or down within its column, and be hidden. It cannot move
+    // to the other column: every renderer draws at its own column's x with its own
+    // column's cursor, so a rail section listed under main still paints on the rail
+    // while running in the main pass — the bug Modern's layout once had. Offering
+    // that move would be offering a preview that lies.
+    const hidden = Array.isArray(d.hidden) ? d.hidden : [];
+    ['rail', 'main'].forEach((col) => {
+      const allowed = theme.layout[col];
+      const wanted = (d.order && Array.isArray(d.order[col])) ? d.order[col] : [];
+      const ordered = [];
+      wanted.forEach((k) => { if (allowed.indexOf(k) !== -1 && ordered.indexOf(k) === -1) ordered.push(k); });
+      // Anything the saved order does not mention is appended in template order, so
+      // a section added to a template later is not lost to a profile saved before it.
+      allowed.forEach((k) => { if (ordered.indexOf(k) === -1) ordered.push(k); });
+      theme.layout[col] = ordered.filter((k) => hidden.indexOf(k) === -1);
+    });
+
+    return { theme, warnings };
+  }
+
+  return {
+    THEMES, DEFAULT_ID, get, list, preview,
+    resolve, contrast, hexToRgb, rgbToHex,
+    FONTS, SWATCHES, SECTION_LABELS, MIN_CONTRAST,
+  };
 });

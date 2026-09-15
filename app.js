@@ -4362,6 +4362,269 @@ function renderThemePicker() {
       toast('Vorlage: ' + CvThemes.get(id).name, 'success');
     });
   });
+
+  // Redrawn with the template it sits under: a different template has different
+  // sections to order and a different default typeface to name.
+  renderDesignControls();
+}
+
+// ── Lebenslauf-Check ─────────────────────────────────────────────────────────
+//
+// cv-check.js holds the rules; this draws them and makes each one clickable. It is
+// redrawn from the same place as the preview, so the findings always describe the
+// document currently on screen — including how many pages it runs to, which is a
+// rule of its own and something only the preview knows.
+
+const CHECK_LABELS = { error: 'Fehler', warn: 'Hinweis', tip: 'Tipp' };
+
+function renderCvCheck(pages) {
+  const host = $('cv-check-body');
+  const pill = $('cv-check-pill');
+  if (!host || typeof CvCheck === 'undefined') return;
+
+  const { issues, counts } = CvCheck.run(state.profile || emptyProfile(), { pages: pages || 0 });
+
+  if (pill) {
+    pill.textContent = issues.length
+      ? [counts.error && counts.error + ' Fehler',
+         counts.warn && counts.warn + ' Hinweise',
+         counts.tip && counts.tip + ' Tipps'].filter(Boolean).join(' · ')
+      : 'ohne Befund';
+    pill.className = 'pill cv-check-pill '
+      + (counts.error ? 'is-bad' : counts.warn ? 'is-warn' : 'is-ok');
+  }
+
+  if (!issues.length) {
+    host.innerHTML = '<p class="hint">Keine Auffälligkeiten gefunden. Die Prüfung ist mechanisch und'
+      + ' ersetzt kein Korrekturlesen.</p>';
+    return;
+  }
+
+  host.innerHTML = issues.map((it, i) =>
+    `<button type="button" class="cv-issue lvl-${it.level}" data-i="${i}">
+       <span class="cv-issue-level">${esc(CHECK_LABELS[it.level])}</span>
+       <span class="cv-issue-text">${esc(it.message)}</span>
+     </button>`).join('');
+
+  // Assigned rather than added: this redraws on every edit, and addEventListener
+  // would leave a handler behind on each pass.
+  host.onclick = (e) => {
+    const btn = e.target.closest('.cv-issue');
+    if (btn) focusIssue(issues[Number(btn.dataset.i)]);
+  };
+}
+
+/**
+ * Put the cursor where the finding is.
+ *
+ * A finding that names a problem and leaves the reader to search thirty fields for
+ * it is barely better than the percentage this replaces.
+ */
+function focusIssue(issue) {
+  const t = issue && issue.target;
+  if (!t) return;
+  let el = null;
+  if (t.list) {
+    const row = document.querySelector(`#pf-${t.list}-list .repeat-item[data-i="${t.index}"]`);
+    el = row && (row.querySelector(`[data-f="${t.field}"]`) || row);
+  } else if (t.field) {
+    el = $(t.field);
+  }
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  if (typeof el.focus === 'function') el.focus({ preventScroll: true });
+}
+
+// ── Template customisation: colour, typeface, section order ──────────────────
+//
+// Held on the profile as `design` and applied inside the generator by
+// CvThemes.resolve(), so the live preview, the downloaded PDF and the cover letter
+// read one description of the design rather than three.
+
+const DC_FONT_LABELS = { helvetica: 'Serifenlos', times: 'Serif', courier: 'Schreibmaschine' };
+
+/**
+ * Has this section anything to print?
+ *
+ * An empty section is still listed — it is part of the template and will fill up —
+ * but it is marked, because "why is Projekte not in my PDF" has two possible answers
+ * and only one of them is this panel.
+ */
+function sectionHasContent(key, p) {
+  const has = (v) => (Array.isArray(v) ? v.length > 0 : Boolean(String(v || '').trim()));
+  switch (key) {
+    case 'kontakt':         return has(p.email) || has(p.phone) || has(p.location) || has(p.nationality);
+    case 'berufserfahrung': return has(p.experience);
+    case 'ausbildung':      return has(p.education);
+    case 'skills':          return has(p.skills) || has(p.skillRows);
+    case 'projekte':        return has(p.projects);
+    case 'weiterbildung':   return has(p.certifications);
+    case 'sprachen':        return has(p.languages);
+    case 'softskills':      return has(p.softSkills);
+    case 'interessen':      return has(p.interests);
+    default:                return true;
+  }
+}
+
+function profileDesign() {
+  if (!state.profile) state.profile = emptyProfile();
+  if (!state.profile.design) state.profile.design = {};
+  return state.profile.design;
+}
+
+function dcContrastText(ratio) {
+  const de = (n) => String(n).replace('.', ',');
+  return 'Diese Farbe ist hell: Kontrast ' + de(ratio) + ' : 1 zu Weiß, empfohlen sind mindestens '
+    + de(CvThemes.MIN_CONTRAST) + ' : 1. Überschriften in dieser Farbe und weiße Schrift darauf'
+    + ' werden schwer lesbar.';
+}
+
+function renderDesignControls() {
+  const host = $('cv-design-controls');
+  if (!host || typeof CvThemes === 'undefined' || !CvThemes.resolve) return;
+
+  const p = state.profile || emptyProfile();
+  const d = p.design || {};
+  const themeId = p.themeId || CvThemes.DEFAULT_ID;
+  const base = CvThemes.get(themeId);
+  const { theme, warnings } = CvThemes.resolve(themeId, d);
+  const hidden = d.hidden || [];
+
+  // The order with nothing hidden, so a section switched off keeps its place in the
+  // list instead of dropping to the bottom the moment it is unchecked.
+  const fullOrder = CvThemes.resolve(themeId, Object.assign({}, d, { hidden: [] })).theme.layout;
+
+  const swatches = CvThemes.SWATCHES.map((s) =>
+    `<button type="button" class="dc-swatch${d.accent === s.hex ? ' selected' : ''}"
+       data-accent="${esc(s.hex)}" title="${esc(s.name)}" aria-label="${esc(s.name)}"
+       style="background:${esc(s.hex)}"></button>`).join('');
+
+  const fontChip = (value, label) =>
+    `<button type="button" class="dc-chip${(d.font || '') === value ? ' selected' : ''}"
+       data-font="${esc(value)}">${esc(label)}</button>`;
+  const fonts = fontChip('', 'Vorlage (' + DC_FONT_LABELS[base.font || 'helvetica'] + ')')
+    + CvThemes.FONTS.map((f) => fontChip(f, DC_FONT_LABELS[f])).join('');
+
+  const columns = base.rail === 'none'
+    ? [['main', 'Reihenfolge']]
+    : [['main', 'Hauptspalte'], ['rail', 'Seitenspalte']];
+
+  const lists = columns.map(([col, label]) => {
+    const keys = fullOrder[col] || [];
+    const items = keys.map((k, i) => {
+      const off = hidden.indexOf(k) !== -1;
+      const empty = !sectionHasContent(k, p);
+      return `<li class="dc-section${off ? ' is-hidden' : ''}" data-col="${col}" data-key="${esc(k)}">
+        <span class="dc-section-name">${esc(CvThemes.SECTION_LABELS[k] || k)}</span>
+        ${empty ? '<span class="dc-empty">leer</span>' : ''}
+        <button type="button" class="dc-move" data-move="-1" aria-label="Nach oben"${i === 0 ? ' disabled' : ''}>↑</button>
+        <button type="button" class="dc-move" data-move="1" aria-label="Nach unten"${i === keys.length - 1 ? ' disabled' : ''}>↓</button>
+        <label class="dc-visible"><input type="checkbox" data-toggle${off ? '' : ' checked'} /> sichtbar</label>
+      </li>`;
+    }).join('');
+    return `<div class="dc-row"><span class="dc-label">${esc(label)}</span><ul class="dc-list">${items}</ul></div>`;
+  }).join('');
+
+  const warn = warnings.find((w) => w.code === 'ACCENT_CONTRAST');
+  host.innerHTML = `
+    <div class="dc-row">
+      <span class="dc-label">Farbe</span>
+      <div class="dc-swatches">
+        ${swatches}
+        <label class="dc-custom">eigene
+          <input type="color" id="dc-accent" value="${esc(CvThemes.rgbToHex(theme.accent))}" />
+        </label>
+      </div>
+      <div class="dc-warn" id="dc-accent-warn">${warn ? esc(dcContrastText(warn.ratio)) : ''}</div>
+    </div>
+    <div class="dc-row">
+      <span class="dc-label">Schrift</span>
+      <div class="dc-chips">${fonts}</div>
+    </div>
+    <div class="dc-row">
+      <span class="dc-label">Abschnitte</span>
+      <div class="dc-columns">${lists}</div>
+      <div class="dc-foot">
+        <span class="hint">Abschnitte ohne Inhalt werden ohnehin nicht gedruckt. Zwischen den
+          Spalten lässt sich nicht verschieben — jeder Abschnitt wird an der Position seiner
+          eigenen Spalte gezeichnet.</span>
+        <button type="button" class="btn btn-ghost btn-xs" data-reset="1">Zurücksetzen</button>
+      </div>
+    </div>`;
+
+  // Assigned, not added: this runs again after every change, and addEventListener
+  // would stack another copy of each handler on every pass.
+  host.onclick = dcClick;
+  host.onchange = dcChange;
+  const picker = $('dc-accent');
+  if (picker) {
+    // 'input' fires continuously while the colour wheel is dragged, and redrawing
+    // the controls then would tear the open picker out from under the pointer. The
+    // live pass writes the value and updates the warning; the redraw waits for
+    // 'change', which arrives when the dialog closes.
+    picker.oninput  = () => dcSetAccent(picker.value, false);
+    picker.onchange = () => dcSetAccent(picker.value, true);
+  }
+}
+
+function dcSetAccent(hex, redraw) {
+  profileDesign().accent = hex;
+  saveProfileToStorage();
+  if (redraw) { renderDesignControls(); return; }
+  const el = $('dc-accent-warn');
+  if (!el) return;
+  const rgb = CvThemes.hexToRgb(hex);
+  const ratio = rgb ? Math.round(CvThemes.contrast(rgb, [255, 255, 255]) * 100) / 100 : 0;
+  el.textContent = (ratio && ratio < CvThemes.MIN_CONTRAST) ? dcContrastText(ratio) : '';
+}
+
+function dcClick(e) {
+  const sw = e.target.closest('[data-accent]');
+  if (sw) { dcSetAccent(sw.dataset.accent, true); return; }
+
+  const font = e.target.closest('[data-font]');
+  if (font) { profileDesign().font = font.dataset.font; saveProfileToStorage(); renderDesignControls(); return; }
+
+  if (e.target.closest('[data-reset]')) {
+    if (state.profile) delete state.profile.design;
+    saveProfileToStorage();
+    renderDesignControls();
+    return;
+  }
+
+  const move = e.target.closest('[data-move]');
+  if (move) {
+    const li = move.closest('.dc-section');
+    if (li) dcMove(li.dataset.col, li.dataset.key, Number(move.dataset.move));
+  }
+}
+
+function dcChange(e) {
+  const box = e.target.closest('[data-toggle]');
+  const li = box && box.closest('.dc-section');
+  if (!li) return;
+  const d = profileDesign();
+  const hidden = new Set(d.hidden || []);
+  if (box.checked) hidden.delete(li.dataset.key); else hidden.add(li.dataset.key);
+  d.hidden = Array.from(hidden);
+  saveProfileToStorage();
+  renderDesignControls();
+}
+
+function dcMove(col, key, delta) {
+  const d = profileDesign();
+  const themeId = (state.profile && state.profile.themeId) || CvThemes.DEFAULT_ID;
+  // Hidden sections included, so moving one past a switched-off section keeps
+  // working — otherwise a hidden item becomes a wall the others cannot cross.
+  const order = CvThemes.resolve(themeId, Object.assign({}, d, { hidden: [] })).theme.layout[col].slice();
+  const i = order.indexOf(key);
+  const j = i + delta;
+  if (i === -1 || j < 0 || j >= order.length) return;
+  order[i] = order[j];
+  order[j] = key;
+  d.order = Object.assign({}, d.order, { [col]: order });
+  saveProfileToStorage();
+  renderDesignControls();
 }
 
 function buildProfilePdfDoc(profile, overrides) {
@@ -4386,8 +4649,13 @@ function buildProfilePdfDoc(profile, overrides) {
   // cv-themes.js: `layout` is what actually distinguishes one CV design from
   // another — moving KONTAKT out of the rail changes the document far more than
   // changing the accent colour does.
+  // With the profile's own colour, typeface and section order applied — see
+  // CvThemes.resolve(). Read here and nowhere else, so the preview, the download and
+  // the cover letter cannot each apply the customisation a little differently. The
+  // get() fallback covers a browser still holding an older cv-themes.js in cache.
+  const themeId = (overrides && overrides.themeId) || p.themeId;
   const theme = (typeof CvThemes !== 'undefined')
-    ? CvThemes.get((overrides && overrides.themeId) || p.themeId)
+    ? (CvThemes.resolve ? CvThemes.resolve(themeId, p.design).theme : CvThemes.get(themeId))
     : null;
   const T = theme || {
     rail: 'right', railWidth: 168, margin: 40, gap: 18,
@@ -4970,6 +5238,9 @@ function renderProfilePreview() {
     pager?.classList.add('hidden');
     if (empty) empty.classList.remove('hidden');
     if (meta) meta.textContent = '';
+    // Still checked. An empty profile is exactly when the list is worth reading —
+    // it names the fields that have to exist before there is a document at all.
+    renderCvCheck(0);
     return;
   }
 
@@ -4996,6 +5267,10 @@ function renderProfilePreview() {
     meta.textContent = [n + (n === 1 ? ' Seite' : ' Seiten'), theme && theme.name]
       .filter(Boolean).join(' · ');
   }
+
+  // Checked against the document that was just drawn, which is the only way its
+  // page-count rule can report the real number instead of an estimate.
+  renderCvCheck(n);
 }
 
 function turnPreviewPage(delta) {

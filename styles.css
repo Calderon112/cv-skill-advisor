@@ -3742,6 +3742,82 @@ option   { color: var(--text); background: var(--bg-card); }
   .theme-note { display: none; }   /* the name and the shape carry it at this size */
 }
 
+/* ── Template customisation ────────────────────────────────────────────────
+   Under the picker, because it modifies the template chosen there. */
+.design-controls {
+  display: grid; gap: 16px; margin-top: 18px; padding-top: 16px;
+  border-top: 1px solid var(--border, #e2e8f0);
+}
+.dc-row { display: grid; gap: 8px; }
+.dc-label {
+  font-size: .72rem; font-weight: 700; letter-spacing: .05em;
+  text-transform: uppercase; color: var(--muted, #64748b);
+}
+.dc-swatches { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.dc-swatch {
+  width: 28px; height: 28px; padding: 0; border-radius: 50%; cursor: pointer;
+  border: 2px solid transparent; box-shadow: 0 0 0 1px var(--border, #e2e8f0);
+}
+.dc-swatch.selected { border-color: var(--card, #fff); box-shadow: 0 0 0 2px var(--accent, #2a7a96); }
+.dc-custom { display: inline-flex; align-items: center; gap: 6px; font-size: .8rem; color: var(--muted, #64748b); }
+.dc-custom input[type="color"] {
+  width: 32px; height: 28px; padding: 0; cursor: pointer; background: none;
+  border: 1px solid var(--border, #e2e8f0); border-radius: 6px;
+}
+.dc-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.dc-chip {
+  font-size: .8rem; padding: 5px 10px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border, #e2e8f0); background: transparent; color: inherit;
+}
+.dc-chip.selected { border-color: var(--accent, #2a7a96); color: var(--accent, #2a7a96); font-weight: 600; }
+.dc-columns { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+.dc-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.dc-section {
+  display: flex; align-items: center; gap: 6px; padding: 5px 8px; font-size: .85rem;
+  border: 1px solid var(--border, #e2e8f0); border-radius: 8px;
+}
+.dc-section-name { flex: 1; min-width: 0; }
+.dc-section.is-hidden .dc-section-name { text-decoration: line-through; opacity: .55; }
+.dc-empty { font-size: .72rem; color: var(--muted, #64748b); }
+.dc-move {
+  width: 24px; height: 24px; line-height: 1; cursor: pointer; border-radius: 6px;
+  border: 1px solid var(--border, #e2e8f0); background: transparent; color: inherit;
+}
+.dc-move:disabled { opacity: .3; cursor: default; }
+.dc-visible { display: inline-flex; align-items: center; gap: 4px; font-size: .75rem; color: var(--muted, #64748b); }
+.dc-warn { font-size: .8rem; line-height: 1.45; color: #b45309; }
+.dc-foot { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+/* The note takes the room and the button takes what it needs. Without this the
+   button is a flex item with nothing to shrink against and stretches across the
+   card once the note wraps to its own line. */
+.dc-foot .hint { flex: 1 1 260px; }
+.dc-foot .btn { flex: none; }
+
+/* ── Lebenslauf-Check ──────────────────────────────────────────────────────
+   Each finding is a button, because each one points at the field that produced
+   it. A list of complaints you cannot act on is a worse version of a score. */
+.cv-check-list { display: grid; gap: 6px; }
+.cv-issue {
+  display: flex; gap: 10px; align-items: baseline; width: 100%;
+  padding: 8px 10px; text-align: left; cursor: pointer; font: inherit; color: inherit;
+  background: transparent; border: 1px solid var(--border, #e2e8f0); border-radius: 8px;
+}
+.cv-issue:hover { border-color: var(--accent, #2a7a96); }
+.cv-issue-level {
+  flex: none; font-size: .66rem; font-weight: 700; letter-spacing: .05em;
+  text-transform: uppercase; padding: 2px 7px; border-radius: 999px;
+}
+.cv-issue.lvl-error .cv-issue-level { background: rgba(220, 38, 38, .14); color: #dc2626; }
+.cv-issue.lvl-warn  .cv-issue-level { background: rgba(217, 119, 6, .16); color: #b45309; }
+.cv-issue.lvl-tip   .cv-issue-level { background: rgba(100, 116, 139, .16); color: var(--muted, #64748b); }
+.cv-issue-text { font-size: .86rem; line-height: 1.45; }
+/* Both class names in the selector: .pill is defined later in this file and sets a
+   colour of its own, so a single-class rule here loses on source order and the
+   badge announces four errors in the same calm blue it uses for none. */
+.pill.cv-check-pill.is-bad  { color: #dc2626; border-color: rgba(220, 38, 38, .45); background: rgba(220, 38, 38, .12); }
+.pill.cv-check-pill.is-warn { color: #b45309; border-color: rgba(217, 119, 6, .45); background: rgba(217, 119, 6, .12); }
+.pill.cv-check-pill.is-ok   { color: #15803d; border-color: rgba(21, 128, 61, .45); background: rgba(21, 128, 61, .12); }
+
 /* ── Template preview: zoom on hover ───────────────────────────────────────
    The thumbnail is 132px wide, which is enough to tell one column from two and
    not enough to judge anything else. Hovering lifts a large copy out of the card

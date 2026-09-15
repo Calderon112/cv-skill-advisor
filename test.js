@@ -1498,6 +1498,226 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
     });
   }
 
+  section('Lebenslauf-Check — findings, not a percentage');
+
+  {
+    const CC = require('./cv-check.js');
+    // September 2026, injected so the gap and future-date rules do not change answer
+    // with the calendar.
+    const NOW = 2026 * 12 + 8;
+    const codes = (r) => r.issues.map((i) => i.code);
+    const SOUND = {
+      firstName: 'Jardel', lastName: 'Kenne', email: 'benigo700@gmail.com',
+      phone: '+49 176 12345678', location: 'Gelsenkirchen', title: 'IT-Sicherheitsexpert:in',
+      summary: 'Informatikstudent an der Westfälischen Hochschule Gelsenkirchen.',
+      languages: 'Deutsch (C1), Englisch (B2)',
+      skills: [{ label: 'Java' }, { label: 'Python' }, { label: 'SQL' }, { label: 'Jira' }, { label: 'Linux' }],
+      experience: [{ role: 'Werkstudent IT', org: 'Alberdingk-Boley', start: '06.2024', end: '11.2024',
+        desc: 'Jira Cloud Migration' }],
+      education: [{ degree: 'B.Sc. Informatik', org: 'Westfälische Hochschule', start: '11.2020', end: 'heute' }],
+      certifications: [],
+    };
+
+    test('a date is read in the forms a CV writes one, or reported as unreadable', () => {
+      assertEqual(CC.parseMonth('06.2024', 'start', NOW), 2024 * 12 + 5, 'MM.JJJJ');
+      assertEqual(CC.parseMonth('6/2024', 'start', NOW), 2024 * 12 + 5, 'M/JJJJ');
+      assertEqual(CC.parseMonth('Nov. 2020', 'start', NOW), 2020 * 12 + 10, 'abbreviated German month');
+      assertEqual(CC.parseMonth('heute', 'end', NOW), NOW, 'still there');
+      // A bare year means January as a start and December as an end. Reading both as
+      // January would invent an eleven-month gap nobody has.
+      assertEqual(CC.parseMonth('2019', 'start', NOW), 2019 * 12, 'a bare year, starting');
+      assertEqual(CC.parseMonth('2019', 'end', NOW), 2019 * 12 + 11, 'a bare year, ending');
+      assertEqual(CC.parseMonth('seit Sommer', 'start', NOW), null, 'not guessed into a month');
+    });
+
+    test('a sound profile produces no errors', () => {
+      const r = CC.run(SOUND, { now: NOW, pages: 1 });
+      assertEqual(r.counts.error, 0, 'no errors: ' + codes(r).join(','));
+    });
+
+    test('dates that contradict each other are errors, not tips', () => {
+      const r = CC.run(Object.assign({}, SOUND, {
+        experience: [{ role: 'Werkstudent', org: 'X', start: '11.2024', end: '06.2024', desc: 'a' }],
+      }), { now: NOW });
+      assert(codes(r).indexOf('DATE_ORDER') !== -1, 'end before start');
+      assertEqual(r.issues.find((i) => i.code === 'DATE_ORDER').level, 'error', 'reported as an error');
+
+      const bad = CC.run(Object.assign({}, SOUND, {
+        experience: [{ role: 'Werkstudent', org: 'X', start: 'irgendwann', end: '06.2024', desc: 'a' }],
+      }), { now: NOW });
+      assert(codes(bad).indexOf('START_UNREADABLE') !== -1, 'an unreadable date says so');
+    });
+
+    test('a gap is measured, and never invented out of a missing end date', () => {
+      const gapped = CC.run(Object.assign({}, SOUND, {
+        education: [],
+        experience: [
+          { role: 'A', org: 'X', start: '01.2022', end: '06.2022', desc: 'a' },
+          { role: 'B', org: 'Y', start: '09.2023', end: '11.2023', desc: 'b' },
+        ],
+      }), { now: NOW });
+      const gap = gapped.issues.find((i) => i.code === 'GAP');
+      assert(gap, 'the gap is found');
+      assert(/15 Monaten/.test(gap.message), 'and counted: ' + gap.message);
+
+      const short = CC.run(Object.assign({}, SOUND, {
+        education: [],
+        experience: [
+          { role: 'A', org: 'X', start: '01.2022', end: '06.2022', desc: 'a' },
+          { role: 'B', org: 'Y', start: '09.2022', end: '11.2022', desc: 'b' },
+        ],
+      }), { now: NOW });
+      assert(codes(short).indexOf('GAP') === -1, 'three months is a notice period, not a gap');
+
+      // An entry with no end could be running or could be a forgotten field. Treating
+      // it as finished would accuse the candidate of a gap the data does not show.
+      const open = CC.run(Object.assign({}, SOUND, {
+        education: [],
+        experience: [
+          { role: 'A', org: 'X', start: '01.2022', end: '', desc: 'a' },
+          { role: 'B', org: 'Y', start: '09.2025', end: '11.2025', desc: 'b' },
+        ],
+      }), { now: NOW });
+      assert(codes(open).indexOf('GAP') === -1, 'no gap invented from an open end');
+
+      // A station whose dates are transposed is already an error. Measuring a gap
+      // from it too would report a hole in the CV that exists only in the typo.
+      const flipped = CC.run(Object.assign({}, SOUND, {
+        education: [],
+        experience: [
+          { role: 'A', org: 'X', start: '11.2023', end: '02.2023', desc: 'a' },
+          { role: 'B', org: 'Y', start: '06.2025', end: '11.2025', desc: 'b' },
+        ],
+      }), { now: NOW });
+      assert(codes(flipped).indexOf('DATE_ORDER') !== -1, 'the transposition is reported');
+      assert(codes(flipped).indexOf('GAP') === -1, 'and not counted twice as a gap');
+    });
+
+    test('a template placeholder that reached the document is an error', () => {
+      const r = CC.run(Object.assign({}, SOUND, {
+        experience: [{ role: 'Werkstudent', org: 'X', start: '06.2024', end: '11.2024',
+          desc: 'Bewerbung bei [Firma] eingereicht' }],
+      }), { now: NOW });
+      assert(codes(r).indexOf('PLACEHOLDER') !== -1, 'found');
+      assertEqual(r.issues.find((i) => i.code === 'PLACEHOLDER').level, 'error', 'an error — it gets sent');
+    });
+
+    test('a language without a level is a tip; one with a level is nothing', () => {
+      const r = CC.run(Object.assign({}, SOUND, { languages: 'Deutsch, Englisch (B2)' }), { now: NOW });
+      const t = r.issues.find((i) => i.code === 'LANG_LEVEL');
+      assert(t, 'the finding exists');
+      // The enumerated list, not the whole sentence: the message ends with an example
+      // ("Üblich ist z. B. Englisch (C1)"), and searching the sentence for a language
+      // name finds the example as readily as the finding.
+      const listed = (t.message.match(/Ohne Niveau: ([^.]+)\./) || [])[1];
+      assertEqual(listed, 'Deutsch', 'only the one without a level is listed');
+      assertEqual(codes(CC.run(SOUND, { now: NOW })).indexOf('LANG_LEVEL'), -1, 'both stated, nothing said');
+    });
+
+    test('the page count comes from the rendered document', () => {
+      assert(codes(CC.run(SOUND, { now: NOW, pages: 3 })).indexOf('TOO_LONG') !== -1, 'three pages is a warning');
+      assertEqual(codes(CC.run(SOUND, { now: NOW, pages: 2 })).indexOf('TOO_LONG'), -1, 'two is normal');
+    });
+
+    test('the check never asks for a photo', () => {
+      // German CVs commonly carry one and the AGG makes requiring one a liability. A
+      // builder that nags for a face pushes the applicant towards the thing the law
+      // spent years discouraging, so the absence of this rule is deliberate and
+      // pinned here — it is the kind of "helpful" check someone adds back later.
+      //
+      // Whole words: "bild" as a substring is inside "Ausbildung", which this check
+      // does ask about and should.
+      const bare = CC.run({ firstName: 'A', lastName: 'B', email: 'a@b.de' }, { now: NOW });
+      assert(!bare.issues.some((i) => /\b(foto|photo|lichtbild|bewerbungsfoto)\b/i.test(i.message)),
+        'nothing about a photo');
+    });
+  }
+
+  section('Template customisation — colour, typeface, section order');
+
+  {
+    const CT = require('./cv-themes.js');
+    const WHITE = [255, 255, 255];
+    const json = (v) => JSON.stringify(v);
+
+    test('every shipped template and every swatch is readable on white', () => {
+      // The accent is used two ways and both need this: as heading type on white
+      // paper, and as the field white type sits on — the filled bars, the rail, the
+      // band. It is also the rule the picker warns a user against breaking, so the
+      // defaults had better keep it.
+      CT.list().forEach((t) => {
+        const r = CT.contrast(t.accent, WHITE);
+        assert(r >= CT.MIN_CONTRAST, t.id + ' accent ' + r.toFixed(2) + ' : 1');
+      });
+      CT.SWATCHES.forEach((s) => {
+        const r = CT.contrast(CT.hexToRgb(s.hex), WHITE);
+        assert(r >= CT.MIN_CONTRAST, s.name + ' ' + r.toFixed(2) + ' : 1');
+      });
+    });
+
+    test('a colour too light for white type is reported, and still applied', () => {
+      // Reported because the consequence is invisible on screen and obvious on paper;
+      // applied because it is the user's document and they were told.
+      const pale = CT.resolve('klassisch', { accent: '#7fc8f8' });
+      assertEqual(pale.warnings.length, 1, 'one warning');
+      assertEqual(pale.warnings[0].code, 'ACCENT_CONTRAST', 'about the contrast');
+      assertEqual(json(pale.theme.accent), '[127,200,248]', 'and the colour is applied');
+      assertEqual(CT.resolve('klassisch', { accent: '#1d6a80' }).warnings.length, 0, 'a swatch warns about nothing');
+    });
+
+    test('a surface painted in the accent follows it; one that merely sits near it does not', () => {
+      const mod = CT.resolve('modern', { accent: '#7a1f35' }).theme;
+      assertEqual(json(mod.railFill), json(mod.accent), "Modern's rail IS the accent");
+      const band = CT.resolve('akzent', { accent: '#7a1f35' }).theme;
+      assertEqual(json(band.bandFill), json(band.accent), "Akzent's band IS the accent");
+      // Klassisch's rail is a pale grey. Turning it bordeaux would print the whole
+      // column as a solid block behind dark type.
+      assertEqual(json(CT.resolve('klassisch', { accent: '#7a1f35' }).theme.railFill), '[238,242,245]',
+        'a pale rail stays pale');
+    });
+
+    test('customising one profile does not repaint the template for every other', () => {
+      // THEMES is one object shared by every caller on the page, so resolve() has to
+      // copy the layout arrays as well as the object holding them.
+      CT.resolve('modern', { accent: '#7a1f35', hidden: ['sprachen'], order: { rail: ['ausbildung'] } });
+      assertEqual(json(CT.get('modern').accent), '[23,58,95]', 'accent untouched');
+      assert(CT.get('modern').layout.rail.indexOf('sprachen') !== -1, 'section still there');
+      assertEqual(CT.get('modern').layout.rail[0], 'kontakt', 'order untouched');
+    });
+
+    test('a section moves within its column and never across', () => {
+      const moved = CT.resolve('klassisch', { order: { main: ['skills', 'berufserfahrung'] } }).theme;
+      assertEqual(moved.layout.main[0], 'skills', 'the saved order leads');
+      assertEqual(moved.layout.main[1], 'berufserfahrung', 'in the order given');
+      assertEqual(moved.layout.main.slice(2).join(','), 'projekte,weiterbildung',
+        'what the saved order did not mention keeps the template sequence');
+
+      // A rail key listed under main is refused. Its renderer draws at the rail's x
+      // with the rail's cursor, so honouring it would move the entry in this list and
+      // nothing at all in the PDF — the bug Modern's own layout once had.
+      const cross = CT.resolve('klassisch', { order: { main: ['kontakt', 'skills'] } }).theme;
+      assert(cross.layout.main.indexOf('kontakt') === -1, 'kontakt refused in main');
+      assert(cross.layout.rail.indexOf('kontakt') !== -1, 'and still in the rail');
+    });
+
+    test('a hidden section is absent from the layout the generator runs', () => {
+      const t = CT.resolve('ats', { hidden: ['interessen', 'sprachen'] }).theme;
+      assert(t.layout.main.indexOf('interessen') === -1, 'interessen gone');
+      assert(t.layout.main.indexOf('sprachen') === -1, 'sprachen gone');
+      assert(t.layout.main.indexOf('berufserfahrung') !== -1, 'the rest still printed');
+    });
+
+    test('only a typeface jsPDF actually carries is accepted', () => {
+      // An unknown family falls back silently inside jsPDF, which is a document that
+      // looks wrong with nothing on screen to explain it.
+      assertEqual(CT.resolve('ats', { font: 'times' }).theme.font, 'times', 'a known face');
+      assertEqual(CT.resolve('elegant', { font: 'Comic Sans' }).theme.font, 'times',
+        "an unknown one leaves the template's own");
+      assertEqual(CT.resolve('ats', { font: 'Comic Sans' }).theme.font, undefined,
+        'and adds none where the template had none');
+    });
+  }
+
   section('Employer filter — who is hiring, not who is mentioned');
 
   {
