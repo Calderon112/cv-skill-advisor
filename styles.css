@@ -3713,14 +3713,19 @@ option   { color: var(--text); background: var(--bg-card); }
 .theme-card.selected { border-color: var(--cyan); }
 /* The thumbnail sits on a neutral field so a light template does not vanish into
    the card and a dark one does not read as a block. */
+/* The thumbnail is a page now, not a diagram of one, so it is mounted like a sheet
+   of paper: white, with the card's own padding removed. A grey mat around a
+   miniature CV reads as a border the template does not have. */
 .theme-thumb {
   display: block;
-  background: #f4f6f8;
+  background: #fff;
   border: 1px solid var(--border, #e2e8f0);
   border-radius: 6px;
-  padding: 6px;
+  overflow: hidden;
+  line-height: 0;                     /* no inline-block gap under the canvas */
 }
 .theme-thumb svg { display: block; width: 100%; height: auto; }
+.theme-canvas, .theme-canvas-zoom { display: block; width: 100%; height: auto; background: #fff; }
 .theme-name { font-weight: 700; font-size: .95rem; }
 .theme-note { font-size: .8rem; line-height: 1.35; color: var(--text-muted); }
 
