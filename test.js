@@ -1498,6 +1498,114 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
     });
   }
 
+  section('More than one CV — a version per application');
+
+  {
+    const CS = require('./cv-store.js');
+    const fake = (onSet) => {
+      const m = new Map();
+      return {
+        getItem: (k) => (m.has(k) ? m.get(k) : null),
+        setItem: (k, v) => { if (onSet) onSet(k, v); m.set(k, String(v)); },
+      };
+    };
+    const empty = () => ({ firstName: '', lastName: '', email: '', phone: '', location: '',
+      nationality: '', photo: '', title: '', summary: '', skills: [], experience: [], education: [] });
+
+    test('a profile saved by the single-CV version becomes the first CV, and stays where it was', () => {
+      const s = fake();
+      s.setItem('careerai-profile', JSON.stringify({
+        firstName: 'Jardel', lastName: 'Kenne', title: 'SOC Analyst', experience: [{ role: 'Werkstudent' }],
+      }));
+      const store = CS.createStore(s, empty);
+      store.load();
+      assertEqual(store.items().length, 1, 'one CV');
+      assertEqual(store.activeProfile().firstName, 'Jardel', 'the profile survived the migration');
+      assertEqual(store.activeProfile().experience.length, 1, 'with its contents');
+      assertEqual(store.items()[0].name, 'SOC Analyst', 'named after the target role it holds');
+      // Left in place rather than cleaned up: if this build is rolled back, the
+      // previous one has to find the CV where it expects it.
+      assert(s.getItem('careerai-profile'), 'the old key still holds it');
+    });
+
+    test('a blank install starts with one empty CV rather than none', () => {
+      const store = CS.createStore(fake(), empty);
+      store.load();
+      assertEqual(store.items().length, 1, 'one');
+      assertEqual(store.activeProfile().firstName, '', 'and it is empty');
+    });
+
+    test('a duplicate is a copy, not a second name for the same CV', () => {
+      const store = CS.createStore(fake(), empty);
+      store.load();
+      const p = store.activeProfile();
+      p.firstName = 'Jardel';
+      p.experience.push({ role: 'Werkstudent IT', org: 'Alberdingk-Boley' });
+      store.save(p);
+
+      const copy = store.duplicate('Für TÜVIT');
+      assertEqual(store.items().length, 2, 'two CVs');
+      assert(copy.id !== store.items()[0].id, 'with different ids');
+      // A shallow copy shares the experience array, and editing the copy would
+      // rewrite the original — which is the one thing duplicating is for.
+      store.activeProfile().experience[0].role = 'Werkstudent IT-Sicherheit';
+      assertEqual(store.items()[0].profile.experience[0].role, 'Werkstudent IT',
+        'the original is untouched');
+    });
+
+    test('a new CV keeps the person and drops the application', () => {
+      const store = CS.createStore(fake(), empty);
+      store.load();
+      const p = store.activeProfile();
+      p.firstName = 'Jardel'; p.email = 'benigo700@gmail.com'; p.title = 'SOC Analyst';
+      p.experience.push({ role: 'Werkstudent IT' });
+      store.save(p);
+
+      store.create('Für Siemens');
+      const fresh = store.activeProfile();
+      assertEqual(fresh.email, 'benigo700@gmail.com', 'the phone book comes along');
+      assertEqual(fresh.firstName, 'Jardel', 'and the name');
+      assertEqual(fresh.experience.length, 0, 'the tailoring does not');
+      assertEqual(fresh.title, '', 'nor the target role');
+    });
+
+    test('ids stay distinct when two CVs are made in the same millisecond', () => {
+      const store = CS.createStore(fake(), empty);
+      store.load();
+      const a = store.create('A');
+      const b = store.duplicate('B');
+      assert(a.id !== b.id, 'distinct: ' + a.id + ' / ' + b.id);
+    });
+
+    test('the last CV cannot be deleted, and deleting the active one leaves a neighbour', () => {
+      const store = CS.createStore(fake(), empty);
+      store.load();
+      assertEqual(store.remove(store.active().id).reason, 'last', 'refused');
+
+      const second = store.create('Für TÜVIT');
+      const out = store.remove(second.id);
+      assertEqual(out.ok, true, 'the second one goes');
+      assertEqual(store.items().length, 1, 'one left');
+      assert(store.active(), 'and something is active');
+    });
+
+    test('a save that does not fit is reported rather than swallowed', () => {
+      // Each CV carries its own copy of the photo as a data URL, so this is reachable
+      // with a handful of versions. A save that fails in silence is how an afternoon
+      // of edits disappears.
+      let armed = false;
+      const s = fake((k) => {
+        if (armed && k === CS.KEY) { const e = new Error('full'); e.name = 'QuotaExceededError'; throw e; }
+      });
+      const store = CS.createStore(s, empty);
+      store.load();
+      armed = true;
+      const r = store.save(store.activeProfile());
+      assertEqual(r.ok, false, 'not ok');
+      assertEqual(r.reason, 'quota', 'and says why');
+    });
+  }
+
   section('Lebenslauf-Check — findings, not a percentage');
 
   {

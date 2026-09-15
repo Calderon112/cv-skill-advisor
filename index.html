@@ -602,7 +602,8 @@
               <div>
                 <button id="copy-cover-btn" class="btn btn-ghost btn-xs">Copy</button>
                 <button id="download-cover-btn" class="btn btn-ghost btn-xs">Download</button>
-                <button id="download-cover-pdf-btn" class="btn btn-ghost btn-xs">PDF</button>
+                <button id="download-cover-pdf-btn" class="btn btn-ghost btn-xs"
+                        title="Im Design der Vorlage, die für den Lebenslauf gewählt ist">PDF</button>
                 <button id="email-cover-btn" class="btn btn-ghost btn-xs">Send by email</button>
               </div>
             </div>
@@ -726,6 +727,12 @@
             <p>Build your profile by uploading your CV (auto-extract) or filling it in manually.</p>
           </div>
         </div>
+
+        <!-- Which CV is being edited. One per application is the normal case: a
+             version that leads with security coursework for TÜVIT, another that leads
+             with the Werkstudent jobs for a Systemhaus. The selected one is what every
+             other page reads. Rendered by renderCvSwitcher(). -->
+        <div id="cv-switcher" class="cv-switcher"></div>
 
         <!-- Mode toggle -->
         <div class="profile-modes">
@@ -1248,6 +1255,7 @@
   <script src="cv-preview.js"></script>
   <script src="json-resume.js"></script>
   <script src="cv-check.js"></script>
+  <script src="cv-store.js"></script>
   <script src="app.js"></script>
   <!-- ── GDPR Banner ── -->
 <div id="gdpr-banner" style="

@@ -2155,10 +2155,166 @@ if (_cvPdfBtn) _cvPdfBtn.addEventListener('click', () => {
   built.doc.save(fileName);
   toast(`${fileName} downloaded!`, 'success');
 });
+// ── The cover letter, in the CV's own design ─────────────────────────────────
+//
+// It used to print through downloadTextAsPDF: Helvetica, a purple rule, the same
+// for everyone. An application is two documents that arrive together, and a letter
+// that shares nothing with the CV beside it looks like it was written for a
+// different job.
+//
+// The generated text already carries the subject line, the greeting, the body and
+// the sign-off — that is exactly what /api/generate-cover is asked to return. What
+// it has no way to carry, and what a German letter needs, is the block around it:
+// who is writing, to whom, from where, on what date. Those are added here, and
+// nothing the text already holds is added a second time.
+
+const GREETING = /^(sehr geehrte|sehr geehrter|liebe|lieber|hallo|guten tag|dear|to whom)/i;
+
+function buildCoverLetterPdfDoc(rawText, profile, meta) {
+  const lib = window.jspdf;
+  if (!lib || !lib.jsPDF) { toast('PDF library not loaded — refresh the page.', 'error'); return null; }
+  const text = pdfSafeText(String(rawText || '').replace(/\r\n/g, '\n')).trim();
+  if (!text) { toast('Nothing to export yet.', 'error'); return null; }
+
+  const p = profile || emptyProfile();
+  const m = meta || {};
+  const real = new lib.jsPDF({ unit: 'pt', format: 'a4' });
+  const rec = (typeof CvPreview !== 'undefined') ? CvPreview.record(real) : null;
+  const doc = rec ? rec.proxy : real;
+
+  // The same resolve() the CV goes through, so the letter inherits the template AND
+  // whatever was customised on top of it.
+  const T = (typeof CvThemes !== 'undefined' && CvThemes.resolve)
+    ? CvThemes.resolve(p.themeId, p.design).theme
+    : { accent: [42, 122, 150], dark: [28, 40, 56], grey: [100, 116, 139] };
+
+  const PAGE_W = doc.internal.pageSize.getWidth();
+  const PAGE_H = doc.internal.pageSize.getHeight();
+  // Wider on the left than the CV's margin. A letter is filed and punched; DIN 5008
+  // leaves room for it, and a CV does not have to.
+  const L = 64, R = 52, BOTTOM = 64;
+  const W = PAGE_W - L - R;
+
+  const FONT = (T.font === 'times' || T.font === 'courier') ? T.font : 'helvetica';
+  const ACCENT = T.accent, DARK = T.dark, GREY = T.grey;
+  const WHITE = [255, 255, 255];
+  const BAND = T.header === 'band';
+  const name = [p.firstName, p.lastName].filter(Boolean).join(' ') || 'Ihr Name';
+
+  const set = (size, style, color) => {
+    doc.setFont(FONT, style || 'normal');
+    doc.setFontSize(size);
+    doc.setTextColor(color[0], color[1], color[2]);
+  };
+
+  // Modern's rail is the template's loudest feature and it cannot come along: a
+  // 185pt column on a letter would take a third of the text width. A narrow strip in
+  // the same colour carries the family resemblance and costs no room.
+  const STRIPE = T.railBleed ? 10 : 0;
+  const stripe = () => {
+    if (!STRIPE) return;
+    doc.setFillColor(ACCENT[0], ACCENT[1], ACCENT[2]);
+    doc.rect(0, 0, STRIPE, PAGE_H, 'F');
+  };
+  stripe();
+
+  let y = 56;
+
+  // ── Who is writing ────────────────────────────────────────────────────────
+  const contact = [p.location, p.email, p.phone].filter(Boolean).join('  ·  ');
+  if (BAND) {
+    const H = 104;
+    const fill = T.bandFill || ACCENT;
+    doc.setFillColor(fill[0], fill[1], fill[2]);
+    doc.rect(0, 0, PAGE_W, H, 'F');
+    set(20, 'bold', T.bandText || WHITE);
+    doc.text(name, L, 46);
+    if (p.title) { set(11, 'bold', T.bandMuted || WHITE); doc.text(p.title, L, 66); }
+    if (contact) { set(9, 'normal', T.bandMuted || WHITE); doc.text(contact, L, 84); }
+    y = H + 46;
+  } else {
+    set(20, 'bold', DARK);
+    doc.text(name, L, y);
+    y += 20;
+    if (p.title) { set(11, 'bold', ACCENT); doc.text(p.title, L, y); y += 15; }
+    if (contact) { set(9, 'normal', GREY); doc.text(contact, L, y); y += 12; }
+    // Schlicht carries its headings by letter-spacing and prints no rules at all;
+    // adding one here would put the only mark on the page in a document whose whole
+    // idea is that there isn't one.
+    if (T.mainHeading !== 'plain') {
+      doc.setDrawColor(ACCENT[0], ACCENT[1], ACCENT[2]);
+      doc.setLineWidth(1.2);
+      doc.line(L, y, L + W, y);
+    }
+    y += 40;
+  }
+
+  // ── To whom, and when ─────────────────────────────────────────────────────
+  if (m.company) {
+    set(10.5, 'bold', DARK);
+    doc.text(String(m.company), L, y);
+    // Its own line, not the recipient's. Drawn at the same y they are two runs of
+    // text at one height, and a PDF text extractor reads them as one string with
+    // nothing between: "TÜV Informationstechnik GmbHGelsenkirchen, 16.09.2026".
+    // DIN 5008 puts the date below the address block anyway.
+    y += 20;
+  }
+  const today = new Date();
+  const stamp = [String(today.getDate()).padStart(2, '0'), String(today.getMonth() + 1).padStart(2, '0'),
+    today.getFullYear()].join('.');
+  set(9.5, 'normal', GREY);
+  doc.text((p.location ? p.location + ', ' : '') + stamp, PAGE_W - R, y, { align: 'right' });
+  y += 44;
+
+  // ── Subject ───────────────────────────────────────────────────────────────
+  //
+  // Taken from the letter when the letter has one, because printing a heading above
+  // a text that opens with the same line would say it twice. Only when the text
+  // dives straight into the greeting is one made, and then out of the job title the
+  // user typed into the form — a label, not a claim.
+  const lines = text.split('\n');
+  let body = lines;
+  let subject = '';
+  const firstIdx = lines.findIndex((l) => l.trim());
+  if (firstIdx !== -1 && !GREETING.test(lines[firstIdx].trim())) {
+    subject = lines[firstIdx].trim().replace(/^(betreff|subject)\s*:\s*/i, '');
+    body = lines.slice(firstIdx + 1);
+  } else if (m.jobTitle) {
+    subject = 'Bewerbung als ' + m.jobTitle;
+  }
+  if (subject) {
+    set(11.5, 'bold', DARK);
+    doc.splitTextToSize(subject, W).forEach((l) => { doc.text(l, L, y); y += 16; });
+    y += 14;
+  }
+
+  // ── The letter ────────────────────────────────────────────────────────────
+  const nextPage = () => { doc.addPage(); stripe(); y = 72; };
+  body.forEach((raw) => {
+    const line = raw.trim();
+    if (!line) { y += 7; return; }
+    set(10.5, 'normal', DARK);
+    doc.splitTextToSize(line, W).forEach((seg) => {
+      if (y > PAGE_H - BOTTOM) nextPage();
+      doc.text(seg, L, y);
+      y += 15;
+    });
+  });
+
+  return { doc: real, name, pages: rec ? rec.pages : null };
+}
+
 const _coverPdfBtn = $('download-cover-pdf-btn');
 if (_coverPdfBtn) _coverPdfBtn.addEventListener('click', () => {
-  const co = $('cover-company')?.value.trim().replace(/\s+/g, '_') || 'Cover';
-  downloadTextAsPDF($('generated-cover-output').value, `${co}_Cover_Letter.pdf`, 'Cover Letter');
+  const company = ($('cover-company')?.value || '').trim();
+  const built = buildCoverLetterPdfDoc($('generated-cover-output').value, state.profile, {
+    company,
+    jobTitle: ($('cover-job-title')?.value || '').trim(),
+  });
+  if (!built) return;
+  const file = (company.replace(/\s+/g, '_') || 'Anschreiben') + '_Anschreiben.pdf';
+  built.doc.save(file);
+  toast(`${file} downloaded.`, 'success');
 });
 
 // Clean, ATS-friendly plain-text CV built from the structured profile (falls back to
@@ -3395,18 +3551,145 @@ const emptyProfile = () => ({
   skills: [], experience: [], education: [], certifications: [], projects: []
 });
 
+// ── More than one CV ─────────────────────────────────────────────────────────
+//
+// cv-store.js holds the list; state.profile is whichever one is active. Nothing
+// else in this file learns that versions exist, and that is the design: the job
+// search, the letter writer, the check and the PDF generator all go on reading
+// state.profile, so none of them is a place where a version could be forgotten.
+
+let _cvStore = null;
+
+function cvStore() {
+  if (!_cvStore && typeof CvStore !== 'undefined') {
+    _cvStore = CvStore.createStore(localStorage, emptyProfile);
+  }
+  return _cvStore;
+}
+
 function loadProfile() {
+  const store = cvStore();
+  if (store) {
+    store.load();
+    state.profile = store.activeProfile() || emptyProfile();
+    return;
+  }
+  // No cv-store.js — a browser still holding an older page. The single-profile path
+  // keeps working rather than leaving the form blank.
   try { state.profile = JSON.parse(localStorage.getItem(PROFILE_KEY)) || emptyProfile(); }
   catch (_) { state.profile = emptyProfile(); }
 }
 
 function saveProfileToStorage() {
-  localStorage.setItem(PROFILE_KEY, JSON.stringify(state.profile));
+  const store = cvStore();
+  if (store) {
+    const r = store.save(state.profile);
+    if (!r.ok && r.reason === 'quota') {
+      // Each version carries its own copy of the photo as a data URL, so this is
+      // reachable with a handful of them. Said out loud: a save that fails quietly
+      // is how an afternoon of edits disappears.
+      toast('Speicher voll — zu viele Lebensläufe mit Foto. Bitte eine Version löschen.', 'error');
+    }
+  } else {
+    localStorage.setItem(PROFILE_KEY, JSON.stringify(state.profile));
+  }
   // Every mutation in this file already funnels through here — the repeat lists,
   // the skill tags, the CV sections, the photo, the theme. Redrawing from this one
   // place keeps the preview honest without a call at each of the sixteen sites,
   // and without one being forgotten the next time a field is added.
   if (typeof schedulePreview === 'function') schedulePreview();
+}
+
+/**
+ * The analysis the job matching reads, rebuilt from a profile's skills.
+ *
+ * Switching CV has to rebuild it, or the search keeps matching against the version
+ * that is no longer on screen — the kind of wrong answer that looks like a right one.
+ */
+function deriveAnalysisFromProfile(p) {
+  if (!p || !(p.skills || []).length) return;
+  const foundKeys = p.skills.map((s) => s.key || normalize(s.label || s));
+  const allSkills = skillGroups.flatMap((g) => g.skills);
+  state.analysis = {
+    foundSkills:   p.skills.map((s) => ({ key: s.key || normalize(s.label || s), label: s.label || s })),
+    missingSkills: allSkills.filter((s) => !foundKeys.includes(s.key)),
+    roles:         analyzeRolesLocal(foundKeys),
+    domain:        detectDomain(foundKeys),
+  };
+}
+
+/** Everything on the profile page, redrawn for a different CV. */
+function refreshProfileViews() {
+  if (typeof renderProfileForm === 'function') renderProfileForm();
+  ['exp', 'edu', 'cert'].forEach((t) => renderRepeatList(t));
+  if (typeof renderSkillTags === 'function')     renderSkillTags();
+  if (typeof renderCvSchema === 'function')      renderCvSchema(state.profile.cvSchema);
+  if (typeof renderThemePicker === 'function')   renderThemePicker();
+  if (typeof updateProfileSummary === 'function') updateProfileSummary();
+  renderCvSwitcher();
+  deriveAnalysisFromProfile(state.profile);
+  if (typeof schedulePreview === 'function') schedulePreview();
+}
+
+function renderCvSwitcher() {
+  const host = $('cv-switcher');
+  const store = cvStore();
+  if (!host || !store) return;
+  const items = store.items();
+  const current = store.active();
+
+  host.innerHTML = `
+    <label class="cv-switch-label" for="cv-select">Lebenslauf</label>
+    <select id="cv-select" class="field cv-select">
+      ${items.map((i) => `<option value="${esc(i.id)}"${current && i.id === current.id ? ' selected' : ''}>${esc(i.name)}</option>`).join('')}
+    </select>
+    <button type="button" class="btn btn-ghost btn-sm" data-cv="new">Neu</button>
+    <button type="button" class="btn btn-ghost btn-sm" data-cv="duplicate">Duplizieren</button>
+    <button type="button" class="btn btn-ghost btn-sm" data-cv="rename">Umbenennen</button>
+    <button type="button" class="btn btn-ghost btn-sm" data-cv="delete"${items.length < 2 ? ' disabled' : ''}>Löschen</button>
+    <span class="hint">Die gewählte Version gilt überall — Jobsuche, Anschreiben und PDF lesen sie.</span>`;
+
+  // Assigned, not added: this redraws after every action.
+  host.onchange = (e) => {
+    if (e.target.id !== 'cv-select') return;
+    store.switchTo(e.target.value);
+    state.profile = store.activeProfile();
+    refreshProfileViews();
+  };
+  host.onclick = (e) => {
+    const btn = e.target.closest('[data-cv]');
+    if (btn) cvAction(btn.dataset.cv);
+  };
+}
+
+function cvAction(what) {
+  const store = cvStore();
+  if (!store) return;
+  const current = store.active();
+
+  if (what === 'new') {
+    const name = prompt('Name für den neuen Lebenslauf:', 'Für ');
+    if (name === null) return;
+    // Contact details come along, the tailoring does not — see CvStore.IDENTITY.
+    store.create(name);
+  } else if (what === 'duplicate') {
+    const name = prompt('Name der Kopie:', current.name + ' (Kopie)');
+    if (name === null) return;
+    store.duplicate(name);
+  } else if (what === 'rename') {
+    const name = prompt('Neuer Name:', current.name);
+    if (name === null || !name.trim()) return;
+    store.rename(current.id, name);
+  } else if (what === 'delete') {
+    if (!confirm('„' + current.name + '" löschen? Die anderen Lebensläufe bleiben erhalten.')) return;
+    const r = store.remove(current.id);
+    if (!r.ok) { toast('Der letzte Lebenslauf kann nicht gelöscht werden.', 'error'); return; }
+  } else {
+    return;
+  }
+
+  state.profile = store.activeProfile();
+  refreshProfileViews();
 }
 
 // ── The CV's own sections, as an editable form ─────────────────────────────
@@ -4092,6 +4375,10 @@ function setProfileMode(mode) {
   const imp = $('profile-import'); const man = $('profile-manual');
   if (imp) imp.classList.toggle('hidden', mode !== 'import');
   if (man) man.classList.toggle('hidden', mode !== 'manual');
+  // The switcher is drawn for both modes: importing a CV replaces the active
+  // version, and knowing which one is about to be overwritten matters more there
+  // than it does in the form.
+  renderCvSwitcher();
   if (mode === 'manual') { renderProfileForm(); renderThemePicker(); syncSchemaFormMode(_showFixedFields); }
 }
 
@@ -4137,7 +4424,10 @@ if (_photoRemove) _photoRemove.addEventListener('click', () => {
 
 const _pfReset = $('pf-reset');
 if (_pfReset) _pfReset.addEventListener('click', () => {
-  if (!confirm('Delete your saved profile data? This cannot be undone.')) return;
+  // Names the version. With several CVs in the list, "your profile data" reads as
+  // all of them, and this empties exactly one.
+  const _cv = cvStore() && cvStore().active();
+  if (!confirm('„' + (_cv ? _cv.name : 'Lebenslauf') + '“ leeren? Die anderen Lebenslaeufe bleiben erhalten.')) return;
   state.profile = emptyProfile();
   saveProfileToStorage();
   renderProfileForm();
@@ -5299,11 +5589,18 @@ const PF_FIELDS = [
   ['pf-languages', 'languages'], ['pf-title', 'title'], ['pf-summary', 'summary'],
 ];
 
+// Which of them hold prose. A dictionary has no useful opinion about a surname, a
+// street or a phone number, and underlining "Gelsenkirchen" in red teaches the
+// reader to ignore the squiggles on the fields where a typo actually costs a reply.
+const PF_PROSE_FIELDS = new Set(['title', 'summary', 'languages']);
+
 function wireProfileLiveFields() {
   PF_FIELDS.forEach(([id, key]) => {
     const el = $(id);
     if (!el || el.dataset.live === '1') return;
     el.dataset.live = '1';
+    if (PF_PROSE_FIELDS.has(key)) { el.spellcheck = true; el.lang = 'de'; }
+    else el.spellcheck = false;
     el.addEventListener('input', () => {
       state.profile[key] = el.value;
       saveProfileToStorage();
@@ -5591,6 +5888,23 @@ async function loadBulletSuggestions(index, btn, host) {
   }
 }
 
+// Dates are not words. A browser dictionary underlines "06.2024" and "heute" as
+// readily as a real typo, and a form covered in red squiggles teaches the reader to
+// ignore all of them — including on the fields where a misspelling costs something.
+const PF_DATE_FIELDS = new Set(['start', 'end', 'year']);
+
+/**
+ * Spell-checking on the fields that hold prose, in German.
+ *
+ * lang="de" rather than leaving it to the browser's own language: the CV is written
+ * in German for a German employer even when the interface around it is in English,
+ * and a browser set to English would check it against the wrong dictionary and
+ * underline every correct word in the document.
+ */
+function spellAttrs(field) {
+  return PF_DATE_FIELDS.has(field) ? 'spellcheck="false"' : 'spellcheck="true" lang="de"';
+}
+
 function renderRepeatList(type) {
   const def  = REPEAT_DEFS[type];
   const list = $(`pf-${type}-list`);
@@ -5600,8 +5914,8 @@ function renderRepeatList(type) {
     ? arr.map((item, i) => `
       <div class="repeat-item" data-i="${i}">
         ${def.fields.map(([f, ph]) => f === 'desc'
-          ? `<textarea class="field" rows="2" data-f="${f}" placeholder="${ph}">${esc(item[f] || '')}</textarea>`
-          : `<input class="field" type="text" data-f="${f}" placeholder="${ph}" value="${esc(item[f] || '')}" />`).join('')}
+          ? `<textarea class="field" rows="2" data-f="${f}" ${spellAttrs(f)} placeholder="${ph}">${esc(item[f] || '')}</textarea>`
+          : `<input class="field" type="text" data-f="${f}" ${spellAttrs(f)} placeholder="${ph}" value="${esc(item[f] || '')}" />`).join('')}
         <button class="repeat-del" data-i="${i}" title="Remove">Remove</button>
         ${type === 'exp' ? `
         <div class="pf-suggest">
@@ -5655,17 +5969,10 @@ if (_pfSave) _pfSave.addEventListener('click', () => {
   p.languages = get('pf-languages'); p.title = get('pf-title'); p.summary = get('pf-summary');
   saveProfileToStorage();
 
-  // Feed skills into analysis so job matching works
-  if (p.skills?.length) {
-    const foundKeys = p.skills.map(s => s.key || normalize(s.label || s));
-    const allSkills = skillGroups.flatMap(g => g.skills);
-    state.analysis = {
-      foundSkills:   p.skills.map(s => ({ key: s.key || normalize(s.label||s), label: s.label || s })),
-      missingSkills: allSkills.filter(s => !foundKeys.includes(s.key)),
-      roles:         analyzeRolesLocal(foundKeys),
-      domain:        detectDomain(foundKeys)
-    };
-  }
+  // Feed skills into analysis so job matching works. The same derivation the CV
+  // switcher runs when a different version is selected, kept in one place — two
+  // copies would drift, and the one that drifted would quietly change every score.
+  deriveAnalysisFromProfile(p);
   const msg = $('pf-save-msg');
   if (msg) { msg.className = 'form-msg ok'; msg.textContent = 'Profile saved ✓'; setTimeout(() => msg.textContent = '', 2500); }
   refreshGettingStarted();
