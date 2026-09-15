@@ -3668,7 +3668,7 @@ option   { color: var(--text); background: var(--bg-card); }
   letter-spacing: 0.04em;
   text-transform: uppercase;
   border: none;
-  border-bottom: 2px solid var(--accent, #2a7a96);
+  border-bottom: 2px solid var(--cyan);
   border-radius: 0;
   padding-left: 0;
   margin-bottom: 10px;
@@ -3704,13 +3704,13 @@ option   { color: var(--text); background: var(--bg-card); }
   padding: 12px;
   text-align: left;
   cursor: pointer;
-  background: var(--card, #fff);
+  background: var(--bg-card);
   border: 2px solid var(--border, #e2e8f0);
   border-radius: 12px;
   transition: border-color .15s, transform .15s;
 }
 .theme-card:hover { transform: translateY(-2px); }
-.theme-card.selected { border-color: var(--accent, #2a7a96); }
+.theme-card.selected { border-color: var(--cyan); }
 /* The thumbnail sits on a neutral field so a light template does not vanish into
    the card and a dark one does not read as a block. */
 .theme-thumb {
@@ -3722,7 +3722,7 @@ option   { color: var(--text); background: var(--bg-card); }
 }
 .theme-thumb svg { display: block; width: 100%; height: auto; }
 .theme-name { font-weight: 700; font-size: .95rem; }
-.theme-note { font-size: .8rem; line-height: 1.35; color: var(--muted, #64748b); }
+.theme-note { font-size: .8rem; line-height: 1.35; color: var(--text-muted); }
 
 /* One or two columns, read off the theme. It sits above the name because it is the
    fact with a consequence: a portal that reads the PDF machine-side interleaves two
@@ -3732,10 +3732,10 @@ option   { color: var(--text); background: var(--bg-card); }
   font-weight: 700;
   letter-spacing: .06em;
   text-transform: uppercase;
-  color: var(--muted, #64748b);
+  color: var(--text-muted);
   margin-bottom: -4px;
 }
-.theme-card.selected .theme-cols { color: var(--accent, #2a7a96); }
+.theme-card.selected .theme-cols { color: var(--cyan); }
 
 @media (max-width: 480px) {
   .theme-picker { grid-template-columns: 1fr 1fr; }
@@ -3748,11 +3748,11 @@ option   { color: var(--text); background: var(--bg-card); }
 .cv-switcher {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   padding: 12px 16px; margin-bottom: 18px; border-radius: 12px;
-  background: var(--bg-card, var(--card, #fff)); border: 1px solid var(--border, #e2e8f0);
+  background: var(--bg-card); border: 1px solid var(--border, #e2e8f0);
 }
 .cv-switch-label {
   font-size: .72rem; font-weight: 700; letter-spacing: .05em;
-  text-transform: uppercase; color: var(--muted, #64748b);
+  text-transform: uppercase; color: var(--text-muted);
 }
 .cv-select { width: auto; min-width: 200px; max-width: 320px; }
 /* The note wraps to its own line on a narrow card and takes the width there, which
@@ -3771,15 +3771,15 @@ option   { color: var(--text); background: var(--bg-card); }
 .dc-row { display: grid; gap: 8px; }
 .dc-label {
   font-size: .72rem; font-weight: 700; letter-spacing: .05em;
-  text-transform: uppercase; color: var(--muted, #64748b);
+  text-transform: uppercase; color: var(--text-muted);
 }
 .dc-swatches { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .dc-swatch {
   width: 28px; height: 28px; padding: 0; border-radius: 50%; cursor: pointer;
   border: 2px solid transparent; box-shadow: 0 0 0 1px var(--border, #e2e8f0);
 }
-.dc-swatch.selected { border-color: var(--card, #fff); box-shadow: 0 0 0 2px var(--accent, #2a7a96); }
-.dc-custom { display: inline-flex; align-items: center; gap: 6px; font-size: .8rem; color: var(--muted, #64748b); }
+.dc-swatch.selected { border-color: var(--bg-card); box-shadow: 0 0 0 2px var(--cyan); }
+.dc-custom { display: inline-flex; align-items: center; gap: 6px; font-size: .8rem; color: var(--text-muted); }
 .dc-custom input[type="color"] {
   width: 32px; height: 28px; padding: 0; cursor: pointer; background: none;
   border: 1px solid var(--border, #e2e8f0); border-radius: 6px;
@@ -3789,7 +3789,7 @@ option   { color: var(--text); background: var(--bg-card); }
   font-size: .8rem; padding: 5px 10px; border-radius: 999px; cursor: pointer;
   border: 1px solid var(--border, #e2e8f0); background: transparent; color: inherit;
 }
-.dc-chip.selected { border-color: var(--accent, #2a7a96); color: var(--accent, #2a7a96); font-weight: 600; }
+.dc-chip.selected { border-color: var(--cyan); color: var(--cyan); font-weight: 600; }
 .dc-columns { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
 .dc-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
 .dc-section {
@@ -3798,13 +3798,13 @@ option   { color: var(--text); background: var(--bg-card); }
 }
 .dc-section-name { flex: 1; min-width: 0; }
 .dc-section.is-hidden .dc-section-name { text-decoration: line-through; opacity: .55; }
-.dc-empty { font-size: .72rem; color: var(--muted, #64748b); }
+.dc-empty { font-size: .72rem; color: var(--text-muted); }
 .dc-move {
   width: 24px; height: 24px; line-height: 1; cursor: pointer; border-radius: 6px;
   border: 1px solid var(--border, #e2e8f0); background: transparent; color: inherit;
 }
 .dc-move:disabled { opacity: .3; cursor: default; }
-.dc-visible { display: inline-flex; align-items: center; gap: 4px; font-size: .75rem; color: var(--muted, #64748b); }
+.dc-visible { display: inline-flex; align-items: center; gap: 4px; font-size: .75rem; color: var(--text-muted); }
 .dc-warn { font-size: .8rem; line-height: 1.45; color: #b45309; }
 .dc-foot { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
 /* The note takes the room and the button takes what it needs. Without this the
@@ -3822,14 +3822,14 @@ option   { color: var(--text); background: var(--bg-card); }
   padding: 8px 10px; text-align: left; cursor: pointer; font: inherit; color: inherit;
   background: transparent; border: 1px solid var(--border, #e2e8f0); border-radius: 8px;
 }
-.cv-issue:hover { border-color: var(--accent, #2a7a96); }
+.cv-issue:hover { border-color: var(--cyan); }
 .cv-issue-level {
   flex: none; font-size: .66rem; font-weight: 700; letter-spacing: .05em;
   text-transform: uppercase; padding: 2px 7px; border-radius: 999px;
 }
 .cv-issue.lvl-error .cv-issue-level { background: rgba(220, 38, 38, .14); color: #dc2626; }
 .cv-issue.lvl-warn  .cv-issue-level { background: rgba(217, 119, 6, .16); color: #b45309; }
-.cv-issue.lvl-tip   .cv-issue-level { background: rgba(100, 116, 139, .16); color: var(--muted, #64748b); }
+.cv-issue.lvl-tip   .cv-issue-level { background: rgba(100, 116, 139, .16); color: var(--text-muted); }
 .cv-issue-text { font-size: .86rem; line-height: 1.45; }
 /* Both class names in the selector: .pill is defined later in this file and sets a
    colour of its own, so a single-class rule here loses on source order and the
@@ -3856,7 +3856,7 @@ option   { color: var(--text); background: var(--bg-card); }
   transform-origin: bottom center;
   width: 300px;
   padding: 10px;
-  background: var(--card, #fff);
+  background: var(--bg-card);
   border: 1px solid var(--border, #e2e8f0);
   border-radius: 12px;
   box-shadow: 0 18px 44px rgba(0, 0, 0, .28);
@@ -3889,7 +3889,7 @@ option   { color: var(--text); background: var(--bg-card); }
    sheds its field chrome without needing !important. */
 #cv-schema-body .pf-section {
   border: 0;
-  border-left: 3px solid var(--accent, #2a7a96);
+  border-left: 3px solid var(--cyan);
   border-radius: 0;
   background: rgba(255, 255, 255, .02);
   padding: 4px 0 14px 16px;
@@ -3905,7 +3905,7 @@ option   { color: var(--text); background: var(--bg-card); }
   font-weight: 700;
   letter-spacing: .09em;
   text-transform: uppercase;
-  color: var(--accent, #2a7a96);
+  color: var(--cyan);
 }
 #cv-schema-body .pf-heading:focus {
   background: transparent;
@@ -3931,7 +3931,7 @@ option   { color: var(--text); background: var(--bg-card); }
 /* A section the fixed form has no concept for — PRAKTISCHE KENNTNISSE, say. It is
    kept under the candidate's own heading and placed after the known ones, so the
    order still reads like the form rather than like the source document. */
-#cv-schema-body .pf-section-new { border-left-color: var(--muted, #64748b); }
+#cv-schema-body .pf-section-new { border-left-color: var(--text-muted); }
 #cv-schema-body .pf-new-note {
   display: block;
   margin: -4px 0 10px;
