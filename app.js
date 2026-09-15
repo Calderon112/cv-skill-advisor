@@ -5049,10 +5049,21 @@ function buildProfilePdfDoc(profile, overrides) {
     if (!HAS_RAIL) return;
     doc.setFillColor(RAIL[0], RAIL[1], RAIL[2]);
     if (T.railBleed) {
-      // Edge to edge and top to bottom. A coloured band that stops at the margin
-      // reads as a mistake rather than as a design, and the header has to sit on
-      // the band, not beside it.
-      doc.rect(SIDE_X - M, 0, SIDE_W + M + 10, PAGE_H, 'F');
+      // Edge to edge and top to bottom, on the side the rail is actually on. A
+      // coloured band that stops at the margin reads as a mistake rather than as a
+      // design, and the header has to sit on the band, not beside it.
+      //
+      // The rect used to be written as (SIDE_X - M, width SIDE_W + M + 10), which
+      // is correct for a rail on the left — SIDE_X is the margin there, so it
+      // starts at the paper's edge. On a rail set right it bleeds the wrong way:
+      // the band began a full margin INSIDE the rail and stopped short of the right
+      // edge. Measured on Leiste: the main column runs to x=361 and the band began
+      // at x=343, so the last 18pt of every long line was printed on the colour,
+      // while a 30pt white strip was left down the outside edge.
+      const IN = 10;                       // a little into the gap, so nothing looks pinched
+      const left  = (T.rail === 'left') ? 0 : SIDE_X - IN;
+      const width = (T.rail === 'left') ? SIDE_X + SIDE_W + IN : PAGE_W - SIDE_X + IN;
+      doc.rect(left, 0, width, PAGE_H, 'F');
       return;
     }
     doc.rect(SIDE_X - 10, from - 12, SIDE_W + 20, PAGE_H - from - M + 12, 'F');
