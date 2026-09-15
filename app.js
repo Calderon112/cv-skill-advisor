@@ -4956,6 +4956,22 @@ function buildProfilePdfDoc(profile, overrides) {
   };
 
   const HAS_RAIL = T.rail !== 'none' && T.railWidth > 0;
+
+  // -- Axes for the wider template set --------------------------------------
+  //
+  // Every one of these is drawn by the picker's thumbnail as well. An axis the
+  // generator reads and the thumbnail ignores shows a picture of a different
+  // template; an axis the thumbnail draws and the generator ignores is worse, and
+  // railHeading was exactly that - declared by all eight templates, painted on
+  // every thumbnail, and never once read here.
+  const DENSITY = typeof T.density === 'number' ? T.density : 1;
+  // Headings set in a gutter beside the entries instead of above them. Single
+  // column only: where there is a rail there is no width to give away.
+  const SIDE_HEADS = T.sideHeadings === true && !HAS_RAIL;
+  const GUTTER = SIDE_HEADS ? 116 : 0;
+  const NUMBERED = T.sectionNumbers === true;
+  const SEPARATOR = T.entrySeparator === 'rule';
+  let sectionNo = 0;
   const M = T.margin;
   const GAP = HAS_RAIL ? T.gap : 0;
   const SIDE_W = HAS_RAIL ? T.railWidth : 0;
@@ -4964,8 +4980,8 @@ function buildProfilePdfDoc(profile, overrides) {
   // With no rail, the "rail" sections are simply main-column sections. Pointing the
   // side coordinates at the main column means every renderer below works unchanged
   // in both layouts, instead of each one needing to know which theme it is in.
-  const SIDE_X = !HAS_RAIL ? MAIN_X : (T.rail === 'left' ? M : PAGE_W - M - SIDE_W);
-  const SIDE_W_R = !HAS_RAIL ? MAIN_W : SIDE_W;
+  const SIDE_X = !HAS_RAIL ? MAIN_X + GUTTER : (T.rail === 'left' ? M : PAGE_W - M - SIDE_W);
+  const SIDE_W_R = !HAS_RAIL ? MAIN_W - GUTTER : SIDE_W;
 
   const TEAL  = T.accent;
   const DARK  = T.dark;
@@ -5008,8 +5024,10 @@ function buildProfilePdfDoc(profile, overrides) {
   const TL_INDENT = 15;
   // Where an entry's text starts. The timeline occupies the first points of the
   // column, so entries are indented past it; headings and plain facts are not.
-  const MAIN_E_X = TIMELINE ? MAIN_X + TL_INDENT : MAIN_X;
-  const MAIN_E_W = TIMELINE ? MAIN_W - TL_INDENT : MAIN_W;
+  const MAIN_C_X = MAIN_X + GUTTER;
+  const MAIN_C_W = MAIN_W - GUTTER;
+  const MAIN_E_X = (TIMELINE ? MAIN_X + TL_INDENT : MAIN_X) + GUTTER;
+  const MAIN_E_W = (TIMELINE ? MAIN_W - TL_INDENT : MAIN_W) - GUTTER;
   const SIDE_E_X = TIMELINE ? SIDE_X + TL_INDENT : SIDE_X;
   const SIDE_E_W = TIMELINE ? SIDE_W_R - TL_INDENT : SIDE_W_R;
 
@@ -5117,7 +5135,37 @@ function buildProfilePdfDoc(profile, overrides) {
 
   // Main-column heading: white on a filled teal bar.
   function mainSection(label) {
-    yMain += 10;
+    sectionNo += 1;
+    // The number joins the heading string rather than being drawn beside it. Two
+    // runs of text at one height are read as one unseparated string by a PDF
+    // extractor, which is how "01" would arrive glued to the section name.
+    const text = (NUMBERED ? String(sectionNo).padStart(2, '0') + '  ' : '') + String(label).toUpperCase();
+
+    // A heading in the gutter to the left of the entries. The cursor is barely
+    // advanced past it, because the section's first entry is meant to start on the
+    // same line as its heading - that is the whole of this layout.
+    if (SIDE_HEADS) {
+      yMain += 20 * DENSITY;
+      if (yMain + 30 > PAGE_H - M) nextPage();
+      setFont(9, 'bold', TEAL);
+      // Wrapped inside the gutter, like any other column. Set on one line it simply
+      // overflowed: "TECHNISCHE FÄHIGKEITEN" is wider than the 116pt gutter and was
+      // printed straight through the "Kenntnisse:" standing beside it. The
+      // extraction check passed that page — overlapping text extracts perfectly,
+      // which is exactly why the rendered page is looked at as well.
+      const headLines = doc.splitTextToSize(text, GUTTER - 14);
+      tracked(function () {
+        headLines.forEach(function (l, i) { doc.text(l, MAIN_X, yMain + 8 + i * 11); });
+      });
+      // The content starts beside the heading's LAST line. Beside the first would
+      // read better, but then a section whose heading wraps and whose content is one
+      // line leaves the next heading free to land on the wrapped line — and this
+      // layout has exactly such a section.
+      yMain += 8 + (headLines.length - 1) * 11;
+      return;
+    }
+
+    yMain += 10 * DENSITY;
     if (yMain + 30 > PAGE_H - M) nextPage();
     // No rule and no bar: the heading is set apart by capitals, letter-spacing and
     // the space around it. On a document with no colour, a rule under every heading
@@ -5125,28 +5173,28 @@ function buildProfilePdfDoc(profile, overrides) {
     if (T.mainHeading === 'plain') {
       yMain += 6;
       setFont(9, 'bold', TEAL);
-      tracked(function () { doc.text(String(label).toUpperCase(), MAIN_X, yMain + 8); });
-      yMain += 22;
+      tracked(function () { doc.text(text, MAIN_X, yMain + 8); });
+      yMain += 22 * DENSITY;
       return;
     }
     if (T.mainHeading === 'bar') {
       doc.setFillColor(TEAL[0], TEAL[1], TEAL[2]);
       doc.rect(MAIN_X, yMain - 2, MAIN_W, 17, 'F');
       setFont(9.5, 'bold', WHITE);
-      tracked(function () { doc.text(String(label).toUpperCase(), MAIN_X + 8, yMain + 10); });
-      yMain += 28;
+      tracked(function () { doc.text(text, MAIN_X + 8, yMain + 10); });
+      yMain += 28 * DENSITY;
       return;
     }
     // A rule instead of a filled bar. Text on a block of colour is an image to a
     // PDF text extractor, and an applicant tracking system can lose the heading
     // along with it — which is the whole point of the single-column theme.
     setFont(9.5, 'bold', TEAL);
-    tracked(function () { doc.text(String(label).toUpperCase(), MAIN_X, yMain + 8); });
+    tracked(function () { doc.text(text, MAIN_X, yMain + 8); });
     yMain += 12;
     doc.setDrawColor(TEAL[0], TEAL[1], TEAL[2]);
     doc.setLineWidth(0.8);
     doc.line(MAIN_X, yMain, MAIN_X + MAIN_W, yMain);
-    yMain += 14;
+    yMain += 14 * DENSITY;
   }
 
   // Rail heading: teal type over a hairline rather than a second filled bar. The
@@ -5156,16 +5204,34 @@ function buildProfilePdfDoc(profile, overrides) {
     // One column means there is no second heading style to distinguish, and no
     // second cursor to advance. Delegating keeps the rail renderers unchanged.
     if (!HAS_RAIL) return mainSection(label);
-    ySide += 12;
+    ySide += 12 * DENSITY;
     if (ySide + 28 > PAGE_H - M) nextPage();
-    setFont(9.5, 'bold', T.railBleed ? RAIL_TEXT : TEAL);
+    const style = T.railHeading || 'rule';
+    const ink = T.railBleed ? RAIL_TEXT : TEAL;
+
+    // A filled bar inside the rail. On a bleeding rail the bar takes the rail's own
+    // text colour and the type takes the rail's fill: a teal bar on a navy column is
+    // two darks stacked on each other.
+    if (style === 'bar') {
+      const fill = T.railBleed ? RAIL_TEXT : TEAL;
+      doc.setFillColor(fill[0], fill[1], fill[2]);
+      doc.rect(SIDE_X, ySide - 9, SIDE_W_R, 15, 'F');
+      setFont(9, 'bold', T.railBleed ? RAIL : WHITE);
+      tracked(function () { doc.text(String(label).toUpperCase(), SIDE_X + 6, ySide + 1); });
+      ySide += 21 * DENSITY;
+      return;
+    }
+
+    setFont(9.5, 'bold', ink);
     tracked(function () { doc.text(String(label).toUpperCase(), SIDE_X, ySide); });
+    if (style === 'plain') { ySide += 16 * DENSITY; return; }
+
     ySide += 4;
     const rc = T.railBleed ? RAIL_MUTED : TEAL;
     doc.setDrawColor(rc[0], rc[1], rc[2]);
     doc.setLineWidth(0.8);
     doc.line(SIDE_X, ySide, SIDE_X + SIDE_W_R, ySide);
-    ySide += 13;
+    ySide += 13 * DENSITY;
   }
 
   // The dot is drawn separately and the body indented past it, so a wrapped
@@ -5279,22 +5345,43 @@ function buildProfilePdfDoc(profile, overrides) {
     const textX = CENTRED ? headX + headW / 2 : headX;
     const opts = CENTRED ? { align: 'center' } : undefined;
 
+    // A filled square carrying the initials, with the name beside it. Ranged-left
+    // headers only: centred, a block on one side is neither centred nor ranged.
+    let headShift = 0;
+    if (T.nameStyle === 'monogram' && !CENTRED) {
+      const S = 46;
+      const initials = [p.firstName, p.lastName].filter(Boolean)
+        .map(function (s) { return String(s).trim().charAt(0); }).join('').toUpperCase();
+      doc.setFillColor(TEAL[0], TEAL[1], TEAL[2]);
+      doc.rect(headX, y, S, S, 'F');
+      setFont(20, 'bold', WHITE);
+      doc.text(initials, headX + S / 2, y + S / 2 + 7, { align: 'center' });
+      headShift = S + 16;
+    }
+
     setFont(23, 'bold', DARK);
-    doc.splitTextToSize(name, headW).forEach(function (l) { doc.text(l, textX, y + 20, opts); y += 26; });
+    doc.splitTextToSize(name, headW - headShift).forEach(function (l) { doc.text(l, textX + headShift, y + 20, opts); y += 26; });
     if (p.title) {
       setFont(12.5, 'bold', TEAL);
-      doc.splitTextToSize(p.title, headW).forEach(function (l) { doc.text(l, textX, y + 12, opts); y += 16; });
+      doc.splitTextToSize(p.title, headW - headShift)
+        .forEach(function (l) { doc.text(l, textX + headShift, y + 12, opts); y += 16; });
     }
     if (p.summary) {
       setFont(9.5, 'normal', GREY);
-      doc.splitTextToSize(p.summary, headW).slice(0, 3).forEach(function (l) { doc.text(l, textX, y + 10, opts); y += 13; });
+      doc.splitTextToSize(p.summary, headW - headShift).slice(0, 3)
+        .forEach(function (l) { doc.text(l, textX + headShift, y + 10, opts); y += 13; });
     }
     y = Math.max(y + 12, M + (showPhoto ? PHOTO + 14 : 0));
-    doc.setDrawColor(TEAL[0], TEAL[1], TEAL[2]);
-    // A two-point bar under a centred serif header is the loudest thing on the
-    // sheet, and shouts down the restraint the rest of the template is for.
-    doc.setLineWidth(CENTRED ? 0.8 : 2);
-    doc.line(headX, y, headX + headW + (showPhoto ? PHOTO + 20 : 0), y);
+    const ruleW = headW + (showPhoto ? PHOTO + 20 : 0);
+    if (T.headerRule !== 'none') {
+      doc.setDrawColor(TEAL[0], TEAL[1], TEAL[2]);
+      // A two-point bar under a centred serif header is the loudest thing on the
+      // sheet, and shouts down the restraint the rest of the template is for.
+      doc.setLineWidth(T.headerRule === 'double' ? 0.7 : (CENTRED ? 0.8 : 2));
+      doc.line(headX, y, headX + ruleW, y);
+      // Two hairlines rather than one bar: the same separation, a quieter voice.
+      if (T.headerRule === 'double') doc.line(headX, y + 3.5, headX + ruleW, y + 3.5);
+    }
     headerBottom = y + 22;
   }
   if (!T.railBleed) paintRail(headerBottom);
@@ -5313,6 +5400,26 @@ function buildProfilePdfDoc(profile, overrides) {
     p.phone       ? ['Tel', p.phone] : null,
     p.nationality ? ['Nationalität', p.nationality] : null,
   ].filter(Boolean);
+
+  /** A hairline between entries, for the templates that separate them that way. */
+  function entryRule() {
+    if (!SEPARATOR || yMain - 8 < M) return;
+    doc.setDrawColor(GREY[0], GREY[1], GREY[2]);
+    doc.setLineWidth(0.3);
+    doc.line(MAIN_E_X, yMain - 8, MAIN_E_X + MAIN_E_W, yMain - 8);
+  }
+
+  /**
+   * Title and dates on one line, where the template asks for it.
+   *
+   * Joined into one string rather than drawn as a second run at the right margin.
+   * Dates set in a column of their own arrive from a text extractor as a detached
+   * list, and pairing them back by order stamps entries with dates the candidate
+   * never wrote - the failure this project has already met once.
+   */
+  function titleWithDates(title, dates) {
+    return (T.dateStyle === 'after-title' && dates) ? title + '  \u2014  ' + dates : title;
+  }
 
   const RENDER = {
     kontakt: function () {
@@ -5376,11 +5483,12 @@ function buildProfilePdfDoc(profile, overrides) {
     berufserfahrung: function () {
       if (p.experience && p.experience.length) {
         mainSection('Berufserfahrung');
-        p.experience.forEach(function (x) {
+        p.experience.forEach(function (x, i) {
           station(function () {
             const dates = [x.start, x.end].filter(Boolean).join(' – ');
-            if (dates)  write(dates, MAIN_E_X, MAIN_E_W, 8, 'normal', GREY, 11);
-            if (x.role) write(x.role, MAIN_E_X, MAIN_E_W, 10.5, 'bold', TEAL, 13);
+            if (i) entryRule();
+            if (dates && T.dateStyle !== 'after-title') write(dates, MAIN_E_X, MAIN_E_W, 8, 'normal', GREY, 11);
+            if (x.role) write(titleWithDates(x.role, dates), MAIN_E_X, MAIN_E_W, 10.5, 'bold', TEAL, 13);
             const org = [x.org, x.location].filter(Boolean).join(', ');
             if (org)    write(org, MAIN_E_X, MAIN_E_W, 9.5, 'bold', DARK, 12);
             if (x.desc) bulletList(splitLines(x.desc), MAIN_E_X, MAIN_E_W);
@@ -5418,13 +5526,13 @@ function buildProfilePdfDoc(profile, overrides) {
           const LABEL_W = 104;
           if (yMain + 14 > PAGE_H - M) nextPage();
           setFont(9, 'bold', TEAL);
-          doc.text(cat + ':', MAIN_X, yMain);
-          const lines = doc.splitTextToSize(groups[cat].join(', '), MAIN_W - LABEL_W);
+          doc.text(cat + ':', MAIN_C_X, yMain);
+          const lines = doc.splitTextToSize(groups[cat].join(', '), MAIN_C_W - LABEL_W);
           setFont(9, 'normal', DARK);
           let y1 = yMain;
           lines.forEach(function (l) {
             if (y1 + 12 > PAGE_H - M) { nextPage(); y1 = M; }
-            doc.text(l, MAIN_X + LABEL_W, y1);
+            doc.text(l, MAIN_C_X + LABEL_W, y1);
             y1 += 12;
           });
           yMain = y1 + 5;

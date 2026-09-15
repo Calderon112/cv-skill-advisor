@@ -291,6 +291,249 @@
                'weiterbildung', 'skills', 'sprachen', 'softskills', 'interessen'],
       },
     },
+
+    // Headings in a gutter beside the entries, the way a reference work sets them.
+    // The eye runs down one narrow column of labels and stops where it wants to
+    // read, instead of scanning every heading on the way past.
+    register: {
+      id: 'register',
+      name: 'Register',
+      note: 'Einspaltig, Überschriften in einer Spalte links neben den Einträgen. Für einen langen Werdegang, der überflogen werden soll.',
+      rail: 'none',
+      railWidth: 0,
+      margin: 48,
+      gap: 0,
+      accent: [29, 106, 128],
+      dark: [26, 34, 42],
+      grey: [102, 114, 126],
+      railFill: null,
+      mainHeading: 'rule',
+      railHeading: 'rule',
+      sideHeadings: true,
+      dateStyle: 'after-title',
+      photo: 'none',
+      layout: { rail: [], main: ['kontakt', 'berufserfahrung', 'skills', 'projekte',
+               'ausbildung', 'weiterbildung', 'sprachen', 'softskills', 'interessen'] },
+    },
+
+    // Numbered sections and a doubled rule under the name. The numbers are not
+    // decoration: they tell a reader who is looking for the education section that
+    // it is the fifth of six, which a stack of identical headings does not.
+    kontur: {
+      id: 'kontur',
+      name: 'Kontur',
+      note: 'Einspaltig mit nummerierten Abschnitten und feinen Trennlinien zwischen den Stationen. Für Bewerbungen mit vielen Einträgen.',
+      rail: 'none',
+      railWidth: 0,
+      margin: 46,
+      gap: 0,
+      accent: [28, 78, 163],
+      dark: [23, 31, 42],
+      grey: [98, 110, 126],
+      railFill: null,
+      mainHeading: 'rule',
+      railHeading: 'rule',
+      sectionNumbers: true,
+      entrySeparator: 'rule',
+      headerRule: 'double',
+      photo: 'none',
+      layout: { rail: [], main: ['kontakt', 'berufserfahrung', 'skills', 'projekte',
+               'ausbildung', 'weiterbildung', 'sprachen', 'softskills', 'interessen'] },
+    },
+
+    // Initials in a filled square, and no rule anywhere. The monogram does the work
+    // the rule would have done: it marks the top of the page as a beginning.
+    signet: {
+      id: 'signet',
+      name: 'Signet',
+      note: 'Einspaltig mit Initialen-Signet, ohne Linien, Überschriften nur durch Sperrung. Für Design- und Agenturbewerbungen.',
+      rail: 'none',
+      railWidth: 0,
+      margin: 56,
+      gap: 0,
+      accent: [91, 42, 110],
+      dark: [30, 26, 34],
+      grey: [112, 106, 118],
+      railFill: null,
+      mainHeading: 'plain',
+      railHeading: 'plain',
+      headingTrack: 1.8,
+      nameStyle: 'monogram',
+      headerRule: 'none',
+      photo: 'none',
+      layout: { rail: [], main: ['kontakt', 'berufserfahrung', 'skills', 'projekte',
+               'ausbildung', 'weiterbildung', 'sprachen', 'softskills', 'interessen'] },
+    },
+
+    // A narrow card of facts on the right, its headings set as filled bars so the
+    // column reads as a register rather than as a second article.
+    kartei: {
+      id: 'kartei',
+      name: 'Kartei',
+      note: 'Schmale Faktenspalte rechts mit farbigen Überschriften, Stationen links durch Linien getrennt. Für technische Rollen mit vielen Stationen.',
+      rail: 'right',
+      railWidth: 150,
+      margin: 42,
+      gap: 20,
+      accent: [31, 94, 59],
+      dark: [24, 34, 30],
+      grey: [100, 116, 110],
+      railFill: [237, 244, 239],
+      mainHeading: 'rule',
+      railHeading: 'bar',
+      entrySeparator: 'rule',
+      photo: 'top-right',
+      layout: { rail: ['kontakt', 'ausbildung', 'sprachen', 'softskills', 'interessen'], main: ['berufserfahrung', 'skills', 'projekte', 'weiterbildung'] },
+    },
+
+    // Serif, two columns, and every heading carried by letter-spacing alone. The
+    // quietest two-column template here: nothing on the sheet is filled.
+    atelier: {
+      id: 'atelier',
+      name: 'Atelier',
+      note: 'Zweispaltig in Serifenschrift, Überschriften ohne Linien und Flächen. Für Hochschule, Kultur und Forschung.',
+      font: 'times',
+      rail: 'left',
+      railWidth: 160,
+      margin: 50,
+      gap: 22,
+      accent: [122, 74, 40],
+      dark: [38, 33, 28],
+      grey: [116, 108, 98],
+      railFill: null,
+      mainHeading: 'plain',
+      railHeading: 'plain',
+      headingTrack: 1.4,
+      headerRule: 'none',
+      photo: 'none',
+      layout: { rail: ['kontakt', 'ausbildung', 'sprachen', 'softskills', 'interessen'], main: ['berufserfahrung', 'skills', 'projekte', 'weiterbildung'] },
+    },
+
+    // A serif page set loosely, with the headings in the gutter. Airy on purpose:
+    // where a CV is two pages anyway, crowding it saves nothing and costs the read.
+    journal: {
+      id: 'journal',
+      name: 'Journal',
+      note: 'Einspaltig in Serifenschrift, weit gesetzt, Überschriften links neben dem Text. Für ausführliche Lebensläufe.',
+      font: 'times',
+      rail: 'none',
+      railWidth: 0,
+      margin: 54,
+      gap: 0,
+      accent: [122, 31, 53],
+      dark: [34, 30, 30],
+      grey: [116, 106, 106],
+      railFill: null,
+      mainHeading: 'rule',
+      railHeading: 'rule',
+      sideHeadings: true,
+      density: 1.18,
+      headerRule: 'none',
+      photo: 'none',
+      layout: { rail: [], main: ['kontakt', 'berufserfahrung', 'skills', 'projekte',
+               'ausbildung', 'weiterbildung', 'sprachen', 'softskills', 'interessen'] },
+    },
+
+    // The band across the top, but one column under it and numbered sections. The
+    // band carries the first impression; the numbers carry the navigation.
+    kompass: {
+      id: 'kompass',
+      name: 'Kompass',
+      note: 'Farbiger Kopfbereich, darunter eine Spalte mit nummerierten Abschnitten und Daten hinter dem Titel. Für Initiativbewerbungen.',
+      header: 'band',
+      bandFill: [23, 58, 95],
+      bandText: [255, 255, 255],
+      bandMuted: [176, 198, 219],
+      rail: 'none',
+      railWidth: 0,
+      margin: 46,
+      gap: 0,
+      accent: [23, 58, 95],
+      dark: [24, 34, 48],
+      grey: [102, 114, 130],
+      railFill: null,
+      mainHeading: 'rule',
+      railHeading: 'rule',
+      sectionNumbers: true,
+      dateStyle: 'after-title',
+      photo: 'band',
+      layout: { rail: [], main: ['kontakt', 'berufserfahrung', 'skills', 'projekte',
+               'ausbildung', 'weiterbildung', 'sprachen', 'softskills', 'interessen'] },
+    },
+
+    // Tight, with a hairline between stations and the initials up front. For the CV
+    // that has to be one page and currently is not.
+    fokus: {
+      id: 'fokus',
+      name: 'Fokus',
+      note: 'Einspaltig, dicht gesetzt, mit Signet und Trennlinien zwischen den Stationen. Wenn der Lebenslauf auf eine Seite muss.',
+      rail: 'none',
+      railWidth: 0,
+      margin: 42,
+      gap: 0,
+      accent: [47, 58, 69],
+      dark: [22, 28, 34],
+      grey: [98, 106, 116],
+      railFill: null,
+      mainHeading: 'rule',
+      railHeading: 'rule',
+      entrySeparator: 'rule',
+      nameStyle: 'monogram',
+      density: 0.88,
+      dateStyle: 'after-title',
+      photo: 'none',
+      layout: { rail: [], main: ['kontakt', 'berufserfahrung', 'skills', 'projekte',
+               'ausbildung', 'weiterbildung', 'sprachen', 'softskills', 'interessen'] },
+    },
+
+    // A full-height coloured column with its own filled headings, and quiet type
+    // opposite. The loudest of the two-column templates.
+    bogen: {
+      id: 'bogen',
+      name: 'Bogen',
+      note: 'Farbige Seitenspalte links mit hellen Überschriften darin, Foto in der Spalte. Für Portfolios und kreative Rollen.',
+      rail: 'left',
+      railWidth: 182,
+      margin: 40,
+      gap: 24,
+      accent: [91, 42, 110],
+      dark: [30, 26, 36],
+      grey: [110, 104, 118],
+      railFill: [91, 42, 110],
+      railText: [255, 255, 255],
+      railMuted: [214, 196, 226],
+      railBleed: true,
+      railHeading: 'bar',
+      mainHeading: 'plain',
+      headingTrack: 1.2,
+      photo: 'rail',
+      layout: { rail: ['kontakt', 'ausbildung', 'sprachen', 'softskills', 'interessen'], main: ['berufserfahrung', 'skills', 'projekte', 'weiterbildung'] },
+    },
+
+    // The coloured column on the right instead of the left - the only template here
+    // that bleeds on that side. The text column then starts at the page edge, which
+    // is where a reader's eye starts.
+    leiste: {
+      id: 'leiste',
+      name: 'Leiste',
+      note: 'Farbige Seitenspalte rechts über die ganze Höhe, Text links am Rand. Für Bewerbungen, die gedruckt werden.',
+      rail: 'right',
+      railWidth: 172,
+      margin: 40,
+      gap: 22,
+      accent: [29, 106, 128],
+      dark: [24, 34, 40],
+      grey: [100, 114, 122],
+      railFill: [29, 106, 128],
+      railText: [255, 255, 255],
+      railMuted: [190, 218, 226],
+      railBleed: true,
+      railHeading: 'plain',
+      mainHeading: 'rule',
+      headingTrack: 1.1,
+      photo: 'rail',
+      layout: { rail: ['kontakt', 'ausbildung', 'sprachen', 'softskills', 'interessen'], main: ['berufserfahrung', 'skills', 'projekte', 'weiterbildung'] },
+    },
   };
 
   const DEFAULT_ID = 'klassisch';
@@ -327,6 +570,13 @@
     const band = theme.header === 'band';
     const centred = theme.headerAlign === 'center';
     const timeline = theme.entryMark === 'timeline' && !railW;
+    // The axes the generator gained, drawn here too. A thumbnail that does not know
+    // an axis shows the reader a picture of a template nobody can print.
+    const numbered = theme.sectionNumbers === true;
+    const sideHeads = theme.sideHeadings === true && !railW;
+    const sep = theme.entrySeparator === 'rule';
+    const dens = typeof theme.density === 'number' ? theme.density : 1;
+    const mono = theme.nameStyle === 'monogram' && !centred && !band;
     const parts = [];
 
     parts.push('<rect width="' + W + '" height="' + H + '" fill="#fff"/>');
@@ -372,19 +622,29 @@
                  '" width="' + photoW + '" height="' + photoW + '" rx="2" fill="#ffffff" opacity="0.82"/>');
     }
 
-    const nameW = Math.round(headW * 0.62);
-    const subW = Math.round(headW * 0.4);
+    // The monogram takes its square out of the name's width, exactly as the
+    // document does, so the picture does not promise a longer name than fits.
+    const monoW = mono ? 16 : 0;
+    if (mono) {
+      parts.push('<rect x="' + headX + '" y="' + hy + '" width="14" height="14" rx="1" fill="' + acc + '"/>');
+    }
+    const nameW = Math.round((headW - monoW) * 0.62);
+    const subW = Math.round((headW - monoW) * 0.4);
     const centreOn = (w) => Math.round(headX + (headW - w) / 2);
-    parts.push('<rect x="' + (centred ? centreOn(nameW) : headX) + '" y="' + hy + '" width="' + nameW +
+    parts.push('<rect x="' + (centred ? centreOn(nameW) : headX + monoW) + '" y="' + hy + '" width="' + nameW +
                '" height="6" rx="1" fill="' + (band ? '#ffffff' : rgb(theme.dark)) + '"/>');
-    parts.push('<rect x="' + (centred ? centreOn(subW) : headX) + '" y="' + (hy + 9) + '" width="' + subW +
+    parts.push('<rect x="' + (centred ? centreOn(subW) : headX + monoW) + '" y="' + (hy + 9) + '" width="' + subW +
                '" height="3.5" rx="1" fill="' + (band ? rgb(theme.bandMuted || [255, 255, 255]) : acc) + '"/>');
     hy += 20;
     // The band separates the header by itself; a rule under it as well would be two
     // answers to one question, which is why the document prints only one of them.
-    if (!band) {
-      parts.push('<rect x="' + headX + '" y="' + hy + '" width="' + (W - m - headX) +
-                 '" height="' + (centred ? 0.8 : 1.4) + '" fill="' + acc + '"/>');
+    if (!band && theme.headerRule !== 'none') {
+      const rw = W - m - headX;
+      const rh = theme.headerRule === 'double' ? 0.7 : (centred ? 0.8 : 1.4);
+      parts.push('<rect x="' + headX + '" y="' + hy + '" width="' + rw + '" height="' + rh + '" fill="' + acc + '"/>');
+      if (theme.headerRule === 'double') {
+        parts.push('<rect x="' + headX + '" y="' + (hy + 2.6) + '" width="' + rw + '" height="' + rh + '" fill="' + acc + '"/>');
+      }
     }
 
     const contentTop = band ? bandH + 10 : Math.max(hy + 8, m + 28);
@@ -392,36 +652,57 @@
     // A heading plus a few text lines, in the style the theme asks for.
     function block(x, w, y, headingStyle, marked) {
       const out = [];
-      if (headingStyle === 'bar') {
-        out.push('<rect x="' + x + '" y="' + y + '" width="' + w + '" height="7" rx="1" fill="' + acc + '"/>');
-        out.push('<rect x="' + (x + 3) + '" y="' + (y + 2.5) + '" width="' + Math.round(w * 0.42) +
+      // A number ahead of the heading, and the heading shifted to make room for it -
+      // the same order the document prints them in.
+      const numW = numbered ? 10 : 0;
+      if (numbered) {
+        out.push('<rect x="' + x + '" y="' + y + '" width="7" height="3" rx="0.5" fill="' + acc + '"/>');
+      }
+      const hx = x + numW;
+      const hw = w - numW;
+      // The gutter layout: the heading sits to the left of the text, and the text
+      // starts on the same line rather than below it.
+      const gut = sideHeads ? Math.round(w * 0.3) : 0;
+
+      if (sideHeads) {
+        out.push('<rect x="' + hx + '" y="' + y + '" width="' + Math.max(8, gut - numW - 6) +
+                 '" height="3" rx="0.5" fill="' + acc + '"/>');
+      } else if (headingStyle === 'bar') {
+        out.push('<rect x="' + hx + '" y="' + y + '" width="' + hw + '" height="7" rx="1" fill="' + acc + '"/>');
+        out.push('<rect x="' + (hx + 3) + '" y="' + (y + 2.5) + '" width="' + Math.round(hw * 0.42) +
                  '" height="2" rx="0.5" fill="#fff"/>');
       } else if (headingStyle === 'plain') {
         // Capitals and letter-spacing, and nothing under them. Drawn as a short run
         // of separated ticks, because a solid bar is what the other styles use.
         for (let i = 0; i < 5; i++) {
-          out.push('<rect x="' + (x + i * 7) + '" y="' + y + '" width="4.5" height="3" rx="0.5" fill="' + acc + '"/>');
+          out.push('<rect x="' + (hx + i * 7) + '" y="' + y + '" width="4.5" height="3" rx="0.5" fill="' + acc + '"/>');
         }
       } else {
-        out.push('<rect x="' + x + '" y="' + y + '" width="' + Math.round(w * 0.46) +
+        out.push('<rect x="' + hx + '" y="' + y + '" width="' + Math.round(hw * 0.46) +
                  '" height="3" rx="0.5" fill="' + acc + '"/>');
-        out.push('<rect x="' + x + '" y="' + (y + 5) + '" width="' + w + '" height="0.8" fill="' + acc + '"/>');
+        out.push('<rect x="' + hx + '" y="' + (y + 5) + '" width="' + hw + '" height="0.8" fill="' + acc + '"/>');
       }
-      const top = y + (headingStyle === 'bar' ? 12 : headingStyle === 'plain' ? 9 : 10);
+
+      const step = 5 * dens;
+      const top = sideHeads ? y : y + (headingStyle === 'bar' ? 12 : headingStyle === 'plain' ? 9 : 10);
       // Entries indented past the timeline, which is a rule and a dot and carries no
-      // text — the dates stay in the entry.
-      const tx = marked ? x + 7 : x;
-      const tw = marked ? w - 7 : w;
+      // text: the dates stay inside the entry.
+      const tx = (marked ? x + 7 : x) + gut;
+      const tw = (marked ? w - 7 : w) - gut;
       [1, 0.9, 0.72].forEach((f, i) => {
-        out.push('<rect x="' + tx + '" y="' + (top + i * 5) + '" width="' + Math.round(tw * f) +
+        out.push('<rect x="' + tx + '" y="' + (top + i * step) + '" width="' + Math.round(tw * f) +
                  '" height="2.4" rx="0.6" fill="#c9d0d9"/>');
       });
+      if (sep) {
+        out.push('<rect x="' + tx + '" y="' + (top + 3 * step + 1) + '" width="' + tw +
+                 '" height="0.5" fill="#c9d0d9"/>');
+      }
       if (marked) {
         out.push('<rect x="' + (x + 1.2) + '" y="' + (top - 1) + '" width="0.8" height="' +
-                 (3 * 5 - 2) + '" fill="' + acc + '"/>');
+                 (3 * step - 2) + '" fill="' + acc + '"/>');
         out.push('<circle cx="' + (x + 1.6) + '" cy="' + (top - 2) + '" r="1.8" fill="' + acc + '"/>');
       }
-      return { svg: out.join(''), next: top + 3 * 5 + 6 };
+      return { svg: out.join(''), next: top + 3 * step + 6 * dens };
     }
 
     let y = contentTop;
