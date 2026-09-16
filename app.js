@@ -5517,11 +5517,17 @@ function buildProfilePdfDoc(profile, overrides) {
   ].filter(Boolean);
 
   /** A hairline between entries, for the templates that separate them that way. */
-  function entryRule() {
-    if (!SEPARATOR || yMain - 8 < M) return;
+  function entryRule(x, w) {
+    // Defaults to the main column, because most entries live there - but Ausbildung
+    // draws on the rail, and a rule fixed to MAIN_E_X would have been struck across
+    // the main column beside an entry standing in the other one.
+    const ex = (x === undefined) ? MAIN_E_X : x;
+    const ew = (w === undefined) ? MAIN_E_W : w;
+    const cursor = inMain(ex) ? yMain : ySide;
+    if (!SEPARATOR || cursor - 8 < M) return;
     doc.setDrawColor(GREY[0], GREY[1], GREY[2]);
     doc.setLineWidth(0.3);
-    doc.line(MAIN_E_X, yMain - 8, MAIN_E_X + MAIN_E_W, yMain - 8);
+    doc.line(ex, cursor - 8, ex + ew, cursor - 8);
   }
 
   /**
@@ -5550,15 +5556,18 @@ function buildProfilePdfDoc(profile, overrides) {
     ausbildung: function () {
       if (p.education && p.education.length) {
         railSection('Ausbildung');
-        p.education.forEach(function (x) {
+        p.education.forEach(function (x, i) {
           station(function () {
             const dates = [x.start, x.end].filter(Boolean).join(' – ');
+            if (i) entryRule(SIDE_E_X, SIDE_E_W);
             // RAIL_TEXT and RAIL_MUTED, like every other section that draws here.
             // This one was writing in DARK and GREY — the main column's colours —
             // which is invisible on a theme whose rail is filled dark. On Modern the
             // degree was navy on navy: present in the file, unreadable in it.
-            if (dates)    write(dates, SIDE_E_X, SIDE_E_W, 8, 'normal', RAIL_MUTED, 10);
-            if (x.degree) write(x.degree, SIDE_E_X, SIDE_E_W, 9, 'bold', RAIL_TEXT, 11);
+            if (dates && T.dateStyle !== 'after-title') {
+              write(dates, SIDE_E_X, SIDE_E_W, 8, 'normal', RAIL_MUTED, 10);
+            }
+            if (x.degree) write(titleWithDates(x.degree, dates), SIDE_E_X, SIDE_E_W, 9, 'bold', RAIL_TEXT, 11);
             const sub = [x.org, x.grade ? 'Note: ' + x.grade : ''].filter(Boolean).join(' | ');
             if (sub)      write(sub, SIDE_E_X, SIDE_E_W, 8.5, 'normal', RAIL_MUTED, 11);
             sideAdvance(8);
@@ -5657,10 +5666,13 @@ function buildProfilePdfDoc(profile, overrides) {
     projekte: function () {
       if (p.projects && p.projects.length) {
         mainSection('Projekte');
-        p.projects.forEach(function (x) {
+        p.projects.forEach(function (x, i) {
           station(function () {
-            if (x.name) write(x.name, MAIN_E_X, MAIN_E_W, 10, 'bold', TEAL, 13);
-            const sub = [x.org, x.year].filter(Boolean).join(', ');
+            if (i) entryRule();
+            if (x.name) write(titleWithDates(x.name, x.year), MAIN_E_X, MAIN_E_W, 10, 'bold', TEAL, 13);
+            // The year moves up into the title where the template asks for it, so the
+            // line beneath is then the organisation alone.
+            const sub = [x.org, T.dateStyle === 'after-title' ? '' : x.year].filter(Boolean).join(', ');
             if (sub)    write(sub, MAIN_E_X, MAIN_E_W, 8, 'normal', GREY, 11);
             if (x.desc) bulletList(splitLines(x.desc), MAIN_E_X, MAIN_E_W);
             // Entries need more air between them than bullets do inside one, or the
@@ -5673,9 +5685,12 @@ function buildProfilePdfDoc(profile, overrides) {
     weiterbildung: function () {
       if (p.certifications && p.certifications.length) {
         mainSection('Weiterbildung');
-        p.certifications.forEach(function (x) {
+        p.certifications.forEach(function (x, i) {
           station(function () {
-            const head = [x.name, x.year].filter(Boolean).join(' – ');
+            if (i) entryRule();
+            const head = (T.dateStyle === 'after-title')
+              ? titleWithDates(x.name || '', x.year)
+              : [x.name, x.year].filter(Boolean).join(' – ');
             if (head)   write(head, MAIN_E_X, MAIN_E_W, 9.5, 'bold', TEAL, 12);
             if (x.desc) bulletList(splitLines(x.desc), MAIN_E_X, MAIN_E_W);
             yMain += 3;
