@@ -836,12 +836,18 @@
           <!-- What is wrong with the document, as something to fix. The percentage in
                the summary card above is a score; this is the list behind it, and every
                finding points at the field that produced it. -->
-          <div class="card" id="cv-check-card">
-            <div class="card-header">
-              <h2>Lebenslauf-Check</h2>
+          <div class="card cv-check-card" id="cv-check-card">
+            <!-- The findings are one line until they are asked for. Expanded by
+                 default they pushed the whole form down the page, and the first
+                 thing anyone saw on opening their profile was a list of what was
+                 wrong with it. -->
+            <button type="button" class="cv-check-btn" id="cv-check-toggle"
+                    aria-expanded="false" aria-controls="cv-check-body">
+              <span class="cv-check-btn-label">Lebenslauf-Check</span>
               <span class="pill cv-check-pill" id="cv-check-pill">—</span>
-            </div>
-            <div id="cv-check-body" class="cv-check-list"></div>
+              <span class="cv-check-chevron" aria-hidden="true">▾</span>
+            </button>
+            <div id="cv-check-body" class="cv-check-list" hidden></div>
           </div>
 
           <div class="card">
@@ -971,6 +977,8 @@
           <div class="pf-preview-bar">
             <span class="pf-preview-title">Vorschau</span>
             <span class="pf-preview-meta" id="pf-preview-meta"></span>
+            <button type="button" class="btn btn-ghost btn-xs" id="pf-preview-toggle"
+                    aria-controls="pf-preview-canvas" aria-expanded="false">Anzeigen</button>
           </div>
           <!-- A canvas, not a framed PDF. The browser's own viewer keeps its own
                zoom inside a small frame and crops the left edge of the page — the
@@ -980,6 +988,13 @@
             <canvas id="pf-preview-canvas" aria-label="Lebenslauf-Vorschau"></canvas>
             <p class="pf-preview-empty" id="pf-preview-empty">Die Vorschau erscheint,
               sobald der Lebenslauf Inhalt hat.</p>
+            <!-- Nothing is drawn until it is asked for. The page used to open with
+                 the finished document on screen, which is a document on display to
+                 everyone in the room, not only to the person editing it. -->
+            <div class="pf-preview-off" id="pf-preview-off">
+              <p>Der Lebenslauf wird erst gezeichnet, wenn Sie ihn anfordern.</p>
+              <button type="button" class="btn btn-primary btn-sm" id="pf-preview-show">Vorschau anzeigen</button>
+            </div>
           </div>
           <div class="pf-preview-pager hidden" id="pf-preview-pager">
             <button class="btn btn-ghost btn-xs" id="pf-page-prev" aria-label="Vorherige Seite">‹</button>

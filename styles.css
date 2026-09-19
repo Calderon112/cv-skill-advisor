@@ -3819,9 +3819,28 @@ option   { color: var(--text); background: var(--bg-card); }
 .dc-foot .btn { flex: none; }
 
 /* ── Lebenslauf-Check ──────────────────────────────────────────────────────
-   Each finding is a button, because each one points at the field that produced
+   Folded into its own header until asked for. Open by default it pushed the form
+   down the page and greeted everyone with a list of what was wrong with their CV,
+   which is not what someone opens their profile to read. */
+.cv-check-card { padding-top: 10px; padding-bottom: 10px; }
+.cv-check-card:has(#cv-check-body:not([hidden])) { padding-bottom: 18px; }
+.cv-check-btn {
+  display: flex; align-items: center; gap: 12px; width: 100%;
+  padding: 6px 0; cursor: pointer; font: inherit; color: inherit;
+  background: none; border: 0; text-align: left;
+}
+.cv-check-btn-label { font-size: 1.05rem; font-weight: 700; flex: 1; }
+.cv-check-chevron { color: var(--text-muted); transition: transform .16s ease; }
+.cv-check-btn[aria-expanded="true"] .cv-check-chevron { transform: rotate(180deg); }
+.cv-check-btn:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; border-radius: 8px; }
+#cv-check-body:not([hidden]) { margin-top: 14px; }
+
+/* Each finding is a button, because each one points at the field that produced
    it. A list of complaints you cannot act on is a worse version of a score. */
 .cv-check-list { display: grid; gap: 6px; }
+/* Same trap as the preview: display: grid here outranks [hidden], and the folded
+   list only looked folded because it is emptied on the way down. */
+.cv-check-list[hidden] { display: none; }
 .cv-issue {
   display: flex; gap: 10px; align-items: baseline; width: 100%;
   padding: 8px 10px; text-align: left; cursor: pointer; font: inherit; color: inherit;
@@ -3943,3 +3962,30 @@ option   { color: var(--text); background: var(--bg-card); }
   font-size: 11px;
   color: var(--text-dim, #94a3b8);
 }
+
+/* The preview before it is asked for. Same box as the page it will draw, so the
+   column does not jump when it appears. */
+.pf-preview-off {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 14px; padding: 28px;
+  text-align: center;
+  /* Not the white of a page: there is no page yet, and a white sheet reads as a
+     CV that failed to draw rather than one that has not been asked for. */
+  background: var(--bg);
+}
+.pf-preview-off p { margin: 0; font-size: 12.5px; color: var(--text-muted); line-height: 1.6; max-width: 26ch; }
+/* The bar's control only appears once there is something to hide. Off, the button
+   inside the frame is the single way in. */
+/* #page-profile .btn-ghost gives the form's buttons a 170px floor. The bar's
+   toggle and the page arrows are not form buttons and were stretched to the width
+   of a "Save profile" by it.
+   Scoped through the same id, because a plain class selector loses to it. */
+#page-profile .pf-preview-bar .btn,
+#page-profile .pf-preview-pager .btn { min-width: 0; flex: 0 0 auto; align-self: center; }
+#page-profile .pf-preview-bar .btn { padding: 3px 10px; }
+
+/* A class that sets display beats the browser's own [hidden] rule, so both of
+   these stayed on screen with .hidden set on the property and nothing to show for
+   it. Said here, where the display was set. */
+.pf-preview-off[hidden],
+.pf-preview-bar .btn[hidden] { display: none; }

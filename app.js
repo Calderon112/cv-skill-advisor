@@ -741,6 +741,12 @@ function clearUserData() {
   if (typeof renderSkillTags === 'function')       renderSkillTags();
   if (typeof renderCvSchema === 'function')        renderCvSchema([]);
   if (typeof updateProfileSummary === 'function')  updateProfileSummary();
+
+  // Both panels fold again. They are opened by a person for their own document;
+  // leaving either open across a sign-out would draw the next arrival's CV, or
+  // grade it, without anyone having asked.
+  if (typeof setPreviewOn === 'function') setPreviewOn(false);
+  if (_cvCheckOpen && typeof toggleCvCheck === 'function') toggleCvCheck();
 }
 
 // Update only the name shown in the UI, for the account already signed in. Separate
@@ -4798,7 +4804,55 @@ function renderThemePicker() {
 
 const CHECK_LABELS = { error: 'Fehler', warn: 'Hinweis', tip: 'Tipp' };
 
+// Asked for or not, remembered for the session rather than per redraw. The check
+// is redrawn on every keystroke, so a flag held anywhere shorter-lived would snap
+// the panel shut under the reader mid-sentence.
+//
+// Closed, nothing is computed and nothing is summarised — not even the count in the
+// pill. A verdict on someone's CV is theirs to ask for; a page that opens with
+// "3 Fehler" already said it.
+let _cvCheckOpen = false;
+let _cvCheckPages = 0;
+
+function applyCvCheckOpen() {
+  const body = $('cv-check-body');
+  const toggle = $('cv-check-toggle');
+  if (body) body.hidden = !_cvCheckOpen;
+  if (toggle) toggle.setAttribute('aria-expanded', String(_cvCheckOpen));
+}
+
+function toggleCvCheck() {
+  _cvCheckOpen = !_cvCheckOpen;
+  applyCvCheckOpen();
+  if (_cvCheckOpen) { drawCvCheck(pagesForCheck()); return; }
+  const pill = $('cv-check-pill');
+  if (pill) { pill.textContent = '—'; pill.className = 'pill cv-check-pill'; }
+  const host = $('cv-check-body');
+  if (host) host.innerHTML = '';
+}
+
+/**
+ * How many pages the document runs to — a rule of its own, and something only a
+ * drawn document knows. The preview keeps one to hand; with the preview switched
+ * off the check draws its own copy rather than guessing, and drops it again.
+ */
+function pagesForCheck() {
+  if (_pfPages) return _pfPages.length;
+  if (!profileHasContent(state.profile)) return 0;
+  try {
+    const built = buildProfilePdfDoc(state.profile, { record: true });
+    return (built && built.pages) ? built.pages.length : 0;
+  } catch (_) { return 0; }
+}
+
+// Called wherever the document is redrawn: it remembers the page count, and
+// refreshes the findings only while they are on screen.
 function renderCvCheck(pages) {
+  _cvCheckPages = pages || 0;
+  if (_cvCheckOpen) drawCvCheck(_cvCheckPages);
+}
+
+function drawCvCheck(pages) {
   const host = $('cv-check-body');
   const pill = $('cv-check-pill');
   if (!host || typeof CvCheck === 'undefined') return;
@@ -4806,10 +4860,13 @@ function renderCvCheck(pages) {
   const { issues, counts } = CvCheck.run(state.profile || emptyProfile(), { pages: pages || 0 });
 
   if (pill) {
+    // "1 Tipps" is how a form reads when nobody proofread it. Fehler is the same
+    // word in both numbers; the other two are not.
+    const zahl = (n, ein, viele) => n + ' ' + (n === 1 ? ein : viele);
     pill.textContent = issues.length
-      ? [counts.error && counts.error + ' Fehler',
-         counts.warn && counts.warn + ' Hinweise',
-         counts.tip && counts.tip + ' Tipps'].filter(Boolean).join(' · ')
+      ? [counts.error && zahl(counts.error, 'Fehler', 'Fehler'),
+         counts.warn && zahl(counts.warn, 'Hinweis', 'Hinweise'),
+         counts.tip && zahl(counts.tip, 'Tipp', 'Tipps')].filter(Boolean).join(' · ')
       : 'ohne Befund';
     pill.className = 'pill cv-check-pill '
       + (counts.error ? 'is-bad' : counts.warn ? 'is-warn' : 'is-ok');
@@ -4834,6 +4891,10 @@ function renderCvCheck(pages) {
     if (btn) focusIssue(issues[Number(btn.dataset.i)]);
   };
 }
+
+// Bound once, here rather than inside the renderer: the renderer only runs while
+// the panel is open, so a handler attached there would never be attached at all.
+$('cv-check-toggle')?.addEventListener('click', toggleCvCheck);
 
 /**
  * Put the cursor where the finding is.
@@ -5756,9 +5817,42 @@ function buildProfilePdfDoc(profile, overrides) {
 const PF_PREVIEW_DELAY = 450;
 let _pfPreviewTimer = null;
 
+// Drawn on request, not on arrival. The profile page used to open with the finished
+// CV already on screen; it is the person's document, and whether it is on display
+// is their decision, not the page's. Once asked for it keeps up with the typing —
+// a preview that needed a button after every edit would not be a preview.
+let _pfPreviewOn = false;
+
 function schedulePreview() {
+  if (!_pfPreviewOn) return;
   clearTimeout(_pfPreviewTimer);
   _pfPreviewTimer = setTimeout(renderProfilePreview, PF_PREVIEW_DELAY);
+}
+
+function setPreviewOn(on) {
+  _pfPreviewOn = Boolean(on);
+  const off = $('pf-preview-off');
+  const toggle = $('pf-preview-toggle');
+  if (off) off.hidden = _pfPreviewOn;
+  if (toggle) {
+    // One control per state. Switched off, the button inside the frame says what
+    // the frame is for; a second "Anzeigen" in the bar beside it only asks the
+    // same question twice.
+    toggle.hidden = !_pfPreviewOn;
+    toggle.textContent = 'Ausblenden';
+    toggle.setAttribute('aria-expanded', String(_pfPreviewOn));
+  }
+  if (_pfPreviewOn) { renderProfilePreview(); return; }
+
+  clearTimeout(_pfPreviewTimer);
+  $('pf-preview-canvas')?.classList.add('hidden');
+  $('pf-preview-empty')?.classList.add('hidden');
+  $('pf-preview-pager')?.classList.add('hidden');
+  const meta = $('pf-preview-meta');
+  if (meta) meta.textContent = '';
+  // Dropped rather than kept for later: the page count the check reads comes from
+  // here, and a stale one would describe a document that is no longer on screen.
+  _pfPages = null;
 }
 
 /** Is there enough in the profile to be worth drawing? */
@@ -5786,7 +5880,7 @@ function renderProfilePreview() {
   const empty = $('pf-preview-empty');
   const meta = $('pf-preview-meta');
   const pager = $('pf-preview-pager');
-  if (!canvas) return;
+  if (!canvas || !_pfPreviewOn) return;
 
   if (!profileHasContent(state.profile)) {
     canvas.classList.add('hidden');
@@ -5835,6 +5929,11 @@ function turnPreviewPage(delta) {
 }
 $('pf-page-prev')?.addEventListener('click', () => turnPreviewPage(-1));
 $('pf-page-next')?.addEventListener('click', () => turnPreviewPage(1));
+$('pf-preview-toggle')?.addEventListener('click', () => setPreviewOn(!_pfPreviewOn));
+$('pf-preview-show')?.addEventListener('click', () => setPreviewOn(true));
+// The markup ships with the canvas visible so that the frame is right when it is
+// switched on; this is what makes "off" the state the page actually opens in.
+setPreviewOn(false);
 // The canvas is painted at the device resolution of the box it is in, so a resized
 // window needs a repaint rather than a browser-scaled bitmap.
 window.addEventListener('resize', () => schedulePreview());
