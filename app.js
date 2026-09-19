@@ -5024,6 +5024,11 @@ function focusIssue(issue) {
     el = $(t.field);
   }
   if (!el) return;
+  // A finding may name a block rather than a field - the language rows, say. Scroll
+  // to it, but put the cursor in something that takes one.
+  if (!el.matches('input, select, textarea, button')) {
+    el = el.querySelector('input, select, textarea, button') || el;
+  }
   el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   if (typeof el.focus === 'function') el.focus({ preventScroll: true });
 }
@@ -6194,6 +6199,108 @@ function wireProfileLiveFields() {
 }
 
 
+// ── Languages: the level belongs to the language ────────────────────────────
+//
+// Kept on the profile as one string - "Deutsch (C1), Englisch (B2)" - which is
+// what the generator prints one per line, what JSON Resume splits into
+// {language, fluency} and what the check reads. This is an editor for that
+// string and nothing downstream had to learn a new shape; the hidden input still
+// carries it, so the live binding, renderProfileForm and collectProfileFromForm
+// are untouched.
+//
+// It exists because the check has always said "Ohne Niveau: Englisch" and the
+// field it pointed at was a free line where the level had to be typed in the
+// right notation by hand. A list is the difference between a finding and a fix.
+
+const LANG_LEVELS = ['Muttersprache', 'C2', 'C1', 'B2', 'B1', 'A2', 'A1',
+                     'Verhandlungssicher', 'Fließend', 'Grundkenntnisse'];
+
+const langSplit = (line) => (typeof JsonResume !== 'undefined' && JsonResume.splitLanguages)
+  ? JsonResume.splitLanguages(line)
+  : String(line || '').split(/[,;]+/).map(t => t.trim()).filter(Boolean).map(t => ({ language: t }));
+
+const langJoin = (rows) => (typeof JsonResume !== 'undefined' && JsonResume.joinLanguages)
+  ? JsonResume.joinLanguages(rows)
+  : rows.map(r => r.language).filter(Boolean).join(', ');
+
+function renderLanguageRows() {
+  const host = $('pf-lang-list');
+  if (!host) return;
+  const rows = langSplit((state.profile && state.profile.languages) || '');
+
+  host.innerHTML = rows.map(function (r, i) {
+    const level = String(r.fluency || '');
+    // A level the list does not offer is kept as an option of its own. An imported
+    // CV saying "fließend in Wort und Schrift" must not be silently levelled off
+    // to nothing by opening the form.
+    const options = LANG_LEVELS.slice();
+    if (level && !options.some(function (o) { return o.toLowerCase() === level.toLowerCase(); })) {
+      options.unshift(level);
+    }
+    return '<div class="lang-row" data-i="' + i + '">'
+      + '<input class="field lang-name" data-f="name" value="' + esc(r.language || '') + '"'
+      + ' placeholder="Sprache" aria-label="Sprache">'
+      + '<select class="field lang-level" data-f="level" aria-label="Niveau">'
+      + '<option value="">ohne Angabe</option>'
+      + options.map(function (o) {
+          return '<option value="' + esc(o) + '"' + (o.toLowerCase() === level.toLowerCase() ? ' selected' : '')
+            + '>' + esc(o) + '</option>';
+        }).join('')
+      + '</select>'
+      + '<button type="button" class="pf-x" data-act="lang-del" data-i="' + i + '"'
+      + ' title="Sprache entfernen" aria-label="Sprache entfernen">&#10005;</button>'
+      + '</div>';
+  }).join('');
+}
+
+/** The rows back into the one line, without a redraw: this runs on every keystroke. */
+function collectLanguageRows() {
+  const host = $('pf-lang-list');
+  if (!host) return;
+  const rows = [...host.querySelectorAll('.lang-row')].map(function (el) {
+    return {
+      language: el.querySelector('[data-f="name"]').value.trim(),
+      fluency:  el.querySelector('[data-f="level"]').value.trim(),
+    };
+  }).filter(function (r) { return r.language; });
+
+  const line = langJoin(rows);
+  const hidden = $('pf-languages');
+  if (hidden) hidden.value = line;
+  if (!state.profile) state.profile = emptyProfile();
+  state.profile.languages = line;
+  saveProfileToStorage();
+  schedulePreview();
+}
+
+$('pf-lang-list')?.addEventListener('input', collectLanguageRows);
+$('pf-lang-list')?.addEventListener('change', collectLanguageRows);
+$('pf-lang-list')?.addEventListener('click', function (e) {
+  const btn = e.target.closest('[data-act="lang-del"]');
+  if (!btn) return;
+  btn.closest('.lang-row')?.remove();
+  collectLanguageRows();
+  renderLanguageRows();
+});
+$('pf-lang-add')?.addEventListener('click', function () {
+  const host = $('pf-lang-list');
+  if (!host) return;
+  // Appended to the DOM rather than to the string: an empty row has no name yet,
+  // and collectLanguageRows drops nameless rows on purpose.
+  const i = host.querySelectorAll('.lang-row').length;
+  host.insertAdjacentHTML('beforeend',
+    '<div class="lang-row" data-i="' + i + '">'
+    + '<input class="field lang-name" data-f="name" value="" placeholder="Sprache" aria-label="Sprache">'
+    + '<select class="field lang-level" data-f="level" aria-label="Niveau">'
+    + '<option value="">ohne Angabe</option>'
+    + LANG_LEVELS.map(function (o) { return '<option value="' + esc(o) + '">' + esc(o) + '</option>'; }).join('')
+    + '</select>'
+    + '<button type="button" class="pf-x" data-act="lang-del" data-i="' + i + '"'
+    + ' title="Sprache entfernen" aria-label="Sprache entfernen">&#10005;</button>'
+    + '</div>');
+  host.querySelector('.lang-row:last-child .lang-name')?.focus();
+});
+
 // ── JSON Resume: in and out ─────────────────────────────────────────────────
 //
 // json-resume.js does the conversion; this wires it to two buttons. The import
@@ -6303,6 +6410,7 @@ function renderProfileForm() {
   setVal('pf-location',  p.location);
   setVal('pf-nationality', p.nationality);
   setVal('pf-languages', p.languages);
+  renderLanguageRows();
   setVal('pf-title',     p.title);
   setVal('pf-summary',   p.summary);
   renderSkillTags();

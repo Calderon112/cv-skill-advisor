@@ -211,11 +211,11 @@
     });
 
     const langs = str(p.languages);
-    if (!langs) add('tip', 'NO_LANGUAGES', 'Keine Sprachkenntnisse. In Deutschland werden sie mit Niveau erwartet.', { field: 'pf-languages' });
+    if (!langs) add('tip', 'NO_LANGUAGES', 'Keine Sprachkenntnisse. In Deutschland werden sie mit Niveau erwartet.', { field: 'pf-lang-list' });
     else {
       const without = langs.split(/[,;]+/).map((s) => s.trim()).filter(Boolean).filter((s) => !LEVEL.test(s));
       if (without.length) {
-        add('tip', 'LANG_LEVEL', 'Ohne Niveau: ' + without.join(', ') + '. Üblich ist z. B. „Englisch (C1)".', { field: 'pf-languages' });
+        add('tip', 'LANG_LEVEL', 'Ohne Niveau: ' + without.join(', ') + '. Üblich ist z. B. „Englisch (C1)".', { field: 'pf-lang-list' });
       }
     }
 

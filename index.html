@@ -896,7 +896,19 @@
               <div class="form-group"><label>Location</label><input id="pf-location" class="field" type="text" placeholder="City, Country" /></div>
               <div class="form-group"><label>Nationality</label><input id="pf-nationality" class="field" type="text" /></div>
             </div>
-            <div class="form-group"><label>Languages</label><input id="pf-languages" class="field" type="text" placeholder="e.g. German (B2), English (fluent), French" /></div>
+            <!-- One row per language, with the level from a list. The profile still
+                 holds them as the single line "Deutsch (C1), Englisch (B2)" - the
+                 hidden input below - because that is what the generator prints, what
+                 JSON Resume splits into {language, fluency} and what the check reads.
+                 Rendered by renderLanguageRows(). -->
+            <div class="form-group">
+              <label for="pf-lang-list">Languages</label>
+              <div id="pf-lang-list" class="lang-list"></div>
+              <button type="button" id="pf-lang-add" class="btn btn-ghost btn-sm">+ Sprache</button>
+              <p class="hint">In Deutschland wird das Niveau erwartet - GER-Stufe oder
+                Muttersprache.</p>
+              <input id="pf-languages" type="hidden" />
+            </div>
           </div>
 
           <div class="card">
