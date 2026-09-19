@@ -575,7 +575,7 @@
           <div class="form-row">
             <div class="form-group">
               <label>Job Title</label>
-              <input id="cover-job-title" type="text" class="field" data-i18n-ph="field.jobTitlePh" placeholder="z. B. SOC Analyst" />
+              <input id="cover-job-title" type="text" class="field" placeholder="e.g. SOC Analyst" />
             </div>
             <div class="form-group">
               <label>Company</label>
@@ -871,16 +871,6 @@
             <button type="button" class="btn btn-primary" id="pf-download-pdf-2" data-i18n="action.pdfLoad">PDF laden</button>
           </div>
 
-        <div id="cv-schema-panel" class="card hidden">
-          <div class="card-header">
-            <h2 data-i18n="card.schema">Ihr Lebenslauf, Abschnitt für Abschnitt</h2>
-            <span class="pill" id="cv-schema-pill">—</span>
-            <button type="button" id="cv-schema-toggle" class="btn btn-ghost btn-xs" data-i18n="schema.showFixed">Feste Felder zeigen</button>
-          </div>
-          <p class="lede" id="cv-schema-note" data-i18n="card.schemaNote">Aus den Überschriften Ihres Lebenslaufs erzeugt.</p>
-          <div id="cv-schema-body"></div>
-          <div id="cv-schema-dropped" class="pf-warn hidden"></div>
-        </div>
           <div class="card">
             <div class="card-header"><h2 data-i18n="card.personal">Persönliche Angaben</h2></div>
             <div id="pf-contact-warn" class="pf-warn"></div>
@@ -921,8 +911,22 @@
 
           <div class="card">
             <div class="card-header"><h2 data-i18n="card.objective">Ziel und Kurzprofil</h2></div>
-            <div class="form-group"><label for="pf-title" data-i18n="field.jobTitle">Zielposition</label><input id="pf-title" class="field" type="text" placeholder="e.g. SOC Analyst" /></div>
+            <div class="form-group"><label for="pf-title" data-i18n="field.jobTitle">Zielposition</label><input id="pf-title" class="field" type="text" data-i18n-ph="field.jobTitlePh" placeholder="z. B. SOC Analyst" /></div>
             <div class="form-group"><label for="pf-summary" data-i18n="field.summary">Kurzprofil</label><textarea id="pf-summary" class="field" rows="4" data-i18n-ph="field.summaryPh" placeholder="Ein kurzer Absatz über Sie, Ihre Ziele und Ihre Motivation …"></textarea></div>
+          </div>
+
+          <!-- The CV's own sections stand where the fixed cards they replace would
+               be: skills, experience, education, certifications. Listed above the
+               form they read as a second, competing document. -->
+          <div id="cv-schema-panel" class="card hidden">
+            <div class="card-header">
+              <h2 data-i18n="card.schema">Ihr Lebenslauf, Abschnitt für Abschnitt</h2>
+              <span class="pill" id="cv-schema-pill">—</span>
+              <button type="button" id="cv-schema-toggle" class="btn btn-ghost btn-xs" data-i18n="schema.showFixed">Feste Felder zeigen</button>
+            </div>
+            <p class="lede" id="cv-schema-note" data-i18n="card.schemaNote">Aus den Überschriften Ihres Lebenslaufs erzeugt.</p>
+            <div id="cv-schema-body"></div>
+            <div id="cv-schema-dropped" class="pf-warn hidden"></div>
           </div>
 
           <div class="card" id="pf-card-skills">

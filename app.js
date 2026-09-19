@@ -3842,8 +3842,20 @@ function renderCvSchema(schema, meta) {
   if (warn) {
     const d = (meta && meta.dropped) || [];
     if (d.length) {
-      warn.textContent = `${d.length} item${d.length > 1 ? 's were' : ' was'} discarded for not appearing in your CV: `
-        + d.slice(0, 3).map(x => x.text || x.why).join(' · ');
+      // Not all of these were discarded. anchorEntries moves bullets back to the
+      // entry the document prints them under and empties a date that was paired
+      // with the wrong one; calling that "discarded" would send someone looking
+      // for content that is on the screen in front of them.
+      const why = (n) => {
+        const w = String((n && n.why) || '');
+        if (/date printed away/.test(w))  return tr('import.why.date');
+        if (/bullets returned/.test(w))   return tr('import.why.bullets');
+        if (/date on its own/.test(w))    return tr('import.why.lonelyDate');
+        return tr('import.why.notInCv');
+      };
+      const seen = [];
+      d.forEach((n) => { const w = why(n); if (seen.indexOf(w) === -1) seen.push(w); });
+      warn.textContent = tr('import.adjusted') + ' ' + seen.slice(0, 3).join(' · ');
       warn.classList.remove('hidden');
     } else {
       warn.classList.add('hidden');

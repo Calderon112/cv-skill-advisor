@@ -1152,6 +1152,125 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
       assert(cvSchema.looksLikeHeading('WEITERBILDUNG'), 'a short capitalised label is');
     });
 
+    // ── The date column ──────────────────────────────────────────────────────
+    //
+    // Reported from use, with a screenshot: one import produced five entries under
+    // BERUFSERFAHRUNG. Two carried a title and a date that belonged to a different
+    // section of the CV; three carried a date and nothing else, holding the bullets
+    // of the two real jobs. The CV was a two-column layout with the dates printed
+    // down the left, and after extraction a date column is simply a run of lines.
+    //
+    // The system prompt asks the model not to pair those. This checks it instead.
+    section('cv-schema: a date column does not become dates');
+
+    // The section as the extractor hands it over: title, employer and bullets in
+    // reading order, with the whole document's dates collected at the end because
+    // they were printed in a column of their own.
+    const COLUMN_BODY = [
+      'Werkstudent IT System Integration',
+      'Alberdingk-Boley, Krefeld Urdingen',
+      'Jira Cloud Migration ( Asset Management)',
+      'Vollständige Bestandsaufnahme der Assets, ihrer Metadaten und Beziehungen.',
+      'Deployment auf neue Rechner via PXE-Boot',
+      'Werkstudent IT Support',
+      'Kück Industrie, Bochum',
+      'Verantwortlich für die Administration von SuiteCrm',
+      'Auswahl und Einführung eines OpenSource Support Tickets Systems',
+      'Juni 2024 - Nov. 2024',
+      'Nov. 2023 - Feb. 2024',
+      'Nov. 2020 - Gegenwärtig',
+      'Juli 2019 - Dez. 2019',
+    ].join('\n');
+
+    // What the model returned for it: the pairing that was reported.
+    const COLUMN_ITEMS = [
+      { title: 'Werkstudent IT System Integration', org: 'Alberdingk-Boley, Krefeld Urdingen',
+        period: 'Nov. 2020 - Gegenwärtig',
+        bullets: ['Jira Cloud Migration ( Asset Management)'] },
+      { title: 'Werkstudent IT Support', org: 'Kück Industrie, Bochum',
+        period: 'Juli 2019 - Dez. 2019', bullets: [] },
+      { title: '', org: '', period: 'Nov. 2023 - Feb. 2024',
+        bullets: ['Verantwortlich für die Administration von SuiteCrm',
+                  'Auswahl und Einführung eines OpenSource Support Tickets Systems'] },
+      { title: '', org: '', period: 'Juni 2024 - Nov. 2024',
+        bullets: ['Vollständige Bestandsaufnahme der Assets, ihrer Metadaten und Beziehungen.',
+                  'Deployment auf neue Rechner via PXE-Boot'] },
+    ];
+
+    test('a date printed away from its entry is dropped, not kept', () => {
+      const out = cvSchema.anchorEntries(COLUMN_BODY, COLUMN_ITEMS);
+      const first = out.items[0];
+      assertEqual(first.title, 'Werkstudent IT System Integration', 'the job survives');
+      assertEqual(first.period, '', 'the date that belonged to the studies does not');
+    });
+
+    test('a date and nothing else is not an entry', () => {
+      const out = cvSchema.anchorEntries(COLUMN_BODY, COLUMN_ITEMS);
+      assertEqual(out.items.length, 2, 'two jobs, not five rows');
+      out.items.forEach((it) => assert(it.title || it.org, 'every entry names something'));
+    });
+
+    test('the stranded bullets go back to the job they are printed under', () => {
+      const out = cvSchema.anchorEntries(COLUMN_BODY, COLUMN_ITEMS);
+      const integration = out.items.find((i) => /System Integration/.test(i.title));
+      const support = out.items.find((i) => /IT Support/.test(i.title));
+      assertIncludes(integration.bullets, 'Deployment auf neue Rechner via PXE-Boot',
+        'the PXE line is under the integration job in the document');
+      assertIncludes(support.bullets, 'Verantwortlich für die Administration von SuiteCrm',
+        'and SuiteCrm under the support job');
+      assert(!support.bullets.some((b) => /PXE/.test(b)), 'and not the other way round');
+    });
+
+    test('nothing the CV contains is lost on the way', () => {
+      const out = cvSchema.anchorEntries(COLUMN_BODY, COLUMN_ITEMS);
+      const all = out.items.flatMap((i) => i.bullets);
+      COLUMN_ITEMS.flatMap((i) => i.bullets).forEach((b) => assertIncludes(all, b, 'kept: ' + b.slice(0, 30)));
+    });
+
+    test('every removal is reported rather than silent', () => {
+      const out = cvSchema.anchorEntries(COLUMN_BODY, COLUMN_ITEMS);
+      assert(out.notes.length >= 2, 'the dropped dates and the moved bullets are named');
+      assert(out.notes.some((n) => /date/.test(n.why)), 'the date is one of them');
+    });
+
+    test('an ordinary CV is left exactly as it is', () => {
+      // The pairing is only overruled when the document disagrees with it. A normal
+      // one-column CV must pass through untouched, or this guard would be a bug of
+      // its own — quietly emptying the date of every entry it did not understand.
+      const body = [
+        '06.2024 - 11.2024',
+        'Werkstudent IT System Integration',
+        'Alberdingk-Boley',
+        'Jira Cloud Migration',
+        '11.2023 - 02.2024',
+        'Werkstudent IT Support',
+        'Kück Industrie',
+        'Administration von SuiteCrm',
+      ].join('\n');
+      const items = [
+        { title: 'Werkstudent IT System Integration', org: 'Alberdingk-Boley',
+          period: '06.2024 - 11.2024', bullets: ['Jira Cloud Migration'] },
+        { title: 'Werkstudent IT Support', org: 'Kück Industrie',
+          period: '11.2023 - 02.2024', bullets: ['Administration von SuiteCrm'] },
+      ];
+      const out = cvSchema.anchorEntries(body, items);
+      assertEqual(out.items.length, 2, 'both entries');
+      assertEqual(out.items[0].period, '06.2024 - 11.2024', 'first date kept');
+      assertEqual(out.items[1].period, '11.2023 - 02.2024', 'second date kept');
+      assertEqual(out.notes.length, 0, 'and nothing to report');
+    });
+
+    test('an entry whose title is not in the body is left alone', () => {
+      // The guard above has already proved the value is somewhere in the CV. If it
+      // is not in this section's body, this pass has nothing to measure and must not
+      // guess.
+      const out = cvSchema.anchorEntries('irgendein Text', [
+        { title: 'Werkstudent IT', org: 'Alberdingk-Boley', period: '06.2024 - 11.2024', bullets: [] },
+      ]);
+      assertEqual(out.items.length, 1, 'kept');
+      assertEqual(out.items[0].period, '06.2024 - 11.2024', 'with its date');
+    });
+
     await atest('a section the CV does not have is dropped', async () => {
       const out = await cvSchema.buildSchema({ cvText: CV, sections: secs() },
         say({ sections: [{ heading: 'ZERTIFIKATE', kind: 'list', items: ['CISSP'] }] }));

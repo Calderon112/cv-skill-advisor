@@ -65,6 +65,14 @@
     'danger.lede':          ['Setzt die in diesem Browser gespeicherten Profildaten zurück.',
                              'Reset your stored profile data from this browser.'],
 
+    'import.adjusted':      ['Beim Einlesen angepasst:', 'Adjusted while reading the CV:'],
+    'import.why.date':      ['ein Datum stand nicht neben dem Eintrag, dem es zugeordnet war — Feld leer gelassen',
+                             'a date was not printed beside the entry it was paired with — left empty'],
+    'import.why.bullets':   ['Aufgaben wurden dem Eintrag zugeordnet, unter dem sie im Lebenslauf stehen',
+                             'bullets were returned to the entry they are printed under'],
+    'import.why.lonelyDate':['ein Datum ohne Eintrag wurde verworfen', 'a date with no entry was discarded'],
+    'import.why.notInCv':   ['nicht im Lebenslauf gefunden und verworfen', 'not found in the CV and discarded'],
+
     // ── Sections of the form ────────────────────────────────────────────────
     'card.personal':        ['Persönliche Angaben', 'Personal information'],
     'card.objective':       ['Ziel und Kurzprofil', 'Objective & summary'],

@@ -131,6 +131,113 @@ function norm(s) {
     .trim();
 }
 
+
+/**
+ * Put every piece back where the document has it.
+ *
+ * The model is asked for shapes and it is good at shapes. It is not in a position
+ * to know that the three date ranges it just read came from a column printed down
+ * the left-hand side of the page, belonging to three different sections — after
+ * extraction they are simply consecutive lines. Asked nicely (the system prompt
+ * says so in as many words) it still pairs them with whatever entries are to hand,
+ * and the result is a CV claiming a job that ran from the year the candidate
+ * started university.
+ *
+ * That was reported from use: one import produced five entries under
+ * BERUFSERFAHRUNG — two with a title and a wrong date, three with a date and no
+ * title at all, the bullets of the real jobs stranded on the empty ones.
+ *
+ * A prompt is a request. This is the check:
+ *
+ *   a period belongs to a title only if the CV prints it beside that title.
+ *   Beside means within a few lines, and before the next title begins. A period
+ *   that fails is dropped, not reassigned — an empty date field is a gap the
+ *   person can fill, a wrong one is a claim they never made.
+ *
+ *   an entry with neither title nor organisation is not an entry. Its bullets are
+ *   real text from the CV, so they are given to the entry whose title stands above
+ *   them IN THE DOCUMENT, which is where the reader would put them. With no such
+ *   title the orphan stays as it is, because losing the lines is worse than an
+ *   entry that needs a heading typed into it.
+ *
+ * Everything here reads the section body. Nothing is invented and nothing is
+ * moved between sections.
+ */
+const HOW_NEAR = 4;          // lines. An entry's date sits on its title's line or just above it.
+
+function anchorEntries(body, items) {
+  const lines = String(body || '').split('\n');
+  const flat = lines.map(norm);
+
+  // Where does this value stand in the section? The first line that contains it,
+  // compared the way the guard compares — punctuation and spacing already gone.
+  const lineOf = (value) => {
+    const n = norm(value);
+    if (!n || n.length < 3) return -1;
+    for (let i = 0; i < flat.length; i++) if (flat[i] && flat[i].includes(n)) return i;
+    return -1;
+  };
+
+  const notes = [];
+  const placed = items.map((it) => ({
+    title: String((it && it.title) || '').trim(),
+    org: String((it && it.org) || '').trim(),
+    period: String((it && it.period) || '').trim(),
+    bullets: Array.isArray(it && it.bullets) ? it.bullets.slice() : [],
+  }));
+
+  placed.forEach((it) => {
+    it.at = it.title ? lineOf(it.title) : (it.org ? lineOf(it.org) : -1);
+    it.named = Boolean(it.title || it.org);
+  });
+
+  // The titled entries, in the order the document has them. An entry whose title
+  // cannot be found stays where the model put it.
+  const named = placed.filter((it) => it.named);
+
+  // ── Dates ────────────────────────────────────────────────────────────────
+  named.forEach((it, i) => {
+    if (!it.period) return;
+    const p = lineOf(it.period);
+    if (p === -1) return;                      // not found: the guard already passed it
+    if (it.at === -1) return;                  // nothing to measure against
+    const near = Math.abs(p - it.at) <= HOW_NEAR;
+    // And not past the next entry's title, which is where this section's next
+    // item begins however close the line numbers happen to be.
+    const nextAt = named.slice(i + 1).map((o) => o.at).filter((x) => x > it.at).sort((a, b) => a - b)[0];
+    const before = nextAt === undefined || p < nextAt;
+    if (near && before) return;
+    notes.push({ why: 'date printed away from the entry it was paired with', text: it.period });
+    it.period = '';
+  });
+
+  // ── Orphans ──────────────────────────────────────────────────────────────
+  const keep = [];
+  placed.forEach((it) => {
+    if (it.named) { keep.push(it); return; }
+    if (!it.bullets.length) {
+      // A date and nothing else. That is the column, not an entry.
+      if (it.period) notes.push({ why: 'a date on its own is not an entry', text: it.period });
+      return;
+    }
+    // Which title stands above these bullets in the document?
+    const at = it.bullets.map(lineOf).filter((x) => x !== -1).sort((a, b) => a - b)[0];
+    const host = (at === undefined) ? null
+      : named.filter((o) => o.at !== -1 && o.at < at).sort((a, b) => b.at - a.at)[0];
+    if (host) {
+      host.bullets = host.bullets.concat(it.bullets.filter((b) => host.bullets.indexOf(b) === -1));
+      notes.push({ why: 'bullets returned to the entry they are printed under',
+                   text: String(it.bullets[0] || '').slice(0, 60) });
+    } else {
+      it.period = '';                          // an untitled entry keeps no date
+      keep.push(it);
+    }
+  });
+
+  keep.forEach((it) => { delete it.at; delete it.named; });
+  return { items: keep, notes };
+}
+
 /**
  * Ask the model what shape each detected section has, and check its answer.
  *
@@ -241,6 +348,15 @@ async function buildSchema({ cvText, sections }, llm) {
       }
     });
 
+    if (kind === 'entries' && clean.length) {
+      // The guard above proves every value is in the CV. This decides which values
+      // belong together, which the guard cannot see.
+      const body = (sections.find((x) => x.heading === heading) || {}).body || '';
+      const anchored = anchorEntries(body, clean);
+      anchored.notes.forEach((n) => dropped.push({ heading, why: n.why, text: n.text }));
+      if (anchored.items.length) kept.push({ heading, kind, items: anchored.items });
+      return;
+    }
     if (clean.length) kept.push({ heading, kind, items: clean });
   });
 
@@ -248,4 +364,4 @@ async function buildSchema({ cvText, sections }, llm) {
   return { sections: kept, dropped };
 }
 
-module.exports = { detectSections, buildSchema, looksLikeHeading };
+module.exports = { detectSections, buildSchema, looksLikeHeading, anchorEntries };
