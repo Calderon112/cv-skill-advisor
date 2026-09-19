@@ -4026,3 +4026,29 @@ body.sheet-open { overflow: hidden; }
 /* A page is 1:1.414 and the gallery is a grid: one wants a column, the other a
    room. */
 .cv-sheet[data-panel="vorschau"] .cv-sheet-box { max-width: 680px; }
+
+/* -- Sections a person adds themselves ------------------------------------ */
+.cv-add-section {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  margin: 0 0 20px; padding: 16px 18px;
+  border: 1px dashed var(--border); border-radius: 14px;
+}
+.cv-add-label { font-weight: 700; margin-right: 4px; }
+#page-profile .cv-add-section .btn { min-width: 0; }
+.cv-add-section .hint { flex-basis: 100%; margin: 2px 0 0; }
+
+.pf-section-head { display: flex; align-items: center; gap: 8px; }
+.pf-section-head .pf-heading { flex: 1; }
+.pf-entry { position: relative; }
+/* Small, quiet, and never in the way of the field beside it. */
+.pf-x {
+  flex: 0 0 auto; background: none; border: 0; cursor: pointer;
+  color: var(--text-dim); font-size: 13px; line-height: 1;
+  padding: 6px 8px; border-radius: 8px;
+}
+.pf-x:hover { color: #fca5a5; background: rgba(248,113,113,.12); }
+/* Its own strip at the right rather than a button laid over the title field, whose
+   last characters are where a pointer aiming at the text ends up. */
+.pf-entry { padding-right: 26px; }
+.pf-x-entry { position: absolute; top: 6px; right: 0; z-index: 1; }
+#page-profile .pf-add-entry { min-width: 0; margin-top: 6px; }

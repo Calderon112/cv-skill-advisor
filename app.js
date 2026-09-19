@@ -3750,7 +3750,12 @@ function renderCvSchema(schema, meta) {
   const body  = $('cv-schema-body');
   if (!panel || !body) return;
 
-  if (!schema || !schema.length) { panel.classList.add('hidden'); return; }
+  if (!schema || !schema.length) {
+    panel.classList.add('hidden');
+    // Deleting the last section has to return the form it was covering.
+    syncSchemaFormMode(_showFixedFields);
+    return;
+  }
   panel.classList.remove('hidden');
 
   const pill = $('cv-schema-pill');
@@ -3765,7 +3770,9 @@ function renderCvSchema(schema, meta) {
   // the same thing under another name — FÄHIGKEITEN for Skills, HOBBYS UND
   // INTERESSEN for Interests — lands where the reader already expects it instead of
   // opening a second block for the same idea. Anything the form has no concept for,
-  // like PRAKTISCHE KENNTNISSE, keeps its own heading and goes to the bottom.
+  // EHRENAMT or PUBLIKATIONEN, keeps its own heading and goes to the bottom. (The
+  // example here used to be PRAKTISCHE KENNTNISSE, which is not one: KENNTNISSE is
+  // in SCHEMA_TARGET and lands on the skills field.)
   const ORDER = ['summary', 'experience', 'skills', 'projects', 'education',
                  'certifications', 'languages', 'softSkills', 'interests'];
   const ordered = schema.slice().sort(function (a, b) {
@@ -3775,12 +3782,17 @@ function renderCvSchema(schema, meta) {
   });
 
   body.innerHTML = ordered.map((sec, si) => {
+    // Named once here: the markup, the delete buttons and collectCvSchema all
+    // have to agree on what shape this section is, including when it is empty.
+    const kind = sec.kind || 'entries';
     const rows = (function () {
       if (sec.kind === 'rows') {
         return sec.items.map((r, i) => `
           <div class="pf-row" data-s="${si}" data-i="${i}">
             <input class="field pf-third" data-f="label" value="${esc(r.label)}" placeholder="Label">
             <input class="field" data-f="value" value="${esc(r.value)}" placeholder="Value">
+            <button type="button" class="pf-x" data-act="del-entry" data-s="${si}" data-i="${i}"
+                    title="Zeile entfernen" aria-label="Zeile entfernen">&#10005;</button>
           </div>`).join('');
       }
       if (sec.kind === 'list') {
@@ -3792,6 +3804,8 @@ function renderCvSchema(schema, meta) {
       }
       return sec.items.map((e, i) => `
         <div class="pf-entry" data-s="${si}" data-i="${i}">
+          <button type="button" class="pf-x pf-x-entry" data-act="del-entry" data-s="${si}" data-i="${i}"
+                  title="Eintrag entfernen" aria-label="Eintrag entfernen">&#10005;</button>
           <div class="pf-row">
             <input class="field pf-third" data-f="period" value="${esc(e.period)}" placeholder="Period">
             <input class="field" data-f="title" value="${esc(e.title)}" placeholder="Title">
@@ -3806,10 +3820,17 @@ function renderCvSchema(schema, meta) {
     // the block "PROJEKTE & LABORE" should keep saying that in the generated
     // document rather than being normalised into "Projects".
     return `
-      <div class="pf-section${schemaTargetFor(sec.heading) ? '' : ' pf-section-new'}" data-s="${si}">
-        <input class="field pf-heading" data-f="heading" value="${esc(sec.heading)}">
+      <div class="pf-section${schemaTargetFor(sec.heading) ? '' : ' pf-section-new'}" data-s="${si}" data-kind="${esc(kind)}">
+        <div class="pf-section-head">
+          <input class="field pf-heading" data-f="heading" value="${esc(sec.heading)}">
+          <button type="button" class="pf-x" data-act="del-section" data-s="${si}"
+                  title="Abschnitt entfernen" aria-label="Abschnitt entfernen">&#10005;</button>
+        </div>
         ${schemaTargetFor(sec.heading) ? '' : '<span class="pf-new-note">Nur in Ihrem Lebenslauf — wird unten angehängt</span>'}
         ${rows}
+        ${kind === 'entries' || kind === 'rows'
+          ? `<button type="button" class="btn btn-ghost btn-sm pf-add-entry" data-act="add-entry" data-s="${si}">+ ${kind === 'rows' ? 'Zeile' : 'Eintrag'}</button>`
+          : ''}
       </div>`;
   }).join('');
 
@@ -3832,6 +3853,68 @@ function renderCvSchema(schema, meta) {
   syncSchemaFormMode(_showFixedFields);
 }
 
+// ── Sections a person adds themselves ────────────────────────────────────────
+//
+// The fixed cards cover what a German CV is expected to carry. Everything else -
+// Ehrenamt, Publikationen, Praktische Kenntnisse - is added here, under the
+// heading the candidate chooses, and printed under that heading (RENDER.extras).
+// It is the same store the import writes, so a profile that arrived from a CV and
+// one typed by hand are edited the same way.
+
+function newSchemaItem(kind) {
+  return kind === 'rows' ? { label: '', value: '' }
+       : { period: '', title: '', org: '', bullets: [] };
+}
+
+function addSchemaSection(kind) {
+  const heading = prompt('Überschrift des Abschnitts:', '');
+  if (heading === null) return;
+  const title = heading.trim();
+  if (!title) return;
+
+  if (!state.profile) state.profile = emptyProfile();
+  const schema = (state.profile.cvSchema || []).slice();
+  schema.push({ heading: title, kind,
+    items: (kind === 'entries' || kind === 'rows') ? [newSchemaItem(kind)] : [] });
+  state.profile.cvSchema = schema;
+  saveProfileToStorage();
+  renderCvSchema(schema);
+  schedulePreview();
+  $('cv-schema-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// Delegated, and on the body rather than on each button: the panel is rebuilt on
+// every edit, so a handler bound per button would be rebound on every keystroke.
+$('cv-schema-body')?.addEventListener('click', function (e) {
+  const btn = e.target.closest('[data-act]');
+  if (!btn) return;
+  // What is typed but not yet collected would be lost by the redraw below.
+  collectCvSchema();
+  const schema = (state.profile && state.profile.cvSchema) || [];
+  const sec = schema[Number(btn.dataset.s)];
+  if (!sec) return;
+
+  if (btn.dataset.act === 'del-section') {
+    if (!confirm('Abschnitt "' + (sec.heading || '') + '" entfernen?')) return;
+    schema.splice(Number(btn.dataset.s), 1);
+  } else if (btn.dataset.act === 'del-entry') {
+    (sec.items || []).splice(Number(btn.dataset.i), 1);
+  } else if (btn.dataset.act === 'add-entry') {
+    (sec.items = sec.items || []).push(newSchemaItem(sec.kind));
+  }
+
+  state.profile.cvSchema = schema;
+  applySchemaToProfile(state.profile, schema);
+  saveProfileToStorage();
+  renderCvSchema(schema);
+  schedulePreview();
+});
+
+document.getElementById('cv-add-section')?.addEventListener('click', function (e) {
+  const btn = e.target.closest('[data-add-kind]');
+  if (btn) addSchemaSection(btn.dataset.addKind);
+});
+
 /** Read the panel back into the profile. Called on every edit. */
 function collectCvSchema() {
   const body = $('cv-schema-body');
@@ -3844,11 +3927,17 @@ function collectCvSchema() {
     const rowEls  = secEl.querySelectorAll('.pf-row[data-i]');
     const entryEls = secEl.querySelectorAll('.pf-entry');
 
-    if (listTa) {
-      out.push({ heading, kind: 'list', items: listTa.value.split('\n').map(s => s.trim()).filter(Boolean) });
+    // Read off the element rather than inferred from what it contains. Inferring
+    // it dropped every section that had nothing in it yet - which is every section
+    // the moment it is added, so adding one and typing its heading deleted it.
+    const kind = secEl.dataset.kind || '';
+
+    if (listTa || kind === 'list') {
+      out.push({ heading, kind: 'list',
+        items: (listTa ? listTa.value : '').split('\n').map(s => s.trim()).filter(Boolean) });
     } else if (textTa) {
       out.push({ heading, kind: 'text', items: [textTa.value.trim()].filter(Boolean) });
-    } else if (entryEls.length) {
+    } else if (entryEls.length || kind === 'entries') {
       out.push({ heading, kind: 'entries', items: [...entryEls].map((el) => ({
         period: el.querySelector('[data-f="period"]')?.value.trim() || '',
         title:  el.querySelector('[data-f="title"]')?.value.trim() || '',
@@ -3856,7 +3945,7 @@ function collectCvSchema() {
         bullets: (el.querySelector('[data-f="bullets"]')?.value || '')
           .split('\n').map(s => s.trim()).filter(Boolean),
       })) });
-    } else if (rowEls.length) {
+    } else if (rowEls.length || kind === 'rows') {
       out.push({ heading, kind: 'rows', items: [...rowEls].map((el) => ({
         label: el.querySelector('[data-f="label"]')?.value.trim() || '',
         value: el.querySelector('[data-f="value"]')?.value.trim() || '',
@@ -4627,19 +4716,30 @@ function applySchemaToProfile(p, schema) {
 // So the fixed cards step aside for the sections the document actually has. They
 // are hidden, not removed: a CV with no PROJEKTE section still needs somewhere to
 // add one, and the toggle brings them back.
-const SCHEMA_COVERS = ['pf-card-skills', 'pf-card-experience', 'pf-card-education', 'pf-card-certifications'];
+// Each card steps aside only for the section that actually replaces it. It used to
+// be all of them as soon as any section existed, which was right after an import
+// and wrong the moment someone added a section of their own: adding "Ehrenamt" to
+// a hand-typed profile blanked Skills, Experience, Education and Certifications.
+const SCHEMA_COVERS = {
+  'pf-card-skills':         ['skills'],
+  'pf-card-experience':     ['experience'],
+  'pf-card-education':      ['education'],
+  'pf-card-certifications': ['certifications'],
+};
 
 function syncSchemaFormMode(forceShowFixed) {
-  const hasSchema = !!(state.profile && state.profile.cvSchema && state.profile.cvSchema.length);
-  const hide = hasSchema && !forceShowFixed;
-  SCHEMA_COVERS.forEach(function (id) {
+  const schema = (state.profile && state.profile.cvSchema) || [];
+  const targets = new Set(schema.map(function (sec) { return schemaTargetFor(sec.heading); })
+                                .filter(Boolean));
+  Object.keys(SCHEMA_COVERS).forEach(function (id) {
     const el = $(id);
-    if (el) el.classList.toggle('hidden', hide);
+    const covered = SCHEMA_COVERS[id].some(function (t) { return targets.has(t); });
+    if (el) el.classList.toggle('hidden', covered && !forceShowFixed);
   });
   const btn = $('cv-schema-toggle');
   if (btn) {
-    btn.classList.toggle('hidden', !hasSchema);
-    btn.textContent = hide ? 'Feste Felder zeigen' : 'Feste Felder ausblenden';
+    btn.classList.toggle('hidden', !targets.size);
+    btn.textContent = (targets.size && !forceShowFixed) ? 'Feste Felder zeigen' : 'Feste Felder ausblenden';
   }
 }
 
@@ -5797,6 +5897,68 @@ function buildProfilePdfDoc(profile, overrides) {
         });
       }
     },
+
+    // The sections a person added under their own heading. The nine above are what
+    // a German CV is expected to carry; anything else - Ehrenamt, Publikationen,
+    // Praktische Kenntnisse - has no field to be mapped onto and used to be edited
+    // on the page and then dropped on the way to the PDF, while the panel said in
+    // as many words that it would be appended. Printed at the end of the main
+    // column, which is what that promise means.
+    extras: function () {
+      (p.cvSchema || []).forEach(function (sec) {
+        if (!sec || !sec.heading || schemaTargetFor(sec.heading)) return;
+        const items = (sec.items || []).filter(function (it) {
+          if (typeof it === 'string') return it.trim();
+          return it && (it.title || it.org || it.label || it.value || (it.bullets || []).length);
+        });
+        // Nothing to say is nothing to print, the heading included: a section
+        // added and not yet filled must not stamp an empty title on the document.
+        if (!items.length) return;
+
+        mainSection(sec.heading);
+
+        if (sec.kind === 'text') {
+          write(items.map(String).join('\n\n'), MAIN_C_X, MAIN_C_W, 9, 'normal', DARK, 12);
+          yMain += 6;
+          return;
+        }
+        if (sec.kind === 'list') {
+          bulletList(items.map(String), MAIN_E_X, MAIN_E_W);
+          yMain += 6;
+          return;
+        }
+        if (sec.kind === 'rows') {
+          const LABEL_W = 104;
+          items.forEach(function (r) {
+            if (yMain + 14 > PAGE_H - M) nextPage();
+            setFont(9, 'bold', TEAL);
+            if (r.label) doc.text(r.label + ':', MAIN_C_X, yMain);
+            const lines = doc.splitTextToSize(String(r.value || ''), MAIN_C_W - LABEL_W);
+            setFont(9, 'normal', DARK);
+            let y1 = yMain;
+            lines.forEach(function (l) {
+              if (y1 + 12 > PAGE_H - M) { nextPage(); y1 = M; }
+              doc.text(l, MAIN_C_X + LABEL_W, y1);
+              y1 += 12;
+            });
+            yMain = y1 + 5;
+          });
+          return;
+        }
+
+        items.forEach(function (e, i) {
+          station(function () {
+            if (i) entryRule();
+            const head = titleWithDates(e.title || '', e.period);
+            if (head) write(head, MAIN_E_X, MAIN_E_W, 10, 'bold', TEAL, 13);
+            const sub = [e.org, T.dateStyle === 'after-title' ? '' : e.period].filter(Boolean).join(', ');
+            if (sub) write(sub, MAIN_E_X, MAIN_E_W, 8, 'normal', GREY, 11);
+            if ((e.bullets || []).length) bulletList(e.bullets, MAIN_E_X, MAIN_E_W);
+            yMain += 16;
+          });
+        });
+      });
+    },
   };
 
   const run = (names) => (names || []).forEach(function (k) {
@@ -5809,6 +5971,9 @@ function buildProfilePdfDoc(profile, overrides) {
   run(T.layout.main);
   // With no rail, whatever the theme listed there still has to be printed.
   if (!HAS_RAIL) run(T.layout.rail);
+  // Last, and outside the theme's order on purpose: a template cannot list a
+  // section whose name it does not know.
+  RENDER.extras();
 
   return { doc: real, name, pages: rec ? rec.pages : null };
 }

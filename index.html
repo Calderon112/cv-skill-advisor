@@ -941,6 +941,20 @@
             <div id="pf-cert-list" class="repeat-list"></div>
           </div>
 
+          <!-- Everything the fixed cards above have no concept for. The heading is
+               the candidate's own word and is printed as it stands, at the end of
+               the document. -->
+          <div class="cv-add-section" id="cv-add-section">
+            <span class="cv-add-label">Abschnitt hinzufügen</span>
+            <button type="button" class="btn btn-ghost btn-sm" data-add-kind="entries">Mit Zeitraum</button>
+            <button type="button" class="btn btn-ghost btn-sm" data-add-kind="list">Liste</button>
+            <button type="button" class="btn btn-ghost btn-sm" data-add-kind="rows">Feldpaare</button>
+            <button type="button" class="btn btn-ghost btn-sm" data-add-kind="text">Fließtext</button>
+            <p class="hint">Zum Beispiel Ehrenamt, Publikationen oder Praktische Kenntnisse.
+              Mit Zeitraum für Stationen, Liste für Aufzählungen, Feldpaare für
+              „Bezeichnung: Wert“.</p>
+          </div>
+
           <div class="form-actions" style="margin-bottom:24px">
             <button id="pf-save" class="btn btn-primary">Save Profile</button>
             <button id="pf-download-pdf" class="btn btn-ghost">Generate as PDF</button>
