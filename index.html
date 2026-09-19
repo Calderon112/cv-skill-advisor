@@ -850,14 +850,16 @@
             <div id="cv-check-body" class="cv-check-list" hidden></div>
           </div>
 
-          <div class="card">
-            <div class="card-header"><h2>Vorlage</h2></div>
-            <p class="lede">Das Layout entscheidet, ob ein Bewerbungsportal den Lebenslauf
-              korrekt einliest. Die Vorschau zeigt den Aufbau, nicht den Inhalt.</p>
-            <div id="cv-theme-picker" class="theme-picker"></div>
-            <!-- Colour, typeface and section order, applied on top of the template
-                 chosen above. Rendered by renderDesignControls(). -->
-            <div id="cv-design-controls" class="design-controls"></div>
+          <!-- Neither the gallery nor the preview sits on the page any more: each
+               is a button that opens a sheet. Eighteen templates and an A4 page
+               beside the form left the form itself as the smallest thing on a
+               screen whose whole purpose is filling it in. -->
+          <div class="cv-actions">
+            <button type="button" class="btn btn-ghost" id="cv-open-vorlage">
+              Vorlage<span class="cv-actions-value" id="cv-theme-name">-</span>
+            </button>
+            <button type="button" class="btn btn-ghost" id="cv-open-vorschau">Vorschau</button>
+            <button type="button" class="btn btn-primary" id="pf-download-pdf-2">PDF laden</button>
           </div>
 
         <div id="cv-schema-panel" class="card hidden">
@@ -973,38 +975,6 @@
           </div>
         </div><!-- /.pf-form -->
 
-        <aside class="pf-preview" id="pf-preview">
-          <div class="pf-preview-bar">
-            <span class="pf-preview-title">Vorschau</span>
-            <span class="pf-preview-meta" id="pf-preview-meta"></span>
-            <button type="button" class="btn btn-ghost btn-xs" id="pf-preview-toggle"
-                    aria-controls="pf-preview-canvas" aria-expanded="false">Anzeigen</button>
-          </div>
-          <!-- A canvas, not a framed PDF. The browser's own viewer keeps its own
-               zoom inside a small frame and crops the left edge of the page — the
-               whole rail of a two-column theme — and ignores every fit parameter.
-               This repaints the drawing calls the generator actually made. -->
-          <div class="pf-preview-frame">
-            <canvas id="pf-preview-canvas" aria-label="Lebenslauf-Vorschau"></canvas>
-            <p class="pf-preview-empty" id="pf-preview-empty">Die Vorschau erscheint,
-              sobald der Lebenslauf Inhalt hat.</p>
-            <!-- Nothing is drawn until it is asked for. The page used to open with
-                 the finished document on screen, which is a document on display to
-                 everyone in the room, not only to the person editing it. -->
-            <div class="pf-preview-off" id="pf-preview-off">
-              <p>Der Lebenslauf wird erst gezeichnet, wenn Sie ihn anfordern.</p>
-              <button type="button" class="btn btn-primary btn-sm" id="pf-preview-show">Vorschau anzeigen</button>
-            </div>
-          </div>
-          <div class="pf-preview-pager hidden" id="pf-preview-pager">
-            <button class="btn btn-ghost btn-xs" id="pf-page-prev" aria-label="Vorherige Seite">‹</button>
-            <span id="pf-page-label">1 / 1</span>
-            <button class="btn btn-ghost btn-xs" id="pf-page-next" aria-label="Nächste Seite">›</button>
-          </div>
-          <div class="pf-preview-actions">
-            <button id="pf-download-pdf-2" class="btn btn-primary btn-sm">PDF laden</button>
-          </div>
-        </aside>
         </div><!-- /.pf-split -->
         </div>
       </section>
@@ -1232,6 +1202,47 @@
   </div>
 
   <!-- ── Job Workspace (per saved job: match → gaps → oracle → cover letter) ── -->
+  <!-- The template gallery and the preview. The same nodes as before, addressed
+       by the same ids, but behind a button instead of down the page. -->
+  <div id="cv-sheet" class="cv-sheet" hidden>
+    <div class="cv-sheet-box" role="dialog" aria-modal="true" aria-labelledby="cv-sheet-title">
+      <div class="cv-sheet-head">
+        <h2 id="cv-sheet-title">Vorlage</h2>
+        <button type="button" class="cv-sheet-close" id="cv-sheet-close" aria-label="Schliessen">&#10005;</button>
+      </div>
+
+      <div class="cv-sheet-panel" id="sheet-vorlage" hidden>
+        <p class="lede">Das Layout entscheidet, ob ein Bewerbungsportal den Lebenslauf
+          korrekt einliest. Die Vorschau zeigt den Aufbau, nicht den Inhalt.</p>
+        <div id="cv-theme-picker" class="theme-picker"></div>
+        <!-- Colour, typeface and section order, applied on top of the template
+             chosen above. Rendered by renderDesignControls(). -->
+        <div id="cv-design-controls" class="design-controls"></div>
+      </div>
+
+      <div class="cv-sheet-panel" id="sheet-vorschau" hidden>
+        <!-- A canvas, not a framed PDF. The browser's own viewer keeps its own
+             zoom inside a small frame and crops the left edge of the page - the
+             whole rail of a two-column theme - and ignores every fit parameter.
+             This repaints the drawing calls the generator actually made. -->
+        <div class="pf-preview-frame">
+          <canvas id="pf-preview-canvas" aria-label="Lebenslauf-Vorschau"></canvas>
+          <p class="pf-preview-empty" id="pf-preview-empty">Die Vorschau erscheint,
+            sobald der Lebenslauf Inhalt hat.</p>
+        </div>
+        <div class="pf-preview-foot">
+          <span class="pf-preview-meta" id="pf-preview-meta"></span>
+          <div class="pf-preview-pager hidden" id="pf-preview-pager">
+            <button class="btn btn-ghost btn-xs" id="pf-page-prev" aria-label="Vorherige Seite">&#8249;</button>
+            <span id="pf-page-label">1 / 1</span>
+            <button class="btn btn-ghost btn-xs" id="pf-page-next" aria-label="Naechste Seite">&#8250;</button>
+          </div>
+          <button id="pf-download-pdf-3" class="btn btn-primary btn-sm">PDF laden</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="job-workspace" class="jw-overlay hidden">
     <div class="jw-modal">
       <button id="jw-close" class="jw-close" title="Close">✕</button>

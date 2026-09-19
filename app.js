@@ -745,6 +745,7 @@ function clearUserData() {
   // Both panels fold again. They are opened by a person for their own document;
   // leaving either open across a sign-out would draw the next arrival's CV, or
   // grade it, without anyone having asked.
+  if (typeof closeSheet === 'function') closeSheet();
   if (typeof setPreviewOn === 'function') setPreviewOn(false);
   if (_cvCheckOpen && typeof toggleCvCheck === 'function') toggleCvCheck();
 }
@@ -4752,6 +4753,15 @@ function renderThemePicker() {
   const host = $('cv-theme-picker');
   if (!host || typeof CvThemes === 'undefined') return;
 
+  // The name on the button is the part that is visible from the page.
+  updateThemeName();
+  // The gallery itself lives in the sheet. Painting eighteen thumbnails behind a
+  // closed one is work nobody asked for, and this is called on every profile
+  // refresh. Asked of the DOM rather than of _sheetOpen, which is declared
+  // further down the file than this runs.
+  const sheet = $('cv-sheet');
+  if (sheet && sheet.hidden) return;
+
   const current = (state.profile && state.profile.themeId) || CvThemes.DEFAULT_ID;
 
   host.innerHTML = CvThemes.list().map(function (t) {
@@ -4793,6 +4803,7 @@ function renderThemePicker() {
   // Redrawn with the template it sits under: a different template has different
   // sections to order and a different default typeface to name.
   renderDesignControls();
+  updateThemeName();
 }
 
 // ── Lebenslauf-Check ─────────────────────────────────────────────────────────
@@ -5831,17 +5842,6 @@ function schedulePreview() {
 
 function setPreviewOn(on) {
   _pfPreviewOn = Boolean(on);
-  const off = $('pf-preview-off');
-  const toggle = $('pf-preview-toggle');
-  if (off) off.hidden = _pfPreviewOn;
-  if (toggle) {
-    // One control per state. Switched off, the button inside the frame says what
-    // the frame is for; a second "Anzeigen" in the bar beside it only asks the
-    // same question twice.
-    toggle.hidden = !_pfPreviewOn;
-    toggle.textContent = 'Ausblenden';
-    toggle.setAttribute('aria-expanded', String(_pfPreviewOn));
-  }
   if (_pfPreviewOn) { renderProfilePreview(); return; }
 
   clearTimeout(_pfPreviewTimer);
@@ -5854,6 +5854,63 @@ function setPreviewOn(on) {
   // here, and a stale one would describe a document that is no longer on screen.
   _pfPages = null;
 }
+
+// ── The sheet ────────────────────────────────────────────────────────────────
+//
+// The template gallery and the preview are opened from a button and cover the
+// page while they are open. Both used to live on the profile page: eighteen
+// templates down the middle and an A4 sheet pinned beside them, so the form a
+// person came to fill in was the smallest thing on the screen. Neither is needed
+// while typing, and both are wanted whole when they are wanted at all.
+let _sheetOpen = null;
+
+function openSheet(which) {
+  const sheet = $('cv-sheet');
+  if (!sheet) return;
+  _sheetOpen = which;
+  sheet.hidden = false;
+  sheet.dataset.panel = which;   // the two panels do not want the same width
+  document.body.classList.add('sheet-open');
+  const title = $('cv-sheet-title');
+  if (title) title.textContent = which === 'vorschau' ? 'Vorschau' : 'Vorlage';
+  const vorlage = $('sheet-vorlage');
+  const vorschau = $('sheet-vorschau');
+  if (vorlage) vorlage.hidden = which !== 'vorlage';
+  if (vorschau) vorschau.hidden = which !== 'vorschau';
+
+  // Drawn on opening, not kept warm in the background: while the sheet is shut
+  // there is nothing on screen for a redraw to reach.
+  if (which === 'vorschau') setPreviewOn(true);
+  else if (typeof renderThemePicker === 'function') renderThemePicker();
+
+  $('cv-sheet-close')?.focus();
+}
+
+function closeSheet() {
+  const sheet = $('cv-sheet');
+  if (!sheet || sheet.hidden) return;
+  if (_sheetOpen === 'vorschau') setPreviewOn(false);
+  sheet.hidden = true;
+  document.body.classList.remove('sheet-open');
+  // Back to the button that opened it, rather than to the top of the document.
+  $(_sheetOpen === 'vorschau' ? 'cv-open-vorschau' : 'cv-open-vorlage')?.focus();
+  _sheetOpen = null;
+}
+
+/** The chosen template's name, on the button that opens the gallery. */
+function updateThemeName() {
+  const el = $('cv-theme-name');
+  if (!el || typeof CvThemes === 'undefined') return;
+  const t = CvThemes.get((state.profile && state.profile.themeId) || CvThemes.DEFAULT_ID);
+  el.textContent = t ? t.name : '-';
+}
+
+$('cv-open-vorlage')?.addEventListener('click', () => openSheet('vorlage'));
+$('cv-open-vorschau')?.addEventListener('click', () => openSheet('vorschau'));
+$('cv-sheet-close')?.addEventListener('click', closeSheet);
+// The backdrop is the element itself; a click inside the box must not close it.
+$('cv-sheet')?.addEventListener('click', (e) => { if (e.target.id === 'cv-sheet') closeSheet(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSheet(); });
 
 /** Is there enough in the profile to be worth drawing? */
 function profileHasContent(p) {
@@ -5929,10 +5986,8 @@ function turnPreviewPage(delta) {
 }
 $('pf-page-prev')?.addEventListener('click', () => turnPreviewPage(-1));
 $('pf-page-next')?.addEventListener('click', () => turnPreviewPage(1));
-$('pf-preview-toggle')?.addEventListener('click', () => setPreviewOn(!_pfPreviewOn));
-$('pf-preview-show')?.addEventListener('click', () => setPreviewOn(true));
-// The markup ships with the canvas visible so that the frame is right when it is
-// switched on; this is what makes "off" the state the page actually opens in.
+// The markup ships with the canvas visible so that the frame is right when the
+// sheet opens; this is what makes "not drawn" the state the page starts in.
 setPreviewOn(false);
 // The canvas is painted at the device resolution of the box it is in, so a resized
 // window needs a repaint rather than a browser-scaled bitmap.
@@ -6065,7 +6120,7 @@ function downloadProfilePDF() {
   toast(`${fileName} downloaded!`, 'success');
 }
 
-['pf-download-pdf', 'pf-download-pdf-2'].forEach(id => {
+['pf-download-pdf', 'pf-download-pdf-2', 'pf-download-pdf-3'].forEach(id => {
   const b = $(id);
   if (b) b.addEventListener('click', downloadProfilePDF);
 });
