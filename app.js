@@ -305,7 +305,15 @@ const CACHE_OWNER_KEY = 'careerai-cache-owner';
 // Device preferences, deliberately NOT cleared on sign-out: they belong to the
 // browser, not the account. Everything else keyed per user must be listed in
 // clearUserData below.
-const PER_USER_KEYS = [APPS_KEY, 'careerai-profile'];
+// The CV store's key belongs here too, and its absence is what let a new account
+// opened in this browser find the previous person's CV, photo and all: sign-out
+// removed careerai-profile and careerai-apps and left careerai-cvs untouched, and
+// careerai-cvs is the one the store actually reads. The comment above said what to
+// do and the key was added without doing it.
+//
+// Written as a literal rather than as CvStore.KEY because cv-store.js is loaded
+// after app.js, so the constant does not exist yet when this line is evaluated.
+const PER_USER_KEYS = [APPS_KEY, 'careerai-profile', 'careerai-cvs'];
 
 const state = {
   token:     localStorage.getItem(TOKEN_KEY) || null,
@@ -709,11 +717,30 @@ function consumeAuthFragment() {
 function clearUserData() {
   PER_USER_KEYS.forEach(k => localStorage.removeItem(k));
   localStorage.removeItem(CACHE_OWNER_KEY);
+  // The store keeps the parsed list in memory as well. Dropping only the stored
+  // copy leaves it holding the previous user's CVs, and the next save writes them
+  // straight back out — the wipe would quietly undo itself.
+  _cvStore = null;
   state.apps     = [];
   state.cvText   = '';
   state.analysis = null;
   state.matches  = [];
   if (typeof emptyProfile === 'function') state.profile = emptyProfile();
+
+  // And off the screen, which is what this function's first line claims to do.
+  // Emptying state.profile does not repaint the inputs: after a sign-out the form
+  // still showed the name, the photo and every station until something else
+  // happened to redraw it — so on a shared machine the CV stayed on display to
+  // whoever walked up next, even though it had been wiped from storage.
+  //
+  // Deliberately not refreshProfileViews(): that one draws the version switcher,
+  // which would build a fresh store and write careerai-cvs straight back out. The
+  // renderers below read state.profile and touch no storage at all.
+  if (typeof renderProfileForm === 'function')     renderProfileForm();
+  if (typeof renderRepeatList === 'function')      ['exp', 'edu', 'cert'].forEach((t) => renderRepeatList(t));
+  if (typeof renderSkillTags === 'function')       renderSkillTags();
+  if (typeof renderCvSchema === 'function')        renderCvSchema([]);
+  if (typeof updateProfileSummary === 'function')  updateProfileSummary();
 }
 
 // Update only the name shown in the UI, for the account already signed in. Separate
