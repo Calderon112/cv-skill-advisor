@@ -231,6 +231,7 @@ function createGuards({ authenticate, getToken, publicBaseUrl, publicDir }) {
     '/app.js', '/jspdf.umd.min.js',
     '/rerank.js', '/scorer.js', '/security-learning.js', '/security-skills.js', '/skill-matcher.js',
     '/cv-themes.js', '/cv-preview.js', '/json-resume.js', '/cv-check.js', '/cv-store.js',
+    '/i18n.js',
     // Extracted from inline <script> blocks so the CSP can refuse inline script.
     '/theme-boot.js', '/page-boot.js',
   ]);

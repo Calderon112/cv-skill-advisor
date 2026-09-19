@@ -575,7 +575,7 @@
           <div class="form-row">
             <div class="form-group">
               <label>Job Title</label>
-              <input id="cover-job-title" type="text" class="field" placeholder="e.g. SOC Analyst" />
+              <input id="cover-job-title" type="text" class="field" data-i18n-ph="field.jobTitlePh" placeholder="z. B. SOC Analyst" />
             </div>
             <div class="form-group">
               <label>Company</label>
@@ -723,9 +723,18 @@
       <section class="page" id="page-profile">
         <div class="page-intro">
           <div>
-            <h1>Professional Profile</h1>
-            <p>Build your profile by uploading your CV (auto-extract) or filling it in manually.</p>
+            <h1 data-i18n="profile.title">Profil</h1>
+            <p data-i18n="profile.lede">Laden Sie Ihren Lebenslauf hoch oder füllen Sie das Formular aus.</p>
           </div>
+          <!-- Which language the form speaks. It says "form language" because that
+               is what it changes: the rest of the application is still English. -->
+          <label class="form-lang">
+            <span data-i18n="profile.formLang">Formularsprache</span>
+            <select id="ui-lang" class="field">
+              <option value="de">Deutsch</option>
+              <option value="en">English</option>
+            </select>
+          </label>
         </div>
 
         <!-- Which CV is being edited. One per application is the normal case: a
@@ -736,8 +745,8 @@
 
         <!-- Mode toggle -->
         <div class="profile-modes">
-          <button class="profile-mode-btn" data-mode="import">Import from CV</button>
-          <button class="profile-mode-btn active" data-mode="manual">Manual entry</button>
+          <button class="profile-mode-btn" data-mode="import" data-i18n="mode.import">Aus Lebenslauf übernehmen</button>
+          <button class="profile-mode-btn active" data-mode="manual" data-i18n="mode.manual">Manuell eingeben</button>
         </div>
 
         <div id="profile-summary-card" class="card profile-summary-card">
@@ -768,13 +777,13 @@
         <div id="profile-import" class="profile-mode-panel hidden">
           <div class="card">
             <div class="card-header">
-              <h2>Upload your CV</h2>
-              <span class="pill" id="cv-status-pill">Ready</span>
+              <h2 data-i18n="import.upload">Lebenslauf hochladen</h2>
+              <span class="pill" id="cv-status-pill" data-i18n="import.ready">Bereit</span>
             </div>
             <div id="cv-drop-zone" class="drop-zone">
               <div class="drop-icon"></div>
-              <p>Drop CV file here or click to browse</p>
-              <span class="drop-hint">.txt and searchable .pdf supported</span>
+              <p data-i18n="import.drop">Datei hierher ziehen oder klicken zum Auswählen</p>
+              <span class="drop-hint" data-i18n="import.dropHint">.txt und durchsuchbare .pdf werden unterstützt</span>
             </div>
             <input id="cv-file-input" type="file" accept=".txt,.pdf" hidden />
             <div id="cv-progress-steps" class="progress-steps hidden">
@@ -783,8 +792,8 @@
               <div class="progress-step" data-step="building">Building profile</div>
               <div class="progress-step" data-step="done">Done</div>
             </div>
-            <textarea id="cv-input" class="field cv-textarea" placeholder="…or paste CV text directly here"></textarea>
-            <button id="analyze-btn" class="btn btn-primary">Extract &amp; Build Profile</button>
+            <textarea id="cv-input" class="field cv-textarea" data-i18n-ph="import.paste" placeholder="… oder Text des Lebenslaufs hier einfügen"></textarea>
+            <button id="analyze-btn" class="btn btn-primary" data-i18n="import.extract">Auslesen und Profil erstellen</button>
           </div>
 
           <div id="analysis-results-panel" class="card hidden">
@@ -794,9 +803,9 @@
             </div>
             <div id="analysis-summary" class="analysis-banner"></div>
             <div class="three-col">
-              <div><h3 class="col-label">Detected Skills</h3><ul id="found-skills" class="tag-list cyan"></ul></div>
-              <div><h3 class="col-label">Missing / To develop</h3><ul id="missing-skills" class="tag-list orange"></ul></div>
-              <div><h3 class="col-label">Recommended Roles</h3><ul id="recommended-roles" class="role-list"></ul></div>
+              <div><h3 class="col-label" data-i18n="import.detected">Erkannte Kenntnisse</h3><ul id="found-skills" class="tag-list cyan"></ul></div>
+              <div><h3 class="col-label" data-i18n="import.missing">Fehlend / auszubauen</h3><ul id="missing-skills" class="tag-list orange"></ul></div>
+              <div><h3 class="col-label" data-i18n="import.roles">Passende Rollen</h3><ul id="recommended-roles" class="role-list"></ul></div>
             </div>
             <div class="form-actions">
               <button class="btn btn-ghost btn-sm" id="cv-view-extracted">View extracted text</button>
@@ -843,7 +852,7 @@
                  wrong with it. -->
             <button type="button" class="cv-check-btn" id="cv-check-toggle"
                     aria-expanded="false" aria-controls="cv-check-body">
-              <span class="cv-check-btn-label">Lebenslauf-Check</span>
+              <span class="cv-check-btn-label" data-i18n="check.title">Lebenslauf-Check</span>
               <span class="pill cv-check-pill" id="cv-check-pill">—</span>
               <span class="cv-check-chevron" aria-hidden="true">▾</span>
             </button>
@@ -856,45 +865,45 @@
                screen whose whole purpose is filling it in. -->
           <div class="cv-actions">
             <button type="button" class="btn btn-ghost" id="cv-open-vorlage">
-              Vorlage<span class="cv-actions-value" id="cv-theme-name">-</span>
+              <span data-i18n="action.template">Vorlage</span><span class="cv-actions-value" id="cv-theme-name">-</span>
             </button>
-            <button type="button" class="btn btn-ghost" id="cv-open-vorschau">Vorschau</button>
-            <button type="button" class="btn btn-primary" id="pf-download-pdf-2">PDF laden</button>
+            <button type="button" class="btn btn-ghost" id="cv-open-vorschau" data-i18n="action.previewOpen">Vorschau</button>
+            <button type="button" class="btn btn-primary" id="pf-download-pdf-2" data-i18n="action.pdfLoad">PDF laden</button>
           </div>
 
         <div id="cv-schema-panel" class="card hidden">
           <div class="card-header">
-            <h2>Your CV, section by section</h2>
+            <h2 data-i18n="card.schema">Ihr Lebenslauf, Abschnitt für Abschnitt</h2>
             <span class="pill" id="cv-schema-pill">—</span>
-            <button type="button" id="cv-schema-toggle" class="btn btn-ghost btn-xs">Feste Felder zeigen</button>
+            <button type="button" id="cv-schema-toggle" class="btn btn-ghost btn-xs" data-i18n="schema.showFixed">Feste Felder zeigen</button>
           </div>
-          <p class="lede" id="cv-schema-note">Built from the headings your CV carries. Edit anything here; it feeds the generated documents.</p>
+          <p class="lede" id="cv-schema-note" data-i18n="card.schemaNote">Aus den Überschriften Ihres Lebenslaufs erzeugt.</p>
           <div id="cv-schema-body"></div>
           <div id="cv-schema-dropped" class="pf-warn hidden"></div>
         </div>
           <div class="card">
-            <div class="card-header"><h2>Personal information</h2></div>
+            <div class="card-header"><h2 data-i18n="card.personal">Persönliche Angaben</h2></div>
             <div id="pf-contact-warn" class="pf-warn"></div>
             <div class="pf-photo-row">
-              <div class="pf-photo-preview" id="pf-photo-preview"><span>Photo</span></div>
+              <div class="pf-photo-preview" id="pf-photo-preview"><span data-i18n="field.photoBox">Foto</span></div>
               <div class="pf-photo-actions">
-                <button id="pf-photo-btn" class="btn btn-ghost btn-sm">Upload photo</button>
-                <button id="pf-photo-remove" class="btn btn-ghost btn-sm hidden">Remove</button>
+                <button id="pf-photo-btn" class="btn btn-ghost btn-sm" data-i18n="field.photo">Foto hochladen</button>
+                <button id="pf-photo-remove" class="btn btn-ghost btn-sm hidden" data-i18n="field.photoRemove">Entfernen</button>
                 <input id="pf-photo-input" type="file" accept="image/*" hidden />
-                <p class="hint">JPG / PNG — appears on your CV PDF (optional).</p>
+                <p class="hint" data-i18n="field.photoHint">JPG / PNG — erscheint auf Ihrem Lebenslauf-PDF (optional).</p>
               </div>
             </div>
             <div class="form-row">
-              <div class="form-group"><label>First name</label><input id="pf-firstName" class="field" type="text" /></div>
-              <div class="form-group"><label>Last name</label><input id="pf-lastName" class="field" type="text" /></div>
+              <div class="form-group"><label for="pf-firstName" data-i18n="field.firstName">Vorname</label><input id="pf-firstName" class="field" type="text" /></div>
+              <div class="form-group"><label for="pf-lastName" data-i18n="field.lastName">Nachname</label><input id="pf-lastName" class="field" type="text" /></div>
             </div>
             <div class="form-row">
-              <div class="form-group"><label>Email</label><input id="pf-email" class="field" type="email" /></div>
-              <div class="form-group"><label>Phone</label><input id="pf-phone" class="field" type="text" /></div>
+              <div class="form-group"><label for="pf-email" data-i18n="field.email">E-Mail</label><input id="pf-email" class="field" type="email" /></div>
+              <div class="form-group"><label for="pf-phone" data-i18n="field.phone">Telefon</label><input id="pf-phone" class="field" type="text" /></div>
             </div>
             <div class="form-row">
-              <div class="form-group"><label>Location</label><input id="pf-location" class="field" type="text" placeholder="City, Country" /></div>
-              <div class="form-group"><label>Nationality</label><input id="pf-nationality" class="field" type="text" /></div>
+              <div class="form-group"><label for="pf-location" data-i18n="field.location">Ort</label><input id="pf-location" class="field" type="text" data-i18n-ph="field.locationPh" placeholder="Stadt, Land" /></div>
+              <div class="form-group"><label for="pf-nationality" data-i18n="field.nationality">Staatsangehörigkeit</label><input id="pf-nationality" class="field" type="text" /></div>
             </div>
             <!-- One row per language, with the level from a list. The profile still
                  holds them as the single line "Deutsch (C1), Englisch (B2)" - the
@@ -902,53 +911,52 @@
                  JSON Resume splits into {language, fluency} and what the check reads.
                  Rendered by renderLanguageRows(). -->
             <div class="form-group">
-              <label for="pf-lang-list">Languages</label>
+              <label for="pf-lang-list" data-i18n="field.languages">Sprachen</label>
               <div id="pf-lang-list" class="lang-list"></div>
-              <button type="button" id="pf-lang-add" class="btn btn-ghost btn-sm">+ Sprache</button>
-              <p class="hint">In Deutschland wird das Niveau erwartet - GER-Stufe oder
-                Muttersprache.</p>
+              <button type="button" id="pf-lang-add" class="btn btn-ghost btn-sm" data-i18n="add.language">+ Sprache</button>
+              <p class="hint" data-i18n="lang.hint">In Deutschland wird das Niveau erwartet — GER-Stufe oder Muttersprache.</p>
               <input id="pf-languages" type="hidden" />
             </div>
           </div>
 
           <div class="card">
-            <div class="card-header"><h2>Objective &amp; summary</h2></div>
-            <div class="form-group"><label>Target job title</label><input id="pf-title" class="field" type="text" placeholder="e.g. SOC Analyst" /></div>
-            <div class="form-group"><label>Professional summary</label><textarea id="pf-summary" class="field" rows="4" placeholder="A short paragraph about you, your goals and motivation…"></textarea></div>
+            <div class="card-header"><h2 data-i18n="card.objective">Ziel und Kurzprofil</h2></div>
+            <div class="form-group"><label for="pf-title" data-i18n="field.jobTitle">Zielposition</label><input id="pf-title" class="field" type="text" placeholder="e.g. SOC Analyst" /></div>
+            <div class="form-group"><label for="pf-summary" data-i18n="field.summary">Kurzprofil</label><textarea id="pf-summary" class="field" rows="4" data-i18n-ph="field.summaryPh" placeholder="Ein kurzer Absatz über Sie, Ihre Ziele und Ihre Motivation …"></textarea></div>
           </div>
 
           <div class="card" id="pf-card-skills">
             <div class="card-header">
-              <h2>Skills</h2>
-              <span class="hint" style="text-transform:none">Type a skill and press Enter</span>
+              <h2 data-i18n="card.skills">Kenntnisse</h2>
+              <span class="hint" style="text-transform:none" data-i18n="field.skillHint">Kenntnis eingeben und Enter drücken</span>
             </div>
             <div class="skill-input-row">
-              <input id="pf-skill-input" class="field" type="text" placeholder="Add a skill…" />
-              <button id="pf-skill-add" class="btn btn-ghost btn-sm">Add</button>
+              <input id="pf-skill-input" class="field" type="text" data-i18n-ph="field.skillPh" placeholder="Kenntnis eingeben …" />
+              <button id="pf-skill-add" class="btn btn-ghost btn-sm" data-i18n="field.skillAdd">Hinzufügen</button>
             </div>
             <div id="pf-skill-tags" class="skill-tags"></div>
           </div>
 
           <div class="card" id="pf-card-experience">
             <div class="card-header">
-              <h2>Experience</h2>
-              <button id="pf-add-exp" class="btn btn-ghost btn-sm">+ Add experience</button>
+              <h2 data-i18n="card.experience">Berufserfahrung</h2>
+              <button id="pf-add-exp" class="btn btn-ghost btn-sm" data-i18n="add.experience">+ Station hinzufügen</button>
             </div>
             <div id="pf-exp-list" class="repeat-list"></div>
           </div>
 
           <div class="card" id="pf-card-education">
             <div class="card-header">
-              <h2>Education</h2>
-              <button id="pf-add-edu" class="btn btn-ghost btn-sm">+ Add education</button>
+              <h2 data-i18n="card.education">Ausbildung</h2>
+              <button id="pf-add-edu" class="btn btn-ghost btn-sm" data-i18n="add.education">+ Ausbildung hinzufügen</button>
             </div>
             <div id="pf-edu-list" class="repeat-list"></div>
           </div>
 
           <div class="card" id="pf-card-certifications">
             <div class="card-header">
-              <h2>Certifications</h2>
-              <button id="pf-add-cert" class="btn btn-ghost btn-sm">+ Add certification</button>
+              <h2 data-i18n="card.certifications">Weiterbildung und Zertifikate</h2>
+              <button id="pf-add-cert" class="btn btn-ghost btn-sm" data-i18n="add.certification">+ Zertifikat hinzufügen</button>
             </div>
             <div id="pf-cert-list" class="repeat-list"></div>
           </div>
@@ -957,19 +965,17 @@
                the candidate's own word and is printed as it stands, at the end of
                the document. -->
           <div class="cv-add-section" id="cv-add-section">
-            <span class="cv-add-label">Abschnitt hinzufügen</span>
-            <button type="button" class="btn btn-ghost btn-sm" data-add-kind="entries">Mit Zeitraum</button>
-            <button type="button" class="btn btn-ghost btn-sm" data-add-kind="list">Liste</button>
-            <button type="button" class="btn btn-ghost btn-sm" data-add-kind="rows">Feldpaare</button>
-            <button type="button" class="btn btn-ghost btn-sm" data-add-kind="text">Fließtext</button>
-            <p class="hint">Zum Beispiel Ehrenamt, Publikationen oder Praktische Kenntnisse.
-              Mit Zeitraum für Stationen, Liste für Aufzählungen, Feldpaare für
-              „Bezeichnung: Wert“.</p>
+            <span class="cv-add-label" data-i18n="addSection.label">Abschnitt hinzufügen</span>
+            <button type="button" class="btn btn-ghost btn-sm" data-add-kind="entries" data-i18n="addSection.entries">Mit Zeitraum</button>
+            <button type="button" class="btn btn-ghost btn-sm" data-add-kind="list" data-i18n="addSection.list">Liste</button>
+            <button type="button" class="btn btn-ghost btn-sm" data-add-kind="rows" data-i18n="addSection.rows">Feldpaare</button>
+            <button type="button" class="btn btn-ghost btn-sm" data-add-kind="text" data-i18n="addSection.text">Fließtext</button>
+            <p class="hint" data-i18n="addSection.hint">Zum Beispiel Ehrenamt, Publikationen oder Praktische Kenntnisse.</p>
           </div>
 
           <div class="form-actions" style="margin-bottom:24px">
-            <button id="pf-save" class="btn btn-primary">Save Profile</button>
-            <button id="pf-download-pdf" class="btn btn-ghost">Generate as PDF</button>
+            <button id="pf-save" class="btn btn-primary" data-i18n="action.save">Profil speichern</button>
+            <button id="pf-download-pdf" class="btn btn-ghost" data-i18n="action.pdf">Als PDF erzeugen</button>
             <span id="pf-save-msg" class="form-msg" style="align-self:center"></span>
           </div>
 
@@ -993,11 +999,11 @@
 
           <div class="card danger-zone-card">
             <div class="card-header">
-              <h2>Danger zone</h2>
-              <span class="hint">Reset your stored profile data from this browser.</span>
+              <h2 data-i18n="card.dangerZone">Profil löschen</h2>
+              <span class="hint" data-i18n="danger.lede">Setzt die in diesem Browser gespeicherten Profildaten zurück.</span>
             </div>
-            <p class="danger-note">This will remove your current profile, saved skills, experience and certifications. Your job tracking data will remain.</p>
-            <button id="pf-reset" class="btn btn-ghost btn-sm">Delete profile data</button>
+            <p class="danger-note" data-i18n="danger.note">Damit werden Profil, gespeicherte Kenntnisse, Berufserfahrung und Zertifikate entfernt. Ihre Bewerbungsübersicht bleibt erhalten.</p>
+            <button id="pf-reset" class="btn btn-ghost btn-sm" data-i18n="action.deleteProfile">Profildaten löschen</button>
           </div>
         </div><!-- /.pf-form -->
 
@@ -1263,7 +1269,7 @@
             <span id="pf-page-label">1 / 1</span>
             <button class="btn btn-ghost btn-xs" id="pf-page-next" aria-label="Naechste Seite">&#8250;</button>
           </div>
-          <button id="pf-download-pdf-3" class="btn btn-primary btn-sm">PDF laden</button>
+          <button id="pf-download-pdf-3" class="btn btn-primary btn-sm" data-i18n="action.pdfLoad">PDF laden</button>
         </div>
       </div>
     </div>
@@ -1305,6 +1311,7 @@
   <script src="rerank.js"></script>
   <script src="cv-themes.js"></script>
   <script src="cv-preview.js"></script>
+  <script src="i18n.js"></script>
   <script src="json-resume.js"></script>
   <script src="cv-check.js"></script>
   <script src="cv-store.js"></script>

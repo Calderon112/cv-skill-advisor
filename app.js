@@ -3759,7 +3759,9 @@ function renderCvSchema(schema, meta) {
   panel.classList.remove('hidden');
 
   const pill = $('cv-schema-pill');
-  if (pill) pill.textContent = `${schema.length} section${schema.length > 1 ? 's' : ''}`;
+  if (pill) pill.textContent = schema.length === 1
+    ? tr('schema.count1')
+    : tr('schema.countN').replace('{n}', schema.length);
   const note = $('cv-schema-note');
   if (note && meta && meta.structured === false) {
     note.textContent = 'Built from the headings your CV carries. Field layout needs an API key, '
@@ -3789,15 +3791,15 @@ function renderCvSchema(schema, meta) {
       if (sec.kind === 'rows') {
         return sec.items.map((r, i) => `
           <div class="pf-row" data-s="${si}" data-i="${i}">
-            <input class="field pf-third" data-f="label" value="${esc(r.label)}" placeholder="Label">
-            <input class="field" data-f="value" value="${esc(r.value)}" placeholder="Value">
+            <input class="field pf-third" data-f="label" value="${esc(r.label)}" placeholder="${esc(tr('schema.label'))}">
+            <input class="field" data-f="value" value="${esc(r.value)}" placeholder="${esc(tr('schema.value'))}">
             <button type="button" class="pf-x" data-act="del-entry" data-s="${si}" data-i="${i}"
-                    title="Zeile entfernen" aria-label="Zeile entfernen">&#10005;</button>
+                    title="${esc(tr('schema.delEntry'))}" aria-label="${esc(tr('schema.delEntry'))}">&#10005;</button>
           </div>`).join('');
       }
       if (sec.kind === 'list') {
         return `<textarea class="field" data-s="${si}" data-f="list" rows="${Math.min(8, sec.items.length + 1)}"
-                  placeholder="One per line">${esc(sec.items.join('\n'))}</textarea>`;
+                  placeholder="${esc(tr('schema.list'))}">${esc(sec.items.join('\n'))}</textarea>`;
       }
       if (sec.kind === 'text') {
         return `<textarea class="field" data-s="${si}" data-f="text" rows="4">${esc(sec.items.join('\n\n'))}</textarea>`;
@@ -3807,12 +3809,12 @@ function renderCvSchema(schema, meta) {
           <button type="button" class="pf-x pf-x-entry" data-act="del-entry" data-s="${si}" data-i="${i}"
                   title="Eintrag entfernen" aria-label="Eintrag entfernen">&#10005;</button>
           <div class="pf-row">
-            <input class="field pf-third" data-f="period" value="${esc(e.period)}" placeholder="Period">
-            <input class="field" data-f="title" value="${esc(e.title)}" placeholder="Title">
+            <input class="field pf-third" data-f="period" value="${esc(e.period)}" placeholder="${esc(tr('schema.period'))}">
+            <input class="field" data-f="title" value="${esc(e.title)}" placeholder="${esc(tr('schema.entryTitle'))}">
           </div>
-          <input class="field" data-f="org" value="${esc(e.org)}" placeholder="Organisation">
+          <input class="field" data-f="org" value="${esc(e.org)}" placeholder="${esc(tr('schema.org'))}">
           <textarea class="field" data-f="bullets" rows="${Math.min(6, (e.bullets || []).length + 1)}"
-            placeholder="One bullet per line">${esc((e.bullets || []).join('\n'))}</textarea>
+            placeholder="${esc(tr('schema.bullets'))}">${esc((e.bullets || []).join('\n'))}</textarea>
         </div>`).join('');
     })();
 
@@ -3824,12 +3826,12 @@ function renderCvSchema(schema, meta) {
         <div class="pf-section-head">
           <input class="field pf-heading" data-f="heading" value="${esc(sec.heading)}">
           <button type="button" class="pf-x" data-act="del-section" data-s="${si}"
-                  title="Abschnitt entfernen" aria-label="Abschnitt entfernen">&#10005;</button>
+                  title="${esc(tr('schema.delSection'))}" aria-label="${esc(tr('schema.delSection'))}">&#10005;</button>
         </div>
-        ${schemaTargetFor(sec.heading) ? '' : '<span class="pf-new-note">Nur in Ihrem Lebenslauf — wird unten angehängt</span>'}
+        ${schemaTargetFor(sec.heading) ? '' : '<span class="pf-new-note">' + esc(tr('schema.onlyHere')) + '</span>'}
         ${rows}
         ${kind === 'entries' || kind === 'rows'
-          ? `<button type="button" class="btn btn-ghost btn-sm pf-add-entry" data-act="add-entry" data-s="${si}">+ ${kind === 'rows' ? 'Zeile' : 'Eintrag'}</button>`
+          ? `<button type="button" class="btn btn-ghost btn-sm pf-add-entry" data-act="add-entry" data-s="${si}">${esc(tr(kind === 'rows' ? 'schema.addRow' : 'schema.addEntry'))}</button>`
           : ''}
       </div>`;
   }).join('');
@@ -3867,7 +3869,7 @@ function newSchemaItem(kind) {
 }
 
 function addSchemaSection(kind) {
-  const heading = prompt('Überschrift des Abschnitts:', '');
+  const heading = prompt(tr('addSection.prompt'), '');
   if (heading === null) return;
   const title = heading.trim();
   if (!title) return;
@@ -3895,7 +3897,7 @@ $('cv-schema-body')?.addEventListener('click', function (e) {
   if (!sec) return;
 
   if (btn.dataset.act === 'del-section') {
-    if (!confirm('Abschnitt "' + (sec.heading || '') + '" entfernen?')) return;
+    if (!confirm(tr('addSection.confirmDel') + '\n\n' + (sec.heading || ''))) return;
     schema.splice(Number(btn.dataset.s), 1);
   } else if (btn.dataset.act === 'del-entry') {
     (sec.items || []).splice(Number(btn.dataset.i), 1);
@@ -4739,7 +4741,7 @@ function syncSchemaFormMode(forceShowFixed) {
   const btn = $('cv-schema-toggle');
   if (btn) {
     btn.classList.toggle('hidden', !targets.size);
-    btn.textContent = (targets.size && !forceShowFixed) ? 'Feste Felder zeigen' : 'Feste Felder ausblenden';
+    btn.textContent = tr((targets.size && !forceShowFixed) ? 'schema.showFixed' : 'schema.hideFixed');
   }
 }
 
@@ -6042,7 +6044,7 @@ function openSheet(which) {
   sheet.dataset.panel = which;   // the two panels do not want the same width
   document.body.classList.add('sheet-open');
   const title = $('cv-sheet-title');
-  if (title) title.textContent = which === 'vorschau' ? 'Vorschau' : 'Vorlage';
+  if (title) title.textContent = tr(which === 'vorschau' ? 'action.previewOpen' : 'action.template');
   const vorlage = $('sheet-vorlage');
   const vorschau = $('sheet-vorschau');
   if (vorlage) vorlage.hidden = which !== 'vorlage';
@@ -6239,16 +6241,16 @@ function renderLanguageRows() {
     }
     return '<div class="lang-row" data-i="' + i + '">'
       + '<input class="field lang-name" data-f="name" value="' + esc(r.language || '') + '"'
-      + ' placeholder="Sprache" aria-label="Sprache">'
-      + '<select class="field lang-level" data-f="level" aria-label="Niveau">'
-      + '<option value="">ohne Angabe</option>'
+      + ' placeholder="' + esc(tr('lang.name')) + '" aria-label="' + esc(tr('lang.name')) + '">'
+      + '<select class="field lang-level" data-f="level" aria-label="' + esc(tr('lang.level')) + '">'
+      + '<option value="">' + esc(tr('lang.none')) + '</option>'
       + options.map(function (o) {
           return '<option value="' + esc(o) + '"' + (o.toLowerCase() === level.toLowerCase() ? ' selected' : '')
             + '>' + esc(o) + '</option>';
         }).join('')
       + '</select>'
       + '<button type="button" class="pf-x" data-act="lang-del" data-i="' + i + '"'
-      + ' title="Sprache entfernen" aria-label="Sprache entfernen">&#10005;</button>'
+      + ' title="' + esc(tr('lang.remove')) + '" aria-label="' + esc(tr('lang.remove')) + '">&#10005;</button>'
       + '</div>';
   }).join('');
 }
@@ -6290,16 +6292,47 @@ $('pf-lang-add')?.addEventListener('click', function () {
   const i = host.querySelectorAll('.lang-row').length;
   host.insertAdjacentHTML('beforeend',
     '<div class="lang-row" data-i="' + i + '">'
-    + '<input class="field lang-name" data-f="name" value="" placeholder="Sprache" aria-label="Sprache">'
-    + '<select class="field lang-level" data-f="level" aria-label="Niveau">'
-    + '<option value="">ohne Angabe</option>'
+    + '<input class="field lang-name" data-f="name" value="" placeholder="' + esc(tr('lang.name')) + '" aria-label="' + esc(tr('lang.name')) + '">'
+    + '<select class="field lang-level" data-f="level" aria-label="' + esc(tr('lang.level')) + '">'
+    + '<option value="">' + esc(tr('lang.none')) + '</option>'
     + LANG_LEVELS.map(function (o) { return '<option value="' + esc(o) + '">' + esc(o) + '</option>'; }).join('')
     + '</select>'
     + '<button type="button" class="pf-x" data-act="lang-del" data-i="' + i + '"'
-    + ' title="Sprache entfernen" aria-label="Sprache entfernen">&#10005;</button>'
+    + ' title="' + esc(tr('lang.remove')) + '" aria-label="' + esc(tr('lang.remove')) + '">&#10005;</button>'
     + '</div>');
   host.querySelector('.lang-row:last-child .lang-name')?.focus();
 });
+
+// ── The form's language ─────────────────────────────────────────────────────
+//
+// Applied to the markup by I18n, and to everything the renderers build by
+// redrawing them. Both halves are needed: half the profile page is static labels
+// and half is written by JavaScript, and a switch that moved only one of them
+// would produce exactly the mixture it is meant to end.
+
+function applyUiLanguage() {
+  if (typeof I18n === 'undefined') return;
+  I18n.apply(document);
+  if (typeof renderProfileForm === 'function') renderProfileForm();
+  ['exp', 'edu', 'cert'].forEach(function (x) {
+    if (typeof renderRepeatList === 'function') renderRepeatList(x);
+  });
+  if (typeof renderLanguageRows === 'function') renderLanguageRows();
+  if (typeof renderCvSchema === 'function') renderCvSchema((state.profile && state.profile.cvSchema) || []);
+  if (typeof syncSchemaFormMode === 'function') syncSchemaFormMode(_showFixedFields);
+}
+
+if (typeof I18n !== 'undefined') {
+  const sel = $('ui-lang');
+  if (sel) {
+    sel.value = I18n.get();
+    sel.addEventListener('change', function () {
+      I18n.set(sel.value);
+      applyUiLanguage();
+    });
+  }
+  I18n.apply(document);
+}
 
 // ── JSON Resume: in and out ─────────────────────────────────────────────────
 //
@@ -6437,22 +6470,22 @@ function renderProfileForm() {
   const prev = $('pf-photo-preview');
   if (prev) {
     if (p.photo) { prev.innerHTML = `<img src="${p.photo}" alt="photo" />`; }
-    else { prev.innerHTML = '<span>Photo</span>'; }
+    else { prev.innerHTML = '<span>' + esc(tr('field.photoBox')) + '</span>'; }
   }
   const rm = $('pf-photo-remove');
   if (rm) rm.classList.toggle('hidden', !p.photo);
   const upBtn = $('pf-photo-btn');
-  if (upBtn) upBtn.textContent = p.photo ? 'Change photo' : 'Upload photo';
+  if (upBtn) upBtn.textContent = tr(p.photo ? 'field.photoChange' : 'field.photo');
 
   // Missing-field warnings (like the template)
   const warn = $('pf-contact-warn');
   if (warn) {
     const missing = [];
-    if (!p.location)            missing.push('current location');
-    if (!p.phone)               missing.push('phone number');
-    if (!p.email)               missing.push('email');
+    if (!p.location)            missing.push('field.missingLocation');
+    if (!p.phone)               missing.push('field.missingPhone');
+    if (!p.email)               missing.push('field.missingEmail');
     warn.innerHTML = missing.length
-      ? missing.map(m => `<span class="pf-warn-item">Missing ${m}</span>`).join('')
+      ? missing.map(m => `<span class="pf-warn-item">${esc(tr('field.missing') + tr(m))}</span>`).join('')
       : '';
   }
   updateProfileSummary();
@@ -6465,7 +6498,7 @@ function renderSkillTags() {
   const skills = state.profile.skills || [];
   wrap.innerHTML = skills.length
     ? skills.map((s, i) => `<span class="skill-tag">${esc(s.label || s)}<button data-i="${i}" title="Remove">✕</button></span>`).join('')
-    : '<span class="hint">No skills yet. Add some, or import from your CV.</span>';
+    : '<span class="hint">' + esc(tr('skills.empty')) + '</span>';
   wrap.querySelectorAll('.skill-tag button').forEach(b =>
     b.addEventListener('click', e => {
       state.profile.skills.splice(Number(e.currentTarget.dataset.i), 1);
@@ -6499,10 +6532,19 @@ const _skillInput = $('pf-skill-input');
 if (_skillInput) _skillInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addSkillFromInput(); } });
 
 // ── Profile: repeatable lists (experience / education / certifications) ──────
+// The form's own language — see i18n.js. Everything the renderers below write is
+// looked up rather than spelled out, so a switch redraws them in the other one.
+// Named tr, not t: jspdf.umd.min.js declares a global `t`, and a second
+// top-level declaration of it is a syntax error that takes this whole file
+// with it.
+const tr = (k) => (typeof I18n !== 'undefined' ? I18n.t(k) : k);
+
+// The placeholder is a key now: the field lists are built on every render, so they
+// pick up the current language without being rebuilt themselves.
 const REPEAT_DEFS = {
-  exp:  { key: 'experience',     fields: [['role','Role/Title'],['org','Company/Institution'],['location','Location'],['start','Start (e.g. 09.2023)'],['end','End (e.g. 06.2024)'],['desc','Description']] },
-  edu:  { key: 'education',      fields: [['degree','Degree/Programme'],['org','Institution'],['location','Location'],['start','Start'],['end','End']] },
-  cert: { key: 'certifications', fields: [['name','Certificate name'],['year','Year']] },
+  exp:  { key: 'experience',     fields: [['role','exp.role'],['org','exp.org'],['location','exp.location'],['start','exp.start'],['end','exp.end'],['desc','exp.desc']] },
+  edu:  { key: 'education',      fields: [['degree','edu.degree'],['org','edu.org'],['location','edu.location'],['start','edu.start'],['end','edu.end']] },
+  cert: { key: 'certifications', fields: [['name','cert.name'],['year','cert.year']] },
 };
 
 
@@ -6606,16 +6648,16 @@ function renderRepeatList(type) {
     ? arr.map((item, i) => `
       <div class="repeat-item" data-i="${i}">
         ${def.fields.map(([f, ph]) => f === 'desc'
-          ? `<textarea class="field" rows="2" data-f="${f}" ${spellAttrs(f)} placeholder="${ph}">${esc(item[f] || '')}</textarea>`
-          : `<input class="field" type="text" data-f="${f}" ${spellAttrs(f)} placeholder="${ph}" value="${esc(item[f] || '')}" />`).join('')}
-        <button class="repeat-del" data-i="${i}" title="Remove">Remove</button>
+          ? `<textarea class="field" rows="2" data-f="${f}" ${spellAttrs(f)} placeholder="${esc(tr(ph))}">${esc(item[f] || '')}</textarea>`
+          : `<input class="field" type="text" data-f="${f}" ${spellAttrs(f)} placeholder="${esc(tr(ph))}" value="${esc(item[f] || '')}" />`).join('')}
+        <button class="repeat-del" data-i="${i}" title="${esc(tr('repeat.remove'))}">${esc(tr('repeat.remove'))}</button>
         ${type === 'exp' ? `
         <div class="pf-suggest">
-          <button type="button" class="btn btn-ghost btn-xs pf-suggest-btn" data-i="${i}">Formulierungen vorschlagen</button>
+          <button type="button" class="btn btn-ghost btn-xs pf-suggest-btn" data-i="${i}">${esc(tr('repeat.suggest'))}</button>
           <div class="pf-suggest-list" data-i="${i}"></div>
         </div>` : ''}
       </div>`).join('')
-    : '<span class="hint">Nothing yet — click “Add” above.</span>';
+    : '<span class="hint">' + esc(tr('repeat.empty')) + '</span>';
 
   // live-bind inputs
   list.querySelectorAll('.repeat-item').forEach(row => {
