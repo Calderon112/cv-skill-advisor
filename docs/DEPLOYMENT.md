@@ -368,6 +368,77 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 
 Take a backup first. Compose recreates only what changed.
 
+## Moving to another server
+
+Nothing here is tied to AWS: the stack is a Dockerfile, a compose file and a
+Caddyfile, and it runs the same on any host with Docker and 2 GB. A Hetzner CX22
+in Nuremberg or Falkenstein is the usual answer — the price is in
+[What you need first](#what-you-need-first), and it keeps CVs, which are personal
+data, inside the EU.
+
+The order matters. Do the backup **before** you shut anything down, and move the
+DNS **last**, so the old server keeps serving until the new one is proven.
+
+1. **On the old server**, take a dump and copy it off the machine:
+
+   ```bash
+   sudo /usr/local/bin/backup-careerai.sh
+   scp root@old-server:/var/backups/careerai/careerai-*.sql.gz .
+   scp root@old-server:/opt/careerai/.env.prod .
+   ```
+
+   The dump is the accounts, the profiles and the saved jobs. `.env.prod` is not in
+   it and without it the restored databases cannot be opened — see
+   [What the dump does *not* cover](#what-the-dump-does-not-cover).
+
+2. **Build the new server** exactly as in [1. DNS](#1-dns) through
+   [3. First start](#3-first-start), with one change: point the DNS at the new
+   address only when you are ready to switch. Until then, put the two names in
+   your own `/etc/hosts` so you can reach the new box by domain — Caddy needs the
+   real hostname to get a certificate, and Let's Encrypt will not issue one for a
+   bare IP address.
+
+3. **Restore, then start**, in that order — Keycloak writes its schema on first
+   boot and a restore over it will collide:
+
+   ```bash
+   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d postgres
+   gunzip -c careerai-*.sql.gz | docker exec -i careerai-postgres psql -U keycloak postgres
+   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
+   ```
+
+4. **Check it** against the [Pre-launch checklist](#pre-launch-checklist) while the
+   old server is still live. Sign in with an account that existed before the move:
+   if it works, the dump carried the accounts across.
+
+5. **Move the DNS.** Lower the TTL to 300 seconds a day beforehand if you can, then
+   repoint both A records. Leave the old server running for a day — resolvers keep
+   the old answer until the TTL expires, and some ignore it.
+
+6. **Then** rotate what the old machine knew: the API keys in `.env.prod` and the
+   Keycloak client secret. A key that has sat on a server you no longer control is
+   not yours any more.
+
+### If the domain is the thing that broke
+
+A deployment reached by its IP address cannot work, and never could: Caddy redirects
+to HTTPS, Let's Encrypt issues no certificate for a bare IP, and the handshake fails.
+`curl -I http://<address>/` returning `308 → https://<address>/` with nothing
+answering on 443 is that, not a crash.
+
+Two causes, both common, neither needing a new server:
+
+- **The domain stopped resolving** — expired, or its A record still points at an
+  address the instance no longer has. `dig +short <APP_DOMAIN>` against the
+  instance's current public address settles it in one command.
+- **The instance's public IP changed.** EC2 hands out a new one on every stop/start
+  unless an Elastic IP is attached; Lightsail does the same without a static IP. The
+  server is fine, the DNS points nowhere.
+
+With no domain at all, [A test deployment without buying a
+domain](#a-test-deployment-without-buying-a-domain) gets a free DuckDNS name that
+Let's Encrypt will sign.
+
 ## When something breaks
 
 ```bash
