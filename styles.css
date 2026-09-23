@@ -3092,7 +3092,12 @@ option   { color: var(--text); background: var(--bg-card); }
 }
 
 /* ── My Account ─────────────────────────────────────────────────────────── */
-#page-account { max-width: 900px; margin: 0 auto; }
+/* width: 100% is not redundant here. The parent is a column flex container, and
+ auto margins on the cross axis switch off the stretch a flex item otherwise gets —
+ so this shrank to the width of its own text (344px on the signed-out page) and
+ centred that, leaving a wide gap to its left. The other pages carry no such rule,
+ which is why only this one did it. */
+#page-account { width: 100%; max-width: 900px; margin: 0 auto; }
 
 .account-grid { display: flex; flex-direction: column; gap: 20px; }
 
