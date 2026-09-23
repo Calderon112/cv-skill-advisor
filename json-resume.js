@@ -91,7 +91,12 @@
   // {language, fluency}, and the level is in parentheses when it is stated at all.
 
   function splitLanguages(line) {
-    return str(line).split(/[,;]+/).map((part) => {
+    // Newlines separate too, not only punctuation. The schema importer writes this
+    // field one language per line — which is what the PDF renderer reads, since it
+    // splits on both — so splitting on commas alone collapsed a real CV's three
+    // languages into a single row reading
+    // "Englisch (Muttersprache)Franzöisch (Muttersprache)Deutsch (C2)".
+    return str(line).split(/[,;\r\n]+/).map((part) => {
       const s = part.trim();
       if (!s) return null;
       const m = s.match(/^(.+?)\s*[(（]\s*(.+?)\s*[)）]\s*$/);

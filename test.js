@@ -1529,6 +1529,26 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
 
   {
     const JR = require('./json-resume.js');
+
+    test('languages separate on newlines as well as commas', () => {
+      // Reported from an import: the Sprachen field read
+      // "Englisch (Muttersprache)Franzöisch (Muttersprache)Deutsch (C2)" as one row.
+      // applySchemaToProfile writes this field one language per line, which is what
+      // the PDF renderer reads — it splits on both — while this splitter knew only
+      // about punctuation, so three languages arrived as one.
+      const lines = ['Englisch (Muttersprache)', 'Französisch (Muttersprache)', 'Deutsch (C2)'].join('\n');
+      const out = JR.splitLanguages(lines);
+      assertEqual(out.length, 3, 'three of them');
+      assertEqual(out[0].language, 'Englisch', 'the name');
+      assertEqual(out[0].fluency, 'Muttersprache', 'and its level');
+      assertEqual(out[2].fluency, 'C2', 'the last one too');
+
+      // Commas still work, and a round trip is stable.
+      assertEqual(JR.splitLanguages('Deutsch (C1), Englisch (B2)').length, 2, 'commas unaffected');
+      assertEqual(JR.joinLanguages(out), 'Englisch (Muttersprache), Französisch (Muttersprache), Deutsch (C2)',
+        'joined back with separators');
+    });
+
     const PROFILE = {
       firstName: 'Jardel Galdos', lastName: 'Kenne', email: 'benigo700@gmail.com',
       phone: '+49 176 12345678', location: 'Gelsenkirchen', nationality: 'kamerunisch',
