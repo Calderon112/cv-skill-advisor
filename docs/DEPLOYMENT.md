@@ -106,6 +106,93 @@ lines and restarting — nothing else refers to them.
 
 ---
 
+## Deploying on Oracle Cloud (Always Free)
+
+The only free tier that runs this whole stack, Keycloak included, and keeps running:
+the Ampere A1 shape gives 4 ARM cores and 24 GB of memory at no cost, permanently,
+rather than for twelve months. Skip the swap step the AWS section needs — 24 GB is
+not 2 GB.
+
+Every image the stack pulls is published for arm64, so nothing here is modified to
+run on it:
+
+| image | checked |
+|---|---|
+| `node:24-slim` | amd64, **arm64**, ppc64le |
+| `caddy:2-alpine` | amd64, arm, **arm64**, ppc64le, riscv64, s390x |
+| `postgres:16-alpine` | 386, amd64, arm, **arm64**, … |
+| `quay.io/keycloak/keycloak:26.0` | amd64, **arm64** |
+
+Re-check any of them with `docker manifest inspect <image> | grep architecture`
+before blaming the architecture for a failure.
+
+### Two things that cost an evening
+
+**The home region is chosen when the account is created and cannot be changed
+afterwards.** Pick **Frankfurt** or **Amsterdam** at sign-up. Personal data — which
+is what a CV is — then stays in the EU, and choosing wrongly means a second account,
+not a setting.
+
+**"Out of capacity" on the A1 shape is normal, not a mistake of yours.** The free
+ARM cores are in demand and busy regions run dry for days at a time. Retry at
+different hours; it does eventually succeed. The AMD micro shape is also Always Free
+and always available, but it has 1 GB of memory — see [The 1 GB trap](#the-1-gb-trap)
+— so it is only useful with the Keycloak-less variant.
+
+### Steps
+
+1. **Compute → Instances → Create instance.**
+   - Image: **Canonical Ubuntu 24.04**.
+   - Shape: **Change shape → Ampere → VM.Standard.A1.Flex**, then set **4 OCPUs and
+     24 GB**. Anything within the free allowance is free; taking less does not save
+     money, it wastes the allowance.
+   - Add your SSH public key. The login user is `ubuntu`.
+2. **Networking → Virtual Cloud Network → Security Lists → Default Security List →
+   Add Ingress Rules**, twice:
+
+   | Source | Protocol | Destination port |
+   |---|---|---|
+   | 0.0.0.0/0 | TCP | 80 |
+   | 0.0.0.0/0 | TCP | 443 |
+
+   Port 80 is not optional — Let's Encrypt validates over it.
+3. **The second firewall.** Oracle's Ubuntu images carry their own iptables rules
+   that reject everything except SSH. The console can show both ports open while
+   nothing answers, which reads as a broken deployment and is not one.
+
+   Test from your own machine once Caddy is up — `curl -I http://<ip>/`. On a
+   timeout rather than a reply, this is why:
+
+   ```bash
+   sudo iptables -I INPUT 1 -p tcp --dport 80 -j ACCEPT
+   sudo iptables -I INPUT 1 -p tcp --dport 443 -j ACCEPT
+   sudo netfilter-persistent save        # or the rules die with the next reboot
+   ```
+
+   Published Docker ports are forwarded rather than delivered locally, so they
+   sometimes pass this filter untouched. Test first, and apply the rules if the test
+   fails, rather than either assuming.
+4. **Docker**, as everywhere else:
+
+   ```bash
+   sudo apt update && sudo apt upgrade -y
+   curl -fsSL https://get.docker.com | sudo sh
+   sudo usermod -aG docker $USER && exit      # reconnect for the group to apply
+   ```
+
+Then continue from [1. DNS](#1-dns), using the instance's public IP as the target.
+Reserve it under **Networking → Reserved public IPs** if you plan to stop the
+instance: an ephemeral address changes on restart and the DNS then points nowhere,
+which is how the previous deployment was lost.
+
+### What "always free" is worth
+
+Oracle reclaims idle Always Free compute. An instance nobody visits can be stopped,
+and the documentation says so. That is survivable for the machine — it is rebuilt
+from this guide in an hour — and not survivable for the database, so
+[Backups](#backups) is not optional here. Install the cron job the same day, and copy
+the dumps off the instance.
+
 ## 1. DNS
 
 Two records, both pointing at the server's public IP:
