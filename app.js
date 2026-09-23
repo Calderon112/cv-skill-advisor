@@ -5612,7 +5612,7 @@ function buildProfilePdfDoc(profile, overrides) {
   // of a page whose top-right corner is the main column.
   if (p.photo && T.photo === 'rail' && HAS_RAIL) {
     try {
-      doc.addImage(p.photo, 'JPEG', SIDE_X, M, SIDE_W_R, SIDE_W_R);
+      drawPhoto(SIDE_X, M, SIDE_W_R, SIDE_W_R);
     } catch (_) { /* an unreadable photo must not cost the whole document */ }
     ySide = M + SIDE_W_R + 18;
   }
@@ -5635,7 +5635,12 @@ function buildProfilePdfDoc(profile, overrides) {
     doc.setFontSize(12.5);
     const titleLines = p.title ? doc.splitTextToSize(p.title, bw) : [];
     doc.setFont(FONT, 'normal'); doc.setFontSize(9.5);
-    const sumLines = p.summary ? doc.splitTextToSize(p.summary, bw).slice(0, 3) : [];
+    // Not sliced to three lines. The band measures itself from what it holds, so
+    // the only thing the cut achieved was ending the candidate's sentence for
+    // them — one real CV went out reading "zeichne ich mich durch Fleiß und".
+    // A summary that is too long is the writer's to shorten, and the check says so;
+    // a generator that silently truncates gives them nothing to act on.
+    const sumLines = p.summary ? doc.splitTextToSize(p.summary, bw) : [];
 
     const textH = nameLines.length * 26 + titleLines.length * 16 + sumLines.length * 13;
     const bandH = Math.max(M + textH + 14, inBand ? BAND_PHOTO + 34 : 0);
@@ -5644,8 +5649,7 @@ function buildProfilePdfDoc(profile, overrides) {
     doc.rect(0, 0, PAGE_W, bandH, 'F');
 
     if (inBand) {
-      try { doc.addImage(p.photo, 'JPEG', PAGE_W - M - BAND_PHOTO, (bandH - BAND_PHOTO) / 2, BAND_PHOTO, BAND_PHOTO); }
-      catch (_) { /* an unreadable photo must not cost the whole document */ }
+      drawPhoto(PAGE_W - M - BAND_PHOTO, (bandH - BAND_PHOTO) / 2, BAND_PHOTO, BAND_PHOTO);
     }
 
     let by = M - 6;
@@ -5659,13 +5663,13 @@ function buildProfilePdfDoc(profile, overrides) {
     headerBottom = bandH + 26;
   } else {
     if (p.photo && T.photo === 'top-right') {
-      try { doc.addImage(p.photo, 'JPEG', PAGE_W - M - PHOTO, y, PHOTO, PHOTO); }
+      try { drawPhoto(PAGE_W - M - PHOTO, y, PHOTO, PHOTO); }
       catch (_) { /* an unreadable photo must not cost the whole document */ }
     }
     // A centred header takes the photo above the name, not beside it: a centred
     // block with the picture pushed into one corner is neither centred nor ranged.
     if (p.photo && T.photo === 'top-center') {
-      try { doc.addImage(p.photo, 'JPEG', (PAGE_W - PHOTO) / 2, y, PHOTO, PHOTO); }
+      try { drawPhoto((PAGE_W - PHOTO) / 2, y, PHOTO, PHOTO); }
       catch (_) { /* an unreadable photo must not cost the whole document */ }
       y += PHOTO + 14;
     }
@@ -5701,7 +5705,8 @@ function buildProfilePdfDoc(profile, overrides) {
     }
     if (p.summary) {
       setFont(9.5, 'normal', GREY);
-      doc.splitTextToSize(p.summary, headW - headShift).slice(0, 3)
+      // Whole, for the same reason as the band above.
+      doc.splitTextToSize(p.summary, headW - headShift)
         .forEach(function (l) { doc.text(l, textX + headShift, y + 10, opts); y += 13; });
     }
     y = Math.max(y + 12, M + (showPhoto ? PHOTO + 14 : 0));
@@ -5733,6 +5738,38 @@ function buildProfilePdfDoc(profile, overrides) {
     p.phone       ? ['Tel', p.phone] : null,
     p.nationality ? ['Nationalität', p.nationality] : null,
   ].filter(Boolean);
+
+  /**
+   * The photo, drawn without being stretched.
+   *
+   * Every call site here passes a square box, because that is what the layouts
+   * reserve. addImage then scales the image to exactly that box — so a portrait
+   * photograph, which is what a CV carries, was squashed horizontally. On a real
+   * applicant's face it is immediately visible and it is the first thing a reader
+   * sees on the page.
+   *
+   * The image is fitted inside the box instead, centred, at its own proportions.
+   * That leaves margins at the sides for a portrait shot, which is a plain result
+   * rather than a distorted one. The format is read from the file rather than
+   * assumed to be JPEG: a PNG declared as JPEG fails in some readers and renders
+   * black in others.
+   */
+  function drawPhoto(x, y, boxW, boxH) {
+    if (!p.photo) return;
+    let props = null;
+    try { props = doc.getImageProperties(p.photo); } catch (_) { /* fall through */ }
+    try {
+      if (!props || !props.width || !props.height) {
+        doc.addImage(p.photo, x, y, boxW, boxH);      // no properties: as before
+        return;
+      }
+      const scale = Math.min(boxW / props.width, boxH / props.height);
+      const w = props.width * scale;
+      const h = props.height * scale;
+      doc.addImage(p.photo, props.fileType || undefined,
+        x + (boxW - w) / 2, y + (boxH - h) / 2, w, h);
+    } catch (_) { /* an unreadable photo must not cost the whole document */ }
+  }
 
   /** A hairline between entries, for the templates that separate them that way. */
   function entryRule(x, w) {

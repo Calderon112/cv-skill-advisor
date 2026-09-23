@@ -44,8 +44,16 @@ const PROFILE = {
   firstName: 'Jardel Galdos', lastName: 'Kenne', email: 'benigo700@gmail.com',
   phone: '+49 176 12345678', location: 'Gelsenkirchen', nationality: 'kamerunisch',
   title: 'IT-Sicherheitsexpert:in',
+  // Deliberately longer than three lines. The generator used to slice the summary
+  // to exactly three and print no more, so a real CV went out ending mid-sentence
+  // on "zeichne ich mich durch Fleiß und". A short fixture would never have caught
+  // it; the last words below are checked as a fact of their own.
   summary: 'Informatikstudent an der Westfälischen Hochschule Gelsenkirchen mit '
-    + 'praktischer Erfahrung in Systemadministration und IT-Sicherheit.',
+    + 'praktischer Erfahrung in Systemadministration und IT-Sicherheit. Im Rahmen '
+    + 'meines Studiums habe ich in einer Vielzahl von Kursen sowohl theoretische '
+    + 'als auch praktische Kompetenzen erworben, von der Netzwerktechnik bis zur '
+    + 'sicheren Softwareentwicklung. Darüber hinaus zeichne ich mich durch '
+    + 'Sorgfalt und Ausdauer aus.',
   languages: 'Deutsch (C1), Englisch (B2), Französisch',
   softSkills: 'Teamfähigkeit, Zielstrebigkeit',
   interests: 'Fußball, Lesen',
@@ -86,6 +94,8 @@ const FACTS = [
   ['Zertifikat', /CompTIA Security\+/],
   ['Kenntnis', /Python/],
   ['Sprache', /Deutsch/],
+  // The tail of the summary. Its absence is how a three-line cut shows up.
+  ['Kurzprofil bis zum Ende', /Sorgfalt und Ausdauer/],
 ];
 
 // How far a position may drift from its employer before a parser would pair them
