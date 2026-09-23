@@ -3865,17 +3865,14 @@ function renderCvSchema(schema, meta) {
 
   // Each section's entries reorder within that section, and nowhere else.
   body.querySelectorAll('.pf-section').forEach((secEl) => {
-    const si = Number(secEl.dataset.s);
-    enableRowDrag(secEl, '.pf-entry', (order) => {
+    enableRowDrag(secEl, '.pf-entry', () => {
+      // No permutation applied here, unlike the fixed lists. collectCvSchema reads
+      // the panel back out of the DOM, and enableRowDrag has already moved the row
+      // there - so the new order arrives with the read. Applying  on top of
+      // that permuted a second time, and a second application of an adjacent swap
+      // is the identity: the entry visibly jumped and then sat back down.
       collectCvSchema();
-      const sch = (state.profile && state.profile.cvSchema) || [];
-      const sec = sch[si];
-      if (!sec) return;
-      const src = sec.items || [];
-      sec.items = order.map((n) => src[n]).filter(Boolean);
-      applySchemaToProfile(state.profile, sch);
-      saveProfileToStorage();
-      renderCvSchema(sch);
+      renderCvSchema((state.profile && state.profile.cvSchema) || []);
       schedulePreview();
     });
   });
@@ -6816,10 +6813,20 @@ function enableRowDrag(list, itemSelector, reorder) {
     // way round cost the focus, and with it every arrow press after the first.
     const at = items().indexOf(row);
     commit();
+    // Where the list lives after the redraw. renderRepeatList replaces the
+    // innerHTML of a container that survives, so the captured element is still the
+    // right one. renderCvSchema rebuilds the whole panel, so it is not: the section
+    // held here is detached, and focusing inside a detached node does nothing —
+    // which is why the arrow keys moved an entry exactly once and then went quiet.
+    const live = () => (document.contains(list) ? list
+      : (list.dataset && list.dataset.s != null
+        ? document.querySelector('.pf-section[data-s="' + list.dataset.s + '"]')
+        : null));
     // The list is redrawn by reorder(), so the focus has to be put back on the
     // handle that moved — otherwise the next press goes nowhere.
     setTimeout(() => {
-      const again = list.querySelectorAll(itemSelector)[at];
+      const host = live();
+      const again = host && host.querySelectorAll(itemSelector)[at];
       if (again) again.querySelector('.drag-handle')?.focus();
     }, 0);
   });
