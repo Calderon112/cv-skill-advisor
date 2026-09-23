@@ -649,7 +649,13 @@
             <h1>Jobs</h1>
             <p>Track every application across your pipeline.</p>
           </div>
-          <button id="add-app-btn" class="btn btn-primary">+ Add Job</button>
+          <!-- The pipeline is where you land after saving a job, and the next thing
+               you usually want is another one. The sidebar has always been one click
+               away; this is the same click without crossing the page. -->
+          <div class="tracker-actions">
+            <button class="btn btn-ghost" data-page="search">&#8592; Search for Jobs</button>
+            <button id="add-app-btn" class="btn btn-primary">+ Add Job</button>
+          </div>
         </div>
 
         <div id="tracker-funnel" class="funnel hidden"></div>

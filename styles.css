@@ -358,7 +358,11 @@ ul { list-style: none; }
 .page-intro p { color: var(--text-muted); font-size: 13px; }
 
 .tracker-intro { flex-wrap: wrap; }
-.tracker-intro > .btn { margin-left: auto; align-self: center; }
+/* One button took margin-left:auto to sit at the right. Two of them each take it,
+   and drift apart; the pair travels together instead. */
+.tracker-intro > .btn,
+.tracker-actions { margin-left: auto; align-self: center; }
+.tracker-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 
 .page-badge {
   width: 36px;
