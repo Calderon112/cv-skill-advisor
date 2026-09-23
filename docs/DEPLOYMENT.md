@@ -139,10 +139,36 @@ different hours; it does eventually succeed. The AMD micro shape is also Always 
 and always available, but it has 1 GB of memory — see [The 1 GB trap](#the-1-gb-trap)
 — so it is only useful with the Keycloak-less variant.
 
+### If you end up on Oracle Linux
+
+The form's default image is Oracle Linux, not Ubuntu, and the difference shows up
+three times: the login user is `opc` rather than `ubuntu`, packages come from `dnf`
+rather than `apt`, and the local firewall is firewalld rather than iptables. Docker
+and the stack behave identically otherwise, so an instance that is already running —
+and ARM capacity, once granted, is not to be given back lightly — is worth keeping:
+
+```bash
+sudo dnf update -y
+sudo dnf install -y git dnf-plugins-core
+sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+sudo dnf install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+sudo systemctl enable --now docker
+sudo usermod -aG docker $USER && exit          # reconnect for the group to apply
+
+sudo firewall-cmd --permanent --add-service=http
+sudo firewall-cmd --permanent --add-service=https
+sudo firewall-cmd --reload
+```
+
+SELinux runs in enforcing mode on these images, so the two bind-mounted files —
+`Caddyfile` and `db-init/` — carry `:z` in `docker-compose.prod.yml`. Without the
+label the container cannot read them, and Caddy fails with a configuration error
+that says nothing about SELinux. The option is ignored on hosts without it.
+
 ### Steps
 
 1. **Compute → Instances → Create instance.**
-   - Image: **Canonical Ubuntu 24.04**.
+   - Image: **Canonical Ubuntu 24.04** (or keep Oracle Linux — see above).
    - Shape: **Change shape → Ampere → VM.Standard.A1.Flex**, then set **4 OCPUs and
      24 GB**. Anything within the free allowance is free; taking less does not save
      money, it wastes the allowance.
