@@ -3806,6 +3806,7 @@ function renderCvSchema(schema, meta) {
       }
       return sec.items.map((e, i) => `
         <div class="pf-entry" data-s="${si}" data-i="${i}">
+          ${dragHandle()}
           <button type="button" class="pf-x pf-x-entry" data-act="del-entry" data-s="${si}" data-i="${i}"
                   title="Eintrag entfernen" aria-label="Eintrag entfernen">&#10005;</button>
           <div class="pf-row">
@@ -3861,6 +3862,23 @@ function renderCvSchema(schema, meta) {
       warn.classList.add('hidden');
     }
   }
+
+  // Each section's entries reorder within that section, and nowhere else.
+  body.querySelectorAll('.pf-section').forEach((secEl) => {
+    const si = Number(secEl.dataset.s);
+    enableRowDrag(secEl, '.pf-entry', (order) => {
+      collectCvSchema();
+      const sch = (state.profile && state.profile.cvSchema) || [];
+      const sec = sch[si];
+      if (!sec) return;
+      const src = sec.items || [];
+      sec.items = order.map((n) => src[n]).filter(Boolean);
+      applySchemaToProfile(state.profile, sch);
+      saveProfileToStorage();
+      renderCvSchema(sch);
+      schedulePreview();
+    });
+  });
 
   body.addEventListener('input', collectCvSchema);
   collectCvSchema();
@@ -6688,6 +6706,104 @@ function spellAttrs(field) {
   return PF_DATE_FIELDS.has(field) ? 'spellcheck="false"' : 'spellcheck="true" lang="de"';
 }
 
+// ── Reordering by hand ───────────────────────────────────────────────────────
+//
+// A German CV is read newest first, and the order of these lists was whatever the
+// import happened to produce — which, for a document assembled from a two-column
+// PDF, is no order at all. Retyping five entries to move one is not an answer.
+//
+// Dragging is the obvious gesture and the inaccessible one: it needs a pointer, a
+// steady hand and a screen. The same handle is therefore focusable and answers the
+// arrow keys, which serves a keyboard, a screen reader and a trackpad on a train
+// equally. Both paths end in the same place — reorder(), with the list's new order
+// expressed as the old indices.
+//
+// The DOM is moved during the drag so the page shows what will happen, and the
+// array is rebuilt from the DOM afterwards. One order, read from what is on screen.
+function enableRowDrag(list, itemSelector, reorder) {
+  if (!list || list.dataset.dragWired === '1') return;
+  list.dataset.dragWired = '1';
+
+  const items = () => [...list.querySelectorAll(itemSelector)];
+  const commit = () => reorder(items().map((el) => Number(el.dataset.i)));
+
+  // Which item should the dragged one be placed before, given the pointer?
+  const after = (y) => items()
+    .filter((el) => !el.classList.contains('is-dragging'))
+    .reduce((closest, el) => {
+      const box = el.getBoundingClientRect();
+      const offset = y - box.top - box.height / 2;
+      return (offset < 0 && offset > closest.offset) ? { offset, el } : closest;
+    }, { offset: Number.NEGATIVE_INFINITY, el: null }).el;
+
+  list.addEventListener('pointerdown', (e) => {
+    const h = e.target.closest('.drag-handle');
+    if (h) h.closest(itemSelector).draggable = true;
+  });
+  list.addEventListener('pointerup', () => {
+    items().forEach((el) => { el.draggable = false; });
+  });
+
+  list.addEventListener('dragstart', (e) => {
+    const row = e.target.closest(itemSelector);
+    if (!row) return;
+    row.classList.add('is-dragging');
+    // Firefox starts no drag at all without data on the transfer.
+    try { e.dataTransfer.setData('text/plain', row.dataset.i); } catch (_) { /* not fatal */ }
+    e.dataTransfer.effectAllowed = 'move';
+  });
+
+  list.addEventListener('dragover', (e) => {
+    const row = list.querySelector('.is-dragging');
+    if (!row) return;
+    e.preventDefault();
+    const ref = after(e.clientY);
+    if (ref === row) return;
+    if (ref) list.insertBefore(row, ref); else list.appendChild(row);
+  });
+
+  list.addEventListener('drop', (e) => { if (list.querySelector('.is-dragging')) e.preventDefault(); });
+
+  list.addEventListener('dragend', () => {
+    const row = list.querySelector('.is-dragging');
+    if (!row) return;
+    row.classList.remove('is-dragging');
+    items().forEach((el) => { el.draggable = false; });
+    commit();
+  });
+
+  // The keyboard path. Same handle, same outcome.
+  list.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    const h = e.target.closest('.drag-handle');
+    if (!h) return;
+    const row = h.closest(itemSelector);
+    const sibling = e.key === 'ArrowUp' ? row.previousElementSibling : row.nextElementSibling;
+    if (!sibling || !sibling.matches(itemSelector)) return;
+    e.preventDefault();
+    if (e.key === 'ArrowUp') list.insertBefore(row, sibling);
+    else list.insertBefore(sibling, row);
+    // Read the new position BEFORE committing: reorder() redraws the list, which
+    // detaches `row`, and indexOf on a detached node is -1. Getting this the wrong
+    // way round cost the focus, and with it every arrow press after the first.
+    const at = items().indexOf(row);
+    commit();
+    // The list is redrawn by reorder(), so the focus has to be put back on the
+    // handle that moved — otherwise the next press goes nowhere.
+    setTimeout(() => {
+      const again = list.querySelectorAll(itemSelector)[at];
+      if (again) again.querySelector('.drag-handle')?.focus();
+    }, 0);
+  });
+}
+
+/** The grip. One markup, three lists. */
+function dragHandle() {
+  return '<button type="button" class="drag-handle" tabindex="0"'
+    + ' title="' + esc(tr('drag.handle')) + '" aria-label="' + esc(tr('drag.handle')) + '">'
+    + '\u283f</button>';
+}
+
 function renderRepeatList(type) {
   const def  = REPEAT_DEFS[type];
   const list = $(`pf-${type}-list`);
@@ -6696,6 +6812,7 @@ function renderRepeatList(type) {
   list.innerHTML = arr.length
     ? arr.map((item, i) => `
       <div class="repeat-item" data-i="${i}">
+        ${dragHandle()}
         ${def.fields.map(([f, ph]) => f === 'desc'
           ? `<textarea class="field" rows="2" data-f="${f}" ${spellAttrs(f)} placeholder="${esc(tr(ph))}">${esc(item[f] || '')}</textarea>`
           : `<input class="field" type="text" data-f="${f}" ${spellAttrs(f)} placeholder="${esc(tr(ph))}" value="${esc(item[f] || '')}" />`).join('')}
@@ -6707,6 +6824,14 @@ function renderRepeatList(type) {
         </div>` : ''}
       </div>`).join('')
     : '<span class="hint">' + esc(tr('repeat.empty')) + '</span>';
+
+  enableRowDrag(list, '.repeat-item', (order) => {
+    const src = state.profile[def.key] || [];
+    state.profile[def.key] = order.map((n) => src[n]).filter(Boolean);
+    saveProfileToStorage();
+    renderRepeatList(type);
+    schedulePreview();
+  });
 
   // live-bind inputs
   list.querySelectorAll('.repeat-item').forEach(row => {

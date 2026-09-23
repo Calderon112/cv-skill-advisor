@@ -122,6 +122,8 @@
     'add.language':         ['+ Sprache', '+ Language'],
     'repeat.empty':         ['Noch nichts eingetragen — oben auf „Hinzufügen“ klicken.',
                              'Nothing yet — click “Add” above.'],
+    'drag.handle':          ['Verschieben — ziehen, oder mit den Pfeiltasten bewegen',
+                             'Move — drag, or use the arrow keys'],
     'repeat.remove':        ['Entfernen', 'Remove'],
     'repeat.suggest':       ['Formulierungen vorschlagen', 'Suggest wording'],
 
