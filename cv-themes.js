@@ -740,7 +740,11 @@
   // caller on the page; a customisation written into it would repaint the template
   // for every other CV the moment one of them was edited.
 
-  const FONTS = ['helvetica', 'times', 'courier'];
+  // Lato first: it is the only one of these that was drawn this century, and the
+  // three below are what jsPDF happens to ship rather than a considered set. It is
+  // embedded by cv-fonts.js; when that has not loaded the generator falls back to
+  // Helvetica, so naming it here is safe even then.
+  const FONTS = ['lato', 'helvetica', 'times', 'courier'];
 
   const SECTION_LABELS = {
     kontakt: 'Kontakt', berufserfahrung: 'Berufserfahrung', ausbildung: 'Ausbildung',

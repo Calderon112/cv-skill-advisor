@@ -2204,6 +2204,25 @@ if (_cvPdfBtn) _cvPdfBtn.addEventListener('click', () => {
 
 const GREETING = /^(sehr geehrte|sehr geehrter|liebe|lieber|hallo|guten tag|dear|to whom)/i;
 
+/**
+ * Which typeface this document can actually use.
+ *
+ * cv-fonts.js embeds Lato and registers it on the jsPDF prototype. If that file
+ * did not load — an old cache, a blocked request, a deployment that forgot the
+ * allow-list — asking for it would produce a document set in nothing. Helvetica is
+ * always present, so it is what a failure degrades to.
+ */
+function pickFont(want) {
+  const w = String(want || '').toLowerCase();
+  if (w === 'times' || w === 'courier') return w;
+  if (w === 'lato' || w === '') {
+    const ok = (typeof CvFonts !== 'undefined')
+      && CvFonts.register(window.jspdf && window.jspdf.jsPDF);
+    if (ok) return 'Lato';
+  }
+  return 'helvetica';
+}
+
 function buildCoverLetterPdfDoc(rawText, profile, meta) {
   const lib = window.jspdf;
   if (!lib || !lib.jsPDF) { toast('PDF library not loaded — refresh the page.', 'error'); return null; }
@@ -2229,7 +2248,9 @@ function buildCoverLetterPdfDoc(rawText, profile, meta) {
   const L = 64, R = 52, BOTTOM = 64;
   const W = PAGE_W - L - R;
 
-  const FONT = (T.font === 'times' || T.font === 'courier') ? T.font : 'helvetica';
+  // Lato when it registered, and Helvetica when it did not — a missing typeface
+  // must cost a nicer page, never the document.
+  const FONT = pickFont(T.font);
   const ACCENT = T.accent, DARK = T.dark, GREY = T.grey;
   const WHITE = [255, 255, 255];
   const BAND = T.header === 'band';
@@ -5069,7 +5090,7 @@ function focusIssue(issue) {
 // CvThemes.resolve(), so the live preview, the downloaded PDF and the cover letter
 // read one description of the design rather than three.
 
-const DC_FONT_LABELS = { helvetica: 'Serifenlos', times: 'Serif', courier: 'Schreibmaschine' };
+const DC_FONT_LABELS = { lato: 'Lato', helvetica: 'Serifenlos', times: 'Serif', courier: 'Schreibmaschine' };
 
 /**
  * Has this section anything to print?
@@ -5335,7 +5356,9 @@ function buildProfilePdfDoc(profile, overrides) {
   // serif template costs nothing to ship. Any other family would mean shipping the
   // face itself, and a name jsPDF does not know falls back silently — which is why
   // this is a whitelist rather than a pass-through of whatever the theme names.
-  const FONT = (T.font === 'times' || T.font === 'courier') ? T.font : 'helvetica';
+  // Lato when it registered, and Helvetica when it did not — a missing typeface
+  // must cost a nicer page, never the document.
+  const FONT = pickFont(T.font);
 
   // A coloured band across the top of the first page, carrying the name and photo.
   // The band replaces the rule under the header rather than adding to it: a band and
