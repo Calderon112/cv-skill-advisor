@@ -36,7 +36,12 @@
   };
 
   // "still there", in the words a CV actually uses.
-  const ONGOING = /^(heute|jetzt|aktuell|gegenw(ä|ae)rtig|laufend|present|current|now|bis heute|seit)$/i;
+  // A running position is written a dozen ways and every one of them is correct
+  // German. The list used to hold "bis heute" and "jetzt" as separate entries and
+  // not "bis jetzt", so a CV saying exactly that was told its date was unreadable —
+  // a false alarm on a page whose whole job is to be believed. The prefix is
+  // optional now rather than baked into single entries.
+  const ONGOING = /^(bis\s+)?(heute|jetzt|aktuell|gegenw(ä|ae)rtig|laufend|andauernd|dato|present|current|now|ongoing|today|seit)$/i;
 
   const str = (v) => String(v == null ? '' : v).trim();
   /** A month as one number, so two dates can be compared and subtracted. */
@@ -110,6 +115,13 @@
     const phone = str(p.phone);
     if (!phone) add('warn', 'PHONE', 'Keine Telefonnummer. In Deutschland wird sie im Lebenslauf erwartet.', { field: 'pf-phone' });
     else if ((phone.match(/\d/g) || []).length < 6) add('warn', 'PHONE_SHORT', 'Die Telefonnummer wirkt unvollständig.', { field: 'pf-phone' });
+    // Written internationally it can be dialled from anywhere, which is the point
+    // of putting it on a document an employer abroad may read. A tip, not a rule:
+    // a number that is not German is not wrong.
+    else if (!/^\+/.test(phone.replace(/[\s()\/.-]/g, ''))) {
+      add('tip', 'PHONE_INTL', 'Telefonnummer ohne Ländervorwahl. „+49 176 …" statt „0176 …" ist von überall wählbar.',
+        { field: 'pf-phone' });
+    }
 
     if (!str(p.location)) add('tip', 'LOCATION', 'Kein Wohnort. Arbeitgeber sortieren nach Region.', { field: 'pf-location' });
 

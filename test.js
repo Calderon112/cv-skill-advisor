@@ -1757,6 +1757,50 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
       assertEqual(CC.parseMonth('seit Sommer', 'start', NOW), null, 'not guessed into a month');
     });
 
+    test('a position still running is written a dozen ways, and all of them count', () => {
+      // Reported from use: a CV saying "bis jetzt" was told its date was unreadable.
+      // The list held "bis heute" and "jetzt" as separate entries and not the pair,
+      // so the most ordinary phrasing of all produced a false alarm — on a panel
+      // whose only value is that its findings are true.
+      ['bis jetzt', 'Bis Jetzt', 'bis heute', 'heute', 'jetzt', 'laufend',
+       'andauernd', 'Gegenwärtig', 'seit', 'present'].forEach((v) => {
+        const r = CC.run(Object.assign({}, SOUND, {
+          experience: [{ role: 'Werkstudent', org: 'TÜV NORD', start: '06.2025', end: v, desc: 'a' }],
+        }), { now: NOW });
+        assert(codes(r).indexOf('END_UNREADABLE') === -1, 'accepted: ' + v);
+      });
+    });
+
+    test('a date with no month in it is still not guessed', () => {
+      // "seit 2020" names a year and no month. Widening the ongoing rule to any
+      // phrase beginning with "seit" made parseMonth answer "now" for it — and for
+      // "seit Sommer", which the suite already forbade. A missing month stays
+      // missing.
+      assertEqual(CC.parseMonth('seit Sommer', 'start', NOW), null, 'not a month');
+      assertEqual(CC.parseMonth('seit 2020', 'start', NOW), null, 'nor this one');
+    });
+
+    test('and something that is not a date still says so', () => {
+      const r = CC.run(Object.assign({}, SOUND, {
+        experience: [{ role: 'Werkstudent', org: 'X', start: '06.2025', end: 'Quatsch', desc: 'a' }],
+      }), { now: NOW });
+      assert(codes(r).indexOf('END_UNREADABLE') !== -1, 'nonsense is still reported');
+    });
+
+    test('a phone number without a country code is a tip, not a rule', () => {
+      // A number that is not German is not wrong, so this never becomes an error —
+      // but written internationally it can be dialled by an employer abroad.
+      const local = CC.run(Object.assign({}, SOUND, { phone: '0176 12345678' }), { now: NOW });
+      assert(codes(local).indexOf('PHONE_INTL') !== -1, 'the tip appears');
+      assertEqual(local.issues.find((i) => i.code === 'PHONE_INTL').level, 'tip', 'and it is only a tip');
+
+      const intl = CC.run(Object.assign({}, SOUND, { phone: '+49 176 12345678' }), { now: NOW });
+      assert(codes(intl).indexOf('PHONE_INTL') === -1, 'a number in +49 form is left alone');
+
+      const spaced = CC.run(Object.assign({}, SOUND, { phone: '+49 (0)176 / 123-456' }), { now: NOW });
+      assert(codes(spaced).indexOf('PHONE_INTL') === -1, 'punctuation does not hide the plus');
+    });
+
     test('a sound profile produces no errors', () => {
       const r = CC.run(SOUND, { now: NOW, pages: 1 });
       assertEqual(r.counts.error, 0, 'no errors: ' + codes(r).join(','));

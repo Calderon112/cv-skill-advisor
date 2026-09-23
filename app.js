@@ -3880,6 +3880,7 @@ function renderCvSchema(schema, meta) {
     });
   });
 
+  wireAutoGrow(body);
   body.addEventListener('input', collectCvSchema);
   collectCvSchema();
   syncSchemaFormMode(_showFixedFields);
@@ -6513,6 +6514,7 @@ function renderProfileForm() {
   renderLanguageRows();
   setVal('pf-title',     p.title);
   setVal('pf-summary',   p.summary);
+  wireAutoGrow(document);
   renderSkillTags();
   renderRepeatList('exp');
   renderRepeatList('edu');
@@ -6706,6 +6708,32 @@ function spellAttrs(field) {
   return PF_DATE_FIELDS.has(field) ? 'spellcheck="false"' : 'spellcheck="true" lang="de"';
 }
 
+// ── A field the size of what is in it ────────────────────────────────────────
+//
+// The description boxes ship with rows="2" and stay that way however much is
+// typed, so six bullets are read through a two-line window with a scrollbar. The
+// entry is the thing being judged; hiding four fifths of it behind a scroll is a
+// poor way to let someone check their own CV.
+//
+// Height is set from scrollHeight rather than from a line count, because the text
+// wraps and a count of newlines would be wrong on every wrapped line.
+function autoGrow(el) {
+  if (!el) return;
+  el.style.height = "auto";
+  el.style.height = Math.min(el.scrollHeight + 2, 520) + "px";
+}
+
+/** Fit every textarea in a container, now and as it is typed into. */
+function wireAutoGrow(root) {
+  const host = root || document;
+  host.querySelectorAll("textarea.field").forEach((el) => {
+    if (el.dataset.grow === "1") return;
+    el.dataset.grow = "1";
+    el.addEventListener("input", () => autoGrow(el));
+    autoGrow(el);
+  });
+}
+
 // ── Reordering by hand ───────────────────────────────────────────────────────
 //
 // A German CV is read newest first, and the order of these lists was whatever the
@@ -6825,6 +6853,7 @@ function renderRepeatList(type) {
       </div>`).join('')
     : '<span class="hint">' + esc(tr('repeat.empty')) + '</span>';
 
+  wireAutoGrow(list);
   enableRowDrag(list, '.repeat-item', (order) => {
     const src = state.profile[def.key] || [];
     state.profile[def.key] = order.map((n) => src[n]).filter(Boolean);
