@@ -1139,27 +1139,15 @@ async function ocrImages(images, onProgress) {
   return all.trim();
 }
 
-// Downscale any image data URL to a compact JPEG (keeps localStorage small) and
-// store it as the profile photo. Shared by the manual upload and PDF extraction.
+// Store an image data URL as the profile photo, at the size shrinkPhoto decides.
+// Shared by the manual upload and by the photo lifted out of an imported PDF.
 function setProfilePhoto(dataUrl) {
-  return new Promise(resolve => {
-    if (!dataUrl) { resolve(false); return; }
-    const img = new Image();
-    img.onload = () => {
-      const max = 320;
-      let { width, height } = img;
-      if (width > height && width > max) { height = height * max / width; width = max; }
-      else if (height > max) { width = width * max / height; height = max; }
-      const canvas = document.createElement('canvas');
-      canvas.width = width; canvas.height = height;
-      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
-      if (!state.profile) state.profile = emptyProfile();
-      state.profile.photo = canvas.toDataURL('image/jpeg', 0.82);
-      saveProfileToStorage();
-      resolve(true);
-    };
-    img.onerror = () => resolve(false);
-    img.src = dataUrl;
+  return shrinkPhoto(dataUrl).then((small) => {
+    if (!small) return false;
+    if (!state.profile) state.profile = emptyProfile();
+    state.profile.photo = small;
+    saveProfileToStorage();
+    return true;
   });
 }
 
@@ -4560,27 +4548,71 @@ const _editExtractedBtn = $('profile-edit-extracted');
 if (_editExtractedBtn) _editExtractedBtn.addEventListener('click', () => setProfileMode('manual'));
 
 // ── Profile: Photo upload (compressed to keep storage small) ────────────────
+// ── The photo, at a size that survives print ─────────────────────────────────
+//
+// It was reduced to 320px on the long side and written back as JPEG. In the rail
+// templates the photo is printed about 168pt wide — 2.33 inches — so a portrait
+// arrived there 240px across, which is 103 dpi. That is a third of what print
+// wants, and it shows: the face is soft on screen and softer on paper, on the one
+// image a recruiter actually looks at.
+//
+// Measured on a 1200x1600 portrait, for the largest box a template uses:
+//
+//     cap    stored   dpi in the rail
+//     320     8 KB     103      ← what it was
+//     640    33 KB     206
+//     800    51 KB     257
+//     960    80 KB     309      ← print quality
+//
+// 960 it is. Eighty kilobytes per stored CV against a quota near five megabytes is
+// a trade worth making for the only picture on the document.
+//
+// Both callers went through their own copy of this arithmetic. One copy now, or
+// the two drift and only one of them gets fixed.
+const PHOTO_MAX_PX = 960;
+const PHOTO_QUALITY = 0.85;
+
+/**
+ * Shrink an image to PHOTO_MAX_PX on its long side, keeping its proportions.
+ * @returns {Promise<string|null>} a JPEG data URL, or null if it could not be read
+ */
+function shrinkPhoto(dataUrl) {
+  return new Promise((resolve) => {
+    if (!dataUrl) { resolve(null); return; }
+    const img = new Image();
+    img.onload = () => {
+      let { width, height } = img;
+      const max = PHOTO_MAX_PX;
+      // Only ever downwards: enlarging a small photo adds pixels and no detail.
+      if (width > height && width > max) { height = height * max / width; width = max; }
+      else if (height >= width && height > max) { width = width * max / height; height = max; }
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(width); canvas.height = Math.round(height);
+      const ctx = canvas.getContext('2d');
+      // The browser's own smoothing, at its best setting: the default is bilinear
+      // and leaves stair-stepping on a face.
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      try { resolve(canvas.toDataURL('image/jpeg', PHOTO_QUALITY)); }
+      catch (_) { resolve(null); }
+    };
+    img.onerror = () => resolve(null);
+    img.src = dataUrl;
+  });
+}
+
 function handlePhotoFile(file) {
   if (!file || !file.type.startsWith('image/')) { toast('Please choose an image file.', 'error'); return; }
   const reader = new FileReader();
-  reader.onload = ev => {
-    const img = new Image();
-    img.onload = () => {
-      // Downscale to max 320px on the long side, output JPEG
-      const max = 320;
-      let { width, height } = img;
-      if (width > height && width > max) { height = height * max / width; width = max; }
-      else if (height > max) { width = width * max / height; height = max; }
-      const canvas = document.createElement('canvas');
-      canvas.width = width; canvas.height = height;
-      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
-      state.profile.photo = canvas.toDataURL('image/jpeg', 0.82);
-      saveProfileToStorage();
-      renderProfileForm();
-      toast('Photo added.', 'success');
-    };
-    img.onerror = () => toast('Could not read that image.', 'error');
-    img.src = ev.target.result;
+  reader.onload = async (ev) => {
+    const small = await shrinkPhoto(ev.target.result);
+    if (!small) { toast('Could not read that image.', 'error'); return; }
+    state.profile.photo = small;
+    saveProfileToStorage();
+    renderProfileForm();
+    schedulePreview();
+    toast('Photo added.', 'success');
   };
   reader.readAsDataURL(file);
 }
@@ -5832,6 +5864,28 @@ function buildProfilePdfDoc(profile, overrides) {
    * list, and pairing them back by order stamps entries with dates the candidate
    * never wrote - the failure this project has already met once.
    */
+  /**
+   * The employer, and the town only if the employer does not already name it.
+   *
+   * A CV importer routinely fills both fields from one line: org becomes
+   * "Kueck Industrie, Bochum" and location becomes "Bochum". Joining them then
+   * prints "Kueck Industrie, Bochum, Bochum", which is on the document the
+   * candidate sends and is the kind of small wrongness a reader files under
+   * carelessness. Compared on words rather than characters, so "Krefeld Urdingen"
+   * still suppresses a bare "Krefeld".
+   */
+  function orgWithPlace(org, place) {
+    const o = String(org || '').trim();
+    const pl = String(place || '').trim();
+    if (!pl) return o;
+    if (!o) return pl;
+    const cut = (s) => s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+    const words = cut(o);
+    const wanted = cut(pl);
+    const already = wanted.length && wanted.every(function (w) { return words.indexOf(w) !== -1; });
+    return already ? o : o + ', ' + pl;
+  }
+
   function titleWithDates(title, dates) {
     return (T.dateStyle === 'after-title' && dates) ? title + '  \u2014  ' + dates : title;
   }
@@ -5907,7 +5961,7 @@ function buildProfilePdfDoc(profile, overrides) {
             if (i) entryRule();
             if (dates && T.dateStyle !== 'after-title') write(dates, MAIN_E_X, MAIN_E_W, 8, 'normal', GREY, 11);
             if (x.role) write(titleWithDates(x.role, dates), MAIN_E_X, MAIN_E_W, 10.5, 'bold', TEAL, 13);
-            const org = [x.org, x.location].filter(Boolean).join(', ');
+            const org = orgWithPlace(x.org, x.location);
             if (org)    write(org, MAIN_E_X, MAIN_E_W, 9.5, 'bold', DARK, 12);
             if (x.desc) bulletList(splitLines(x.desc), MAIN_E_X, MAIN_E_W);
             // Entries need more air between them than bullets do inside one, or the
