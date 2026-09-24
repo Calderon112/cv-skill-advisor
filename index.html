@@ -1124,6 +1124,23 @@
           </div>
         </div>
 
+        <!-- The subscription is separate from the feedback form above on purpose:
+             that one is anonymous by construction, and an address typed into it
+             would undo the promise. This one asks for an address and says so. -->
+        <div class="card">
+          <div class="card-header"><h2>Newsletter</h2></div>
+          <p class="lede">Produktneuigkeiten und Hinweise zum deutschen IT-Arbeitsmarkt.
+            Selten, und jederzeit mit einem Klick abbestellbar.</p>
+          <form id="newsletter-form" class="newsletter-form" novalidate>
+            <input id="newsletter-email" class="field" type="email" autocomplete="email"
+                   placeholder="ihre@adresse.de" aria-label="E-Mail-Adresse" required />
+            <button type="submit" class="btn btn-primary" id="newsletter-submit">Anmelden</button>
+          </form>
+          <p class="hint" id="newsletter-note">Wir senden Ihnen zuerst eine Bestätigungsmail.
+            Erst nach Ihrer Bestätigung erhalten Sie den Newsletter — und ohne sie speichern
+            wir die Adresse nicht dauerhaft.</p>
+        </div>
+
         <div class="card">
           <div class="card-header"><h2>How is it going?</h2></div>
 

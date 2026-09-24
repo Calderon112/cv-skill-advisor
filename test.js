@@ -1525,6 +1525,96 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
     });
   }
 
+  section('Newsletter — asked for, provably, or not sent at all');
+
+  {
+    const NL = require('./server/newsletter.js');
+    const { createRepo } = require('./server/repo.js');
+    const fresh = () => { let db = {}; return createRepo({ getStore: () => db, persist: () => {} }).newsletter; };
+
+    test('an address is not on the list until it is confirmed', () => {
+      // The whole point of double opt-in: a typed-in address belonging to someone
+      // else costs them one mail and never a subscription.
+      const n = fresh();
+      n.request('a@b.de', NL.CONSENT_DE, 'tok', 1000);
+      assertEqual(n.count().total, 1, 'the request is recorded');
+      assertEqual(n.count().confirmed, 0, 'but it counts for nothing yet');
+      assertEqual(n.confirmed().length, 0, 'and it is not in the sending list');
+
+      n.confirm('tok', 2000);
+      assertEqual(n.confirmed().length, 1, 'confirmation is what puts it there');
+    });
+
+    test('what was consented to is stored with the address', () => {
+      // A consent record that cannot show what was agreed to is not a record.
+      const n = fresh();
+      n.request('a@b.de', NL.CONSENT_DE, 'tok', 1000);
+      n.confirm('tok', 2000);
+      const row = n.get('a@b.de');
+      assertEqual(row.requestedAt, 1000, 'when it was asked for');
+      assertEqual(row.confirmedAt, 2000, 'when it was confirmed');
+      assert(/Newsletter/.test(row.consentText), 'and the wording itself');
+    });
+
+    test('a wrong token confirms nothing', () => {
+      const n = fresh();
+      n.request('a@b.de', NL.CONSENT_DE, 'tok', 1000);
+      assertEqual(n.confirm('anderes', 2000), null, 'no address comes back');
+      assertEqual(n.count().confirmed, 0, 'and nothing is confirmed');
+    });
+
+    test('re-subscribing an address drops its earlier confirmation', () => {
+      // Otherwise a request made by someone else would leave the address sending,
+      // and the new token would never need to be used.
+      const n = fresh();
+      n.request('a@b.de', NL.CONSENT_DE, 'tok1', 1000);
+      n.confirm('tok1', 2000);
+      n.request('a@b.de', NL.CONSENT_DE, 'tok2', 3000);
+      assertEqual(n.confirmed().length, 0, 'back to pending');
+      assertEqual(n.confirm('tok1', 4000), null, 'and the old link is dead');
+    });
+
+    test('unsubscribing removes the address, and twice is harmless', () => {
+      const n = fresh();
+      n.request('a@b.de', NL.CONSENT_DE, 'tok', 1000);
+      n.confirm('tok', 2000);
+      assertEqual(n.unsubscribe('tok'), 'a@b.de', 'the address comes back');
+      assertEqual(n.count().total, 0, 'and is gone');
+      assertEqual(n.unsubscribe('tok'), null, 'a second click changes nothing');
+    });
+
+    test('every issue carries its own unsubscribe link', () => {
+      // Required, and the only version of this a reader trusts.
+      const issue = NL.composeIssue({
+        baseUrl: 'https://careerai.example.de', token: 'abc123',
+        title: 'Neu im September', intro: 'Kurz gefasst.',
+        items: [{ title: 'Neue Vorlagen', url: 'https://example.de/x', source: 'CareerAI', date: '09.2026' }],
+      });
+      assert(issue.text.indexOf('/api/newsletter/unsubscribe?token=abc123') !== -1, 'the link is there');
+      assert(issue.text.indexOf('https://example.de/x') !== -1, 'items keep their source link');
+      assert(issue.text.indexOf('Quelle:') !== -1, 'and name where it came from');
+    });
+
+    test('the confirmation mail tells a stranger to ignore it', () => {
+      // For a mistyped address the reader is not the subscriber, and the honest
+      // thing is to say that doing nothing ends it.
+      const mail = NL.composeConfirm({
+        baseUrl: 'https://careerai.example.de', token: 'abc', consentText: NL.CONSENT_DE,
+      });
+      assert(/ignorieren/i.test(mail.text), 'it says so');
+      assert(mail.text.indexOf('/api/newsletter/confirm?token=abc') !== -1, 'and carries the link');
+    });
+
+    test('an address is checked for shape, not for existence', () => {
+      assert(NL.looksLikeEmail('jardel@example.de'), 'ordinary');
+      assert(NL.looksLikeEmail('a.b+c@sub.example.co.uk'), 'and less ordinary');
+      assert(!NL.looksLikeEmail('kein-at-zeichen'), 'no @');
+      assert(!NL.looksLikeEmail('zwei@@at.de'), 'two @');
+      assert(!NL.looksLikeEmail('kein@punkt'), 'no dot in the domain');
+      assertEqual(NL.normalise('  Jardel@Example.DE '), 'jardel@example.de', 'trimmed and lowercased');
+    });
+  }
+
   section('JSON Resume — the profile as an interchange format');
 
   {

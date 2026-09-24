@@ -4093,3 +4093,10 @@ body.sheet-open { overflow: hidden; }
 /* The grip needs its own column, or it sits on the first field. */
 .repeat-item, .pf-entry { padding-left: 22px; }
 .is-dragging { opacity: .45; }
+
+/* -- Newsletter ------------------------------------------------------------ */
+.newsletter-form { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+.newsletter-form .field { flex: 1 1 18rem; min-width: 0; }
+#page-feedback .newsletter-form .btn { min-width: 0; }
+#newsletter-note.is-good { color: var(--teal); }
+#newsletter-note.is-bad { color: #fca5a5; }

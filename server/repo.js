@@ -34,6 +34,7 @@ function createRepo({ getStore, persist }) {
     s.profiles ||= {};
     s.emailTokens ||= {};
     s.feedback ||= [];
+    s.newsletter ||= {};
     s.meta ||= {};
     return s;
   };
@@ -182,6 +183,61 @@ function createRepo({ getStore, persist }) {
     count() { return (store().feedback || []).length; },
   };
 
+  // ── Newsletter ────────────────────────────────────────────────────────────
+  //
+  // Kept apart from users: someone may subscribe without an account, and an
+  // account holder who unsubscribes must stay unsubscribed. The consent fields
+  // record when it was asked for, when it was confirmed and what wording was
+  // agreed to — which is what a German recipient's subscription has to be able to
+  // show if it is ever questioned.
+  const newsletter = {
+    request(email, consentText, token, at) {
+      const all = (store().newsletter ||= {});
+      const prev = all[email];
+      all[email] = {
+        email,
+        status: 'pending',
+        token,
+        consentText: consentText || '',
+        requestedAt: at,
+        // A re-request from an address that already confirmed keeps nothing of the
+        // old confirmation: the new token has to be used to become confirmed again.
+        confirmedAt: null,
+        previouslyConfirmedAt: prev ? (prev.confirmedAt || null) : null,
+      };
+      persist();
+      return { email, token, status: 'pending' };
+    },
+    confirm(token, at) {
+      const all = (store().newsletter ||= {});
+      const hit = Object.values(all).find((r) => r.token === token);
+      if (!hit) return null;
+      hit.status = 'confirmed';
+      hit.confirmedAt = at;
+      persist();
+      return hit.email;
+    },
+    unsubscribe(token) {
+      const all = (store().newsletter ||= {});
+      const hit = Object.values(all).find((r) => r.token === token);
+      if (!hit) return null;
+      delete all[hit.email];
+      persist();
+      return hit.email;
+    },
+    get(email) { return (store().newsletter ||= {})[email] || null; },
+    confirmed() {
+      return Object.values(store().newsletter || {})
+        .filter((r) => r.status === 'confirmed')
+        .sort((a, b) => (a.confirmedAt || 0) - (b.confirmedAt || 0))
+        .map((r) => ({ email: r.email, token: r.token }));
+    },
+    count() {
+      const all = Object.values(store().newsletter || {});
+      return { confirmed: all.filter((r) => r.status === 'confirmed').length, total: all.length };
+    },
+  };
+
   // ── Small key/value store ─────────────────────────────────────────────────
   // For the handful of things the server needs to remember between restarts that
   // belong to no user — when the feedback digest last went out, for instance.
@@ -201,7 +257,7 @@ function createRepo({ getStore, persist }) {
     persist();
   }
 
-  return { sessions, users, applications, profiles, emailTokens, feedback, meta, deleteAccount };
+  return { sessions, users, applications, profiles, emailTokens, feedback, newsletter, meta, deleteAccount };
 }
 
 module.exports = { createRepo };

@@ -62,6 +62,7 @@ const oidc = require('./server/oidc.js');
 const salaryBand = require('./server/salary-band.js');
 const scoreExplainer = require('./server/score-explainer.js');
 const cvSchema = require('./server/cv-schema.js');
+const newsletter = require('./server/newsletter.js');
 const employers = require('./server/employers.js');
 const ats = require('./server/ats.js');
 
@@ -2981,6 +2982,27 @@ function filterJobs(region, sector, profileText = '') {
 }
 
 
+/**
+ * The page a mail link lands on. Plain, self-contained, no script: it is opened
+ * from a mail client, sometimes in an embedded browser, and it has one sentence
+ * to deliver.
+ */
+function sendNewsletterPage(res, { title, body }) {
+  const esc = (v) => String(v).replace(/[&<>"]/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const html = '<!doctype html><html lang="de"><meta charset="utf-8">'
+    + '<meta name="viewport" content="width=device-width,initial-scale=1">'
+    + '<title>' + esc(title) + '</title>'
+    + '<style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;'
+    + 'background:#070713;color:#e2e8f0;font:16px/1.6 Inter,system-ui,sans-serif;padding:24px}'
+    + 'main{max-width:34rem}h1{font-size:1.4rem;margin:0 0 .6rem}p{margin:0 0 1.2rem;color:#94a3b8}'
+    + 'a{color:#38bdf8}</style>'
+    + '<main><h1>' + esc(title) + '</h1><p>' + esc(body) + '</p>'
+    + '<p><a href="' + esc(publicBaseUrl()) + '">CareerAI öffnen</a></p></main>';
+  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+  res.end(html);
+}
+
 const server = http.createServer(async (req, res) => {
   const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
   if (req.method === 'OPTIONS') {
@@ -3454,6 +3476,79 @@ const server = http.createServer(async (req, res) => {
   //
   // Nothing identifying is recorded — no session, no username, no IP. The request may
   // well carry an Authorization header; it is simply never read here.
+  // ── Newsletter ─────────────────────────────────────────────────────────────
+  //
+  // Subscribe answers the same way whether the address is new, already pending or
+  // already confirmed. Anything else turns this endpoint into a way of asking
+  // "does this person have an account here", which is nobody's business.
+  if (parsedUrl.pathname === '/api/newsletter/subscribe' && req.method === 'POST') {
+    (async () => {
+      // Public, and it sends mail. Without a ceiling this endpoint is a way of
+      // posting a stranger's address repeatedly — and of burning the sending quota
+      // while doing it. Three an hour is generous for someone who mistyped and is
+      // trying again, and useless to anyone else.
+      if (rateLimited(req, 'newsletter', 3, 60 * 60 * 1000)) {
+        sendJson(res, 429, { error: 'Zu viele Anmeldeversuche. Bitte später erneut versuchen.' });
+        return;
+      }
+
+      const body = await readJsonBody(req);
+      if (!body) { sendJson(res, 400, { error: 'Invalid request payload' }); return; }
+      // Named address, not email: `email` is the mailer module required at the top
+      // of this file, and shadowing it here would make the email.sendEmail call
+      // below a method call on a string.
+      const address = newsletter.normalise(body.email);
+      if (!newsletter.looksLikeEmail(address)) {
+        sendJson(res, 400, { error: 'Diese E-Mail-Adresse sieht nicht gültig aus.' });
+        return;
+      }
+
+      const token = crypto.randomBytes(24).toString('hex');
+      await repo.newsletter.request(address, newsletter.CONSENT_DE, token, Date.now());
+
+      const mail = newsletter.composeConfirm({
+        baseUrl: publicBaseUrl(), token, consentText: newsletter.CONSENT_DE,
+      });
+      // A send that fails must not tell the caller whether the address exists, and
+      // must not lose the pending row: the person can ask again.
+      try { await email.sendEmail({ to: address, subject: mail.subject, text: mail.text }); }
+      catch (_) { /* logged by the mailer; the answer below does not change */ }
+
+      sendJson(res, 200, { ok: true });
+    })();
+    return;
+  }
+
+  // Confirm and unsubscribe are GET, because they are clicked from a mail client.
+  // Both answer in HTML: whoever follows the link is looking at a browser, not at
+  // JSON, and this is often the only page of the product they will ever see.
+  if (parsedUrl.pathname === '/api/newsletter/confirm' && req.method === 'GET') {
+    (async () => {
+      const token = String(parsedUrl.searchParams.get('token') || '');
+      const who = token ? await repo.newsletter.confirm(token, Date.now()) : null;
+      sendNewsletterPage(res, who
+        ? { title: 'Anmeldung bestätigt', body: 'Danke — ' + who + ' ist für den Newsletter angemeldet. '
+            + 'Jede Ausgabe enthält unten einen Abmeldelink.' }
+        : { title: 'Link nicht gültig', body: 'Dieser Bestätigungslink ist abgelaufen oder wurde bereits '
+            + 'verwendet. Melden Sie sich einfach erneut an.' });
+    })();
+    return;
+  }
+
+  if (parsedUrl.pathname === '/api/newsletter/unsubscribe' && req.method === 'GET') {
+    (async () => {
+      const token = String(parsedUrl.searchParams.get('token') || '');
+      const who = token ? await repo.newsletter.unsubscribe(token) : null;
+      // An unknown token still reports success. The reader wanted out; telling them
+      // "that link is invalid" leaves them believing they are still subscribed, and
+      // they are not — either the address was already gone or it never existed.
+      sendNewsletterPage(res, { title: 'Abgemeldet',
+        body: who ? who + ' erhält keine weiteren Newsletter von uns.'
+                  : 'Diese Adresse erhält keine weiteren Newsletter von uns.' });
+    })();
+    return;
+  }
+
   if (parsedUrl.pathname === '/api/feedback' && req.method === 'POST') {
     (async () => {
       const body = await readJsonBody(req);

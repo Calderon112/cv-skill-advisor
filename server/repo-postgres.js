@@ -72,6 +72,27 @@ CREATE TABLE IF NOT EXISTS feedback (
 );
 CREATE INDEX IF NOT EXISTS feedback_created_idx ON feedback (created_at DESC);
 
+-- Newsletter subscribers.
+--
+-- Separate from users on purpose: someone may subscribe without an account, and
+-- an account holder who unsubscribes must stay unsubscribed. No foreign key, so
+-- deleting an account cannot silently resurrect or remove a subscription.
+--
+-- The consent columns are not decoration. A newsletter sent to German recipients
+-- has to be able to show, per address, that it was asked for: when it was
+-- requested, when it was confirmed from that address, and the exact wording that
+-- was agreed to. Without that record the subscription is worth nothing in a
+-- dispute, however real it was.
+CREATE TABLE IF NOT EXISTS newsletter (
+  email        TEXT PRIMARY KEY,
+  status       TEXT NOT NULL DEFAULT 'pending',
+  token        TEXT NOT NULL UNIQUE,
+  consent_text TEXT NOT NULL DEFAULT '',
+  requested_at BIGINT NOT NULL,
+  confirmed_at BIGINT
+);
+CREATE INDEX IF NOT EXISTS newsletter_status_idx ON newsletter (status);
+
 -- Server-level bookkeeping that belongs to no user.
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
@@ -307,6 +328,45 @@ function createPostgresRepo({ connectionString, ssl = false }) {
     },
   };
 
+  const newsletter = {
+    /** Record a request and hand back the token the confirmation link carries. */
+    async request(email, consentText, token, at) {
+      await pool.query(
+        `INSERT INTO newsletter (email, status, token, consent_text, requested_at, confirmed_at)
+         VALUES ($1,'pending',$2,$3,$4,NULL)
+         ON CONFLICT (email) DO UPDATE SET token = EXCLUDED.token,
+           consent_text = EXCLUDED.consent_text, requested_at = EXCLUDED.requested_at`,
+        [email, token, consentText || '', at]);
+      return { email, token, status: 'pending' };
+    },
+    async confirm(token, at) {
+      const { rows } = await pool.query(
+        `UPDATE newsletter SET status = 'confirmed', confirmed_at = $2
+          WHERE token = $1 RETURNING email`, [token, at]);
+      return rows[0] ? rows[0].email : null;
+    },
+    async unsubscribe(token) {
+      const { rows } = await pool.query(
+        'DELETE FROM newsletter WHERE token = $1 RETURNING email', [token]);
+      return rows[0] ? rows[0].email : null;
+    },
+    async get(email) {
+      const { rows } = await pool.query('SELECT * FROM newsletter WHERE email = $1', [email]);
+      return rows[0] || null;
+    },
+    /** Only confirmed addresses are ever sent to. */
+    async confirmed() {
+      const { rows } = await pool.query(
+        "SELECT email, token FROM newsletter WHERE status = 'confirmed' ORDER BY confirmed_at");
+      return rows;
+    },
+    async count() {
+      const { rows } = await pool.query(
+        "SELECT count(*) FILTER (WHERE status = 'confirmed') AS confirmed, count(*) AS total FROM newsletter");
+      return { confirmed: Number(rows[0].confirmed), total: Number(rows[0].total) };
+    },
+  };
+
   const meta = {
     async get(key) {
       const { rows } = await pool.query('SELECT value FROM meta WHERE key = ', [key]);
@@ -327,7 +387,7 @@ function createPostgresRepo({ connectionString, ssl = false }) {
 
   async function close() { await pool.end(); }
 
-  return { init, close, sessions, users, applications, profiles, emailTokens, feedback, meta, deleteAccount, _pool: pool };
+  return { init, close, sessions, users, applications, profiles, emailTokens, feedback, newsletter, meta, deleteAccount, _pool: pool };
 }
 
 module.exports = { createPostgresRepo, SCHEMA };

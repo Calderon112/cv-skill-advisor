@@ -8441,3 +8441,46 @@ async function loadFeedbackAdmin() {
     box.classList.add('hidden');
   }
 }
+
+// ── Newsletter subscription ──────────────────────────────────────────────────
+//
+// The button only ever asks for a confirmation mail. Nothing here reports whether
+// the address was already on the list: the server answers the same way for a new
+// address, a pending one and a confirmed one, and repeating that distinction in
+// the interface would hand back exactly what the server refuses to disclose.
+$('newsletter-form')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const input = $('newsletter-email');
+  const note = $('newsletter-note');
+  const btn = $('newsletter-submit');
+  if (!input || !note) return;
+
+  const say = (msg, kind) => {
+    note.textContent = msg;
+    note.className = 'hint' + (kind ? ' is-' + kind : '');
+  };
+
+  const address = input.value.trim();
+  if (!address) { say('Bitte geben Sie eine E-Mail-Adresse ein.', 'bad'); input.focus(); return; }
+
+  if (btn) { btn.disabled = true; btn.textContent = 'Wird gesendet …'; }
+  try {
+    const r = await fetch(`${baseUrl}/api/newsletter/subscribe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: address }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok) {
+      say('Fast geschafft: Wir haben Ihnen eine Bestätigungsmail geschickt. '
+        + 'Der Newsletter startet erst, wenn Sie den Link darin anklicken.', 'good');
+      input.value = '';
+    } else {
+      say(d.error || 'Das hat nicht geklappt. Bitte versuchen Sie es später erneut.', 'bad');
+    }
+  } catch (_) {
+    say('Keine Verbindung zum Server. Bitte versuchen Sie es später erneut.', 'bad');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Anmelden'; }
+  }
+});
