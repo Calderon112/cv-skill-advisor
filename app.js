@@ -4697,6 +4697,11 @@ function joinValues(parts, sep) {
 // reads. The section's own heading decides where it lands — the document said what
 // each block was, and that judgement is better than any guess made here.
 
+// Headings whose content the template draws on its own. They are not mapped onto
+// a profile field — there is nothing to map, the fields are already there — so
+// without this they fall through to RENDER.extras and print a second time.
+const ALREADY_DRAWN = /^(kontakt|contact|coordonn|persönliche daten|personliche daten|pers[oö]nliches|angaben zur person)/i;
+
 const SCHEMA_TARGET = [
   [/BERUFSERFAHRUNG|BERUFSPRAXIS|WORK EXPERIENCE|EXPERIENCE|ERFAHRUNG|PRAKTIKA/i, 'experience'],
   [/AUSBILDUNG|EDUCATION|STUDIUM/i,                                              'education'],
@@ -5998,7 +6003,7 @@ function buildProfilePdfDoc(profile, overrides) {
           const LABEL_W = 104;
           if (yMain + 14 > PAGE_H - M) nextPage();
           setFont(9, 'bold', TEAL);
-          doc.text(cat + ':', MAIN_C_X, yMain);
+          doc.text(String(cat).replace(/\s*:+\s*$/, '') + ':', MAIN_C_X, yMain);
           const lines = doc.splitTextToSize(groups[cat].join(', '), MAIN_C_W - LABEL_W);
           setFont(9, 'normal', DARK);
           let y1 = yMain;
@@ -6056,6 +6061,12 @@ function buildProfilePdfDoc(profile, overrides) {
     extras: function () {
       (p.cvSchema || []).forEach(function (sec) {
         if (!sec || !sec.heading || schemaTargetFor(sec.heading)) return;
+        // Contact details are drawn by the template itself, from the fixed fields,
+        // in whichever block the layout reserves for them. An imported CV carries
+        // them a second time as a KONTAKT section, which schemaTargetFor does not
+        // map — so they were printed again at the foot of the main column, under a
+        // second heading. One CV went out with its address twice.
+        if (ALREADY_DRAWN.test(sec.heading)) return;
         const items = (sec.items || []).filter(function (it) {
           if (typeof it === 'string') return it.trim();
           return it && (it.title || it.org || it.label || it.value || (it.bullets || []).length);
@@ -6081,7 +6092,9 @@ function buildProfilePdfDoc(profile, overrides) {
           items.forEach(function (r) {
             if (yMain + 14 > PAGE_H - M) nextPage();
             setFont(9, 'bold', TEAL);
-            if (r.label) doc.text(r.label + ':', MAIN_C_X, yMain);
+            // The CV often writes the label with its colon already — "Ort:" — and
+            // adding another produced "Ort::" on the finished page.
+            if (r.label) doc.text(String(r.label).replace(/\s*:+\s*$/, '') + ':', MAIN_C_X, yMain);
             const lines = doc.splitTextToSize(String(r.value || ''), MAIN_C_W - LABEL_W);
             setFont(9, 'normal', DARK);
             let y1 = yMain;

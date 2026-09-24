@@ -53,9 +53,24 @@ const KNOWN = [
   'PRAKTISCHE KENNTNISSE', 'PRAKTISCHE ERFAHRUNG', 'IT-KENNTNISSE', 'EDV-KENNTNISSE',
 ];
 
+// How long a heading may be. Two limits, because the risk differs:
+//
+//   42  for anything with lower-case in it, where the danger is mistaking a
+//       sentence for a label.
+//   72  for a line set entirely in capitals, which a sentence in a CV almost
+//       never is.
+//
+// The single 42-character limit lost a real section:
+// "PRAXISPROJEKT IM MASTERSTUDIENGANG INTERNET-SICHERHEIT" is 54 characters, so
+// the heading was refused and the three projects under it — two pages, the most
+// substantial part of that CV — were never detected as a section at all.
+const MAX_HEADING = 42;
+const MAX_HEADING_CAPS = 72;
+
 function looksLikeHeading(line) {
   const t = line.trim();
-  if (t.length < 3 || t.length > 42) return false;
+  const shouty = t === t.toUpperCase() && /[A-ZÄÖÜ]/.test(t);
+  if (t.length < 3 || t.length > (shouty ? MAX_HEADING_CAPS : MAX_HEADING)) return false;
   if (/[.!?;]$/.test(t)) return false;                       // a sentence, not a label
   const bare = t.replace(/[:•▸]/g, '').trim();
   if (KNOWN.includes(bare.toUpperCase())) return true;
@@ -67,7 +82,10 @@ function looksLikeHeading(line) {
   if (bare.length < 6) return false;
 
   // All caps, at least one letter, no digits: "TECHNISCHE FÄHIGKEITEN".
-  return /^[A-ZÄÖÜß][A-ZÄÖÜß &/-]*$/.test(bare) && /[A-ZÄÖÜß]{3}/.test(bare);
+  // Spaces, ampersands, slashes and hyphens were allowed; commas, dots and
+  // parentheses were not, which rules out "PUBLIC-KEY-INFRASTRUKTUR (PKI)" and
+  // anything else a CV writes with a qualifier after it.
+  return /^[A-ZÄÖÜß][A-ZÄÖÜß0-9 &/().,'’-]*$/.test(bare) && /[A-ZÄÖÜß]{3}/.test(bare);
 }
 
 /**

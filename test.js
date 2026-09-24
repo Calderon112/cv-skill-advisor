@@ -1146,6 +1146,28 @@ test('boostFor: boost is capped at MAX_BOOST', () => {
       assert(/SAP/.test(s.body) && /Jira/.test(s.body), 'SAP and Jira stay in the skills block');
     });
 
+    test('a long heading in capitals is still a heading', () => {
+      // Reported from an import: the whole PRAXISPROJEKT section of a real CV — three
+      // projects over two pages, the most substantial part of it — never reached the
+      // form. Its heading is 54 characters and the limit was 42, so the line was read
+      // as body text and the section was never detected at all.
+      //
+      // The limit exists to stop a sentence being taken for a label, and that risk is
+      // about case, not length: a line set entirely in capitals is almost never a
+      // sentence in a CV. Two limits now, 42 with lower-case in it and 72 without.
+      const long = 'PRAXISPROJEKT IM MASTERSTUDIENGANG INTERNET-SICHERHEIT';
+      assertEqual(long.length, 54, 'the heading that was lost');
+      assert(cvSchema.looksLikeHeading(long), 'and it is recognised now');
+      assert(cvSchema.looksLikeHeading('PUBLIC-KEY-INFRASTRUKTUR (PKI) UND DIGITALE SIGNATUREN'),
+        'parentheses and a qualifier do not disqualify one either');
+
+      // And the things that must still not be headings.
+      assert(!cvSchema.looksLikeHeading('Aufbau und Verwaltung einer mehrstufigen PKI mit Root CA unter Linux'),
+        'a long line with lower-case is body text');
+      assert(!cvSchema.looksLikeHeading('Jardel Calderon Galdos Kenne Tedjeu'), 'nor is a name');
+      assert(!cvSchema.looksLikeHeading('SAP'), 'nor an abbreviation from a skill list');
+    });
+
     test('a sentence is not a heading', () => {
       assert(!cvSchema.looksLikeHeading('Entwicklung von Webanwendungen mit HTML, SCSS und PHP.'),
         'length and the full stop rule it out');
